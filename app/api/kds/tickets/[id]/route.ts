@@ -8,9 +8,10 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
-    const body = await request.json()
-    const { status, priority, toggleItemId, notes } = body
+    const { id: rawId } = await params
+    const id = decodeURIComponent(rawId || '').trim()
+    const body = await request.json().catch(() => ({}))
+    const { status, priority, toggleItemId, notes, fullId, orderNumber } = body
 
     // Status mapping from KDS to DB OrderStatusEnum
     // KDS: pending | accepted | cooking | ready | served
@@ -24,15 +25,28 @@ export async function PATCH(
     }
 
     let updatedDbOrder = null
+    let existing: any = null
 
     try {
+      const matchKeys = Array.from(new Set([id, fullId, orderNumber].filter(Boolean))) as string[]
+
       // Find matching order in DB by ID or orderNumber
-      const existing = await prisma.order.findFirst({
+      const orClauses: any[] = [
+        ...matchKeys.map((k) => ({ orderNumber: k })),
+        { orderNumber: { equals: id, mode: 'insensitive' } },
+      ]
+
+      // Only check UUID if string looks like UUID
+      const isUuid = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
+      for (const k of matchKeys) {
+        if (isUuid(k)) {
+          orClauses.push({ id: k })
+        }
+      }
+
+      existing = await (prisma.order as any).findFirst({
         where: {
-          OR: [
-            { id: id },
-            { orderNumber: id },
-          ],
+          OR: orClauses,
         },
         include: {
           kitchenTickets: true,
@@ -82,8 +96,8 @@ export async function PATCH(
         }
 
         // If toggling an item status
-        if (toggleItemId) {
-          const item = existing.items.find((i) => i.id === toggleItemId)
+        if (toggleItemId && existing.items) {
+          const item = existing.items.find((i: any) => i.id === toggleItemId)
           if (item) {
             const nextItemStatus = item.status === 'ready' ? 'preparing' : 'ready'
             await prisma.orderItem.update({
@@ -103,7 +117,11 @@ export async function PATCH(
     if (priority) fallbackUpdate.priority = priority
     if (notes) fallbackUpdate.specialNotes = notes
 
-    const updatedFallback = updateFallbackOrder(id, fallbackUpdate)
+    let updatedFallback = updateFallbackOrder(id, fallbackUpdate)
+    if (fullId && fullId !== id) updateFallbackOrder(fullId, fallbackUpdate)
+    if (orderNumber && orderNumber !== id) updateFallbackOrder(orderNumber, fallbackUpdate)
+    if (existing?.id) updateFallbackOrder(existing.id, fallbackUpdate)
+    if (existing?.orderNumber) updateFallbackOrder(existing.orderNumber, fallbackUpdate)
 
     return NextResponse.json(
       successResponse({

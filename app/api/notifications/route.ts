@@ -1,72 +1,131 @@
 /**
- * GET /api/notifications?limit=10
- * Get notifications for current user
+ * GET & POST /api/notifications
+ * Live notifications endpoint for TopNavbar bell and kitchen alerts
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@prisma/client'
-import { getMockAuthContext } from '@/api/middleware/auth'
-import { successResponse, errorResponse } from '@/api/utils/responses'
-
-const prisma = new PrismaClient()
+import prisma from '@/lib/prisma'
+import {
+  getNotificationsList,
+  addNotification,
+  markAsRead,
+  clearAllNotifications,
+  AppNotification,
+} from '@/lib/notifications-store'
 
 export async function GET(request: NextRequest) {
   try {
-    // Extract query parameters
     const limit = Math.min(
-      parseInt(request.nextUrl.searchParams.get('limit') || '10'),
-      100
+      parseInt(request.nextUrl.searchParams.get('limit') || '20'),
+      50
     )
 
-    // TODO: Extract real auth context from JWT token
-    const authContext = getMockAuthContext()
+    let dbNotifs: any[] = []
+    try {
+      const records = await prisma.notification.findMany({
+        where: { deletedAt: null },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      })
+      if (records && records.length > 0) {
+        dbNotifs = records.map((notif) => ({
+          id: notif.id,
+          type: notif.notificationType,
+          title: notif.title,
+          body: notif.message,
+          time: getTimeAgo(notif.createdAt),
+          read: notif.isRead,
+          createdAt: notif.createdAt.toISOString(),
+        }))
+      }
+    } catch (e) {
+      // In sandbox mode or offline DB, gracefully fallback
+    }
 
-    // Fetch notifications for current user
-    const notifications = await prisma.notification.findMany({
-      where: {
-        organizationId: authContext.organizationId,
-        userId: authContext.userId,
-        deletedAt: null,
+    const storeNotifs = getNotificationsList(limit)
+
+    // Merge without duplicates
+    const allNotifs: AppNotification[] = [...storeNotifs]
+    for (const dbn of dbNotifs) {
+      if (!allNotifs.some((n) => n.id === dbn.id)) {
+        allNotifs.push(dbn)
+      }
+    }
+
+    // Sort by createdAt descending
+    allNotifs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+    const unreadCount = allNotifs.filter((n) => !n.read).length
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        notifications: allNotifs,
+        unreadCount,
       },
-      select: {
-        id: true,
-        notificationType: true,
-        title: true,
-        message: true,
-        isRead: true,
-        createdAt: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-      take: limit,
     })
-
-    // Format for response
-    const formattedNotifications = notifications.map((notif) => ({
-      id: notif.id,
-      type: notif.notificationType,
-      title: notif.title,
-      body: notif.message,
-      time: getTimeAgo(notif.createdAt),
-      read: notif.isRead,
-      createdAt: notif.createdAt,
-    }))
-
-    return NextResponse.json(successResponse({ notifications: formattedNotifications }))
   } catch (error: any) {
     console.error('Error fetching notifications:', error)
-
     return NextResponse.json(
-      errorResponse(error.message, 'NOTIFICATIONS_ERROR'),
+      { success: false, message: error?.message || 'Failed to fetch notifications' },
       { status: 500 }
     )
   }
 }
 
-/**
- * Helper to format time ago
- */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
+    const { action, orderNumber, tableNumber, customerName, itemsSummary, id } = body
+
+    if (action === 'order_prepared') {
+      const newNotif = addNotification({
+        type: 'order_prepared',
+        title: `🔥 Order #${orderNumber} Prepared & Ready!`,
+        body: `${tableNumber || 'Table'} — ${itemsSummary || 'Food items are prepared and ready to serve'}. Waitstaff & customer alerted.`,
+        metadata: {
+          orderNumber,
+          tableNumber,
+        },
+      })
+
+      return NextResponse.json({
+        success: true,
+        message: 'Order prepared notification added',
+        data: newNotif,
+      })
+    }
+
+    if (action === 'mark_read') {
+      markAsRead(id)
+      return NextResponse.json({ success: true, message: 'Notification marked as read' })
+    }
+
+    if (action === 'clear') {
+      clearAllNotifications()
+      return NextResponse.json({ success: true, message: 'Notifications cleared' })
+    }
+
+    if (body.title && body.body) {
+      const customNotif = addNotification({
+        type: body.type || 'alert',
+        title: body.title,
+        body: body.body,
+        metadata: body.metadata,
+      })
+      return NextResponse.json({ success: true, data: customNotif })
+    }
+
+    return NextResponse.json({ success: false, message: 'Invalid action' }, { status: 400 })
+  } catch (error: any) {
+    console.error('Error adding notification:', error)
+    return NextResponse.json(
+      { success: false, message: error?.message || 'Failed to post notification' },
+      { status: 500 }
+    )
+  }
+}
+
 function getTimeAgo(date: Date): string {
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()

@@ -36,7 +36,9 @@ export async function GET(request: NextRequest) {
     const roleFilter = searchParams.get('role')?.trim() || ''
     const statusFilter = searchParams.get('status')?.trim() || ''
 
-    const where: any = {}
+    const where: any = {
+      deletedAt: null,
+    }
 
     // Search filter across name, firstName, lastName, email, phone
     if (search) {
@@ -88,6 +90,7 @@ export async function GET(request: NextRequest) {
       }),
       prisma.user.count({ where }),
       prisma.user.findMany({
+        where: { deletedAt: null },
         select: {
           role: true,
           status: true,
@@ -229,7 +232,7 @@ export async function POST(request: NextRequest) {
       where: { email: cleanEmail },
     })
 
-    if (existingUser) {
+    if (existingUser && !existingUser.deletedAt) {
       return NextResponse.json(
         { success: false, message: 'A user with this email address already exists' },
         { status: 409 }
@@ -254,30 +257,56 @@ export async function POST(request: NextRequest) {
     const firstName = nameParts[0] || 'Staff'
     const lastName = nameParts.slice(1).join(' ') || ''
 
-    // 1. Create user in PostgreSQL via Prisma
-    const newUser = await prisma.user.create({
-      data: {
-        name: finalName,
-        firstName,
-        lastName,
-        email: cleanEmail,
-        phone: cleanPhone || null,
-        password: hashedPassword,
-        passwordHash: hashedPassword,
-        role: cleanRole as UserRoleEnum,
-        status: status === 'inactive' ? 'inactive' : 'active',
-        organizationId: orgId,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        role: true,
-        status: true,
-        createdAt: true,
-      },
-    })
+    // 1. Create or restore user in PostgreSQL via Prisma
+    const newUser = existingUser
+      ? await prisma.user.update({
+          where: { id: existingUser.id },
+          data: {
+            name: finalName,
+            firstName,
+            lastName,
+            email: cleanEmail,
+            phone: cleanPhone || null,
+            password: hashedPassword,
+            passwordHash: hashedPassword,
+            role: cleanRole as UserRoleEnum,
+            status: status === 'inactive' ? 'inactive' : 'active',
+            deletedAt: null,
+            organizationId: orgId,
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            role: true,
+            status: true,
+            createdAt: true,
+          },
+        })
+      : await prisma.user.create({
+          data: {
+            name: finalName,
+            firstName,
+            lastName,
+            email: cleanEmail,
+            phone: cleanPhone || null,
+            password: hashedPassword,
+            passwordHash: hashedPassword,
+            role: cleanRole as UserRoleEnum,
+            status: status === 'inactive' ? 'inactive' : 'active',
+            organizationId: orgId,
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            role: true,
+            status: true,
+            createdAt: true,
+          },
+        })
 
     // 2. For operational staff roles, attach staff profile safely
     const isStaffRole = ['WAITER', 'COUNTER_MANAGER', 'CHEF', 'INVENTORY_MANAGER', 'VENDOR'].includes(cleanRole)

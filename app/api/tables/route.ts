@@ -132,25 +132,39 @@ export async function POST(request: NextRequest) {
     }
 
     const activeBranchId = branchId || tenantContext.branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
+    const cleanTableNumber = String(tableNumber).trim()
 
     const existing = await prisma.restaurantTable.findFirst({
       where: {
         branchId: activeBranchId,
-        tableNumber: String(tableNumber),
-        deletedAt: null,
+        tableNumber: cleanTableNumber,
       },
     })
 
     if (existing) {
+      if (existing.deletedAt) {
+        const restored = await prisma.restaurantTable.update({
+          where: { id: existing.id },
+          data: {
+            capacity: Number(capacity) || 4,
+            section: section || 'Indoor',
+            status: 'available',
+            deletedAt: null,
+            metadata: {},
+          },
+        })
+        return NextResponse.json(successResponse(restored, 'Table created successfully'), { status: 201 })
+      }
+
       return NextResponse.json(
-        errorResponse(`Table ${tableNumber} already exists in this branch`, 'TABLE_EXISTS'),
+        errorResponse(`Table ${cleanTableNumber} already exists in this branch`, 'TABLE_EXISTS'),
         { status: 409 }
       )
     }
 
     const newTable = await prisma.restaurantTable.create({
       data: {
-        tableNumber: String(tableNumber),
+        tableNumber: cleanTableNumber,
         capacity: Number(capacity) || 4,
         section: section || 'Indoor',
         branchId: activeBranchId,
@@ -223,5 +237,51 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json(errorResponse(error.message, error.code), { status: 400 })
     }
     return NextResponse.json(errorResponse(error.message, 'TABLE_UPDATE_ERROR'), { status: 500 })
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    let id = searchParams.get('id')
+    if (!id) {
+      const body = await request.json().catch(() => ({}))
+      id = body?.id
+    }
+
+    if (!id) {
+      throw new ValidationError('Table ID is required for deletion')
+    }
+
+    const table = await prisma.restaurantTable.findUnique({
+      where: { id },
+    })
+
+    if (!table) {
+      return NextResponse.json(errorResponse('Table not found', 'NOT_FOUND'), { status: 404 })
+    }
+
+    // Try hard delete first if no blocking foreign keys
+    try {
+      await prisma.restaurantTable.delete({
+        where: { id },
+      })
+      return NextResponse.json(successResponse(null, `Table ${table.tableNumber} deleted successfully`))
+    } catch (dbErr: any) {
+      console.warn('Permanent table delete prevented by foreign keys, performing soft delete:', dbErr.message)
+      await prisma.restaurantTable.update({
+        where: { id },
+        data: {
+          deletedAt: new Date(),
+        },
+      })
+      return NextResponse.json(successResponse(null, `Table ${table.tableNumber} deleted successfully`))
+    }
+  } catch (error: any) {
+    console.error('Error deleting table:', error)
+    if (error instanceof ValidationError) {
+      return NextResponse.json(errorResponse(error.message, error.code), { status: 400 })
+    }
+    return NextResponse.json(errorResponse(error.message, 'TABLE_DELETE_ERROR'), { status: 500 })
   }
 }

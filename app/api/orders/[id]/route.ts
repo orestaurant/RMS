@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
-import { updateFallbackOrder } from '@/lib/kds-utils'
+import { updateFallbackOrder, removeFallbackOrder } from '@/lib/kds-utils'
 
 export async function GET(
   request: NextRequest,
@@ -37,8 +37,20 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params
-    const body = await request.json()
-    const { status, priority, notes } = body
+    const body = await request.json().catch(() => ({}))
+    const {
+      status,
+      priority,
+      notes,
+      isLocationLocked,
+      vehicleNumber,
+      landmarkNote,
+      customerLat,
+      customerLng,
+      locationAccuracy,
+      locationCapturedAt,
+      unlockOverride,
+    } = body
 
     const dbStatusMap: Record<string, string> = {
       pending: 'pending',
@@ -52,6 +64,8 @@ export async function PATCH(
       cancelled: 'cancelled',
     }
 
+    let updatedOrder: any = null
+
     try {
       const existing = await prisma.order.findFirst({
         where: {
@@ -60,13 +74,71 @@ export async function PATCH(
       })
 
       if (existing) {
+        // Enforce lock protection: if isLocationLocked is true, reject overwrites unless unlockOverride: true
+        const isAttemptingLocationUpdate =
+          vehicleNumber !== undefined ||
+          landmarkNote !== undefined ||
+          customerLat !== undefined ||
+          customerLng !== undefined ||
+          locationAccuracy !== undefined ||
+          locationCapturedAt !== undefined
+
+        if (existing.isLocationLocked && isAttemptingLocationUpdate && !unlockOverride) {
+          return NextResponse.json(
+            errorResponse(
+              'Location and vehicle details are locked. Provide unlockOverride: true to edit.',
+              'LOCATION_LOCKED'
+            ),
+            { status: 423 }
+          )
+        }
+
         const updateData: any = { updatedAt: new Date() }
         if (status && dbStatusMap[status]) {
           updateData.status = dbStatusMap[status] as any
         }
-        if (notes) updateData.notes = notes
+        if (notes !== undefined) updateData.notes = notes
 
-        await prisma.order.update({
+        if (isLocationLocked !== undefined) {
+          updateData.isLocationLocked = Boolean(isLocationLocked)
+        }
+        if (vehicleNumber !== undefined) {
+          updateData.vehicleNumber = vehicleNumber ? String(vehicleNumber).trim().toUpperCase() : null
+        }
+        if (landmarkNote !== undefined) {
+          updateData.landmarkNote = landmarkNote ? String(landmarkNote).trim() : null
+        }
+        if (customerLat !== undefined) {
+          updateData.customerLat =
+            customerLat !== null && !isNaN(Number(customerLat)) ? Number(customerLat) : null
+        }
+        if (customerLng !== undefined) {
+          updateData.customerLng =
+            customerLng !== null && !isNaN(Number(customerLng)) ? Number(customerLng) : null
+        }
+        if (locationAccuracy !== undefined) {
+          updateData.locationAccuracy =
+            locationAccuracy !== null && !isNaN(Number(locationAccuracy)) ? Number(locationAccuracy) : null
+        }
+        if (locationCapturedAt !== undefined) {
+          updateData.locationCapturedAt = locationCapturedAt ? new Date(locationCapturedAt) : null
+        }
+
+        const prevMeta = (existing.metadata as Record<string, any>) || {}
+        updateData.metadata = {
+          ...prevMeta,
+          ...(isLocationLocked !== undefined ? { isLocationLocked: updateData.isLocationLocked } : {}),
+          ...(vehicleNumber !== undefined ? { vehicleNumber: updateData.vehicleNumber } : {}),
+          ...(landmarkNote !== undefined ? { landmarkNote: updateData.landmarkNote } : {}),
+          ...(customerLat !== undefined ? { customerLat: updateData.customerLat } : {}),
+          ...(customerLng !== undefined ? { customerLng: updateData.customerLng } : {}),
+          ...(locationAccuracy !== undefined ? { locationAccuracy: updateData.locationAccuracy } : {}),
+          ...(locationCapturedAt !== undefined
+            ? { locationCapturedAt: updateData.locationCapturedAt ? updateData.locationCapturedAt.toISOString() : null }
+            : {}),
+        }
+
+        updatedOrder = await prisma.order.update({
           where: { id: existing.id },
           data: updateData,
         })
@@ -78,10 +150,42 @@ export async function PATCH(
     updateFallbackOrder(id, {
       ...(status ? { status } : {}),
       ...(priority ? { priority } : {}),
-      ...(notes ? { specialNotes: notes } : {}),
+      ...(notes !== undefined ? { specialNotes: notes } : {}),
+      ...(isLocationLocked !== undefined ? { isLocationLocked: Boolean(isLocationLocked) } : {}),
+      ...(vehicleNumber !== undefined
+        ? { vehicleNumber: vehicleNumber ? String(vehicleNumber).trim().toUpperCase() : null }
+        : {}),
+      ...(landmarkNote !== undefined
+        ? { landmarkNote: landmarkNote ? String(landmarkNote).trim() : null }
+        : {}),
+      ...(customerLat !== undefined
+        ? { customerLat: customerLat !== null && !isNaN(Number(customerLat)) ? Number(customerLat) : null }
+        : {}),
+      ...(customerLng !== undefined
+        ? { customerLng: customerLng !== null && !isNaN(Number(customerLng)) ? Number(customerLng) : null }
+        : {}),
+      ...(locationAccuracy !== undefined
+        ? { locationAccuracy: locationAccuracy !== null && !isNaN(Number(locationAccuracy)) ? Number(locationAccuracy) : null }
+        : {}),
+      ...(locationCapturedAt !== undefined
+        ? { locationCapturedAt: locationCapturedAt ? new Date(locationCapturedAt) : null }
+        : {}),
     })
 
-    return NextResponse.json(successResponse({ id, status, updated: true }))
+    return NextResponse.json(
+      successResponse({
+        id,
+        status: status || updatedOrder?.status,
+        isLocationLocked: isLocationLocked ?? updatedOrder?.isLocationLocked,
+        vehicleNumber: vehicleNumber ?? updatedOrder?.vehicleNumber,
+        landmarkNote: landmarkNote ?? updatedOrder?.landmarkNote,
+        customerLat: customerLat ?? updatedOrder?.customerLat,
+        customerLng: customerLng ?? updatedOrder?.customerLng,
+        locationAccuracy: locationAccuracy ?? updatedOrder?.locationAccuracy,
+        locationCapturedAt: locationCapturedAt ?? updatedOrder?.locationCapturedAt,
+        updated: true,
+      })
+    )
   } catch (error: any) {
     return NextResponse.json(
       errorResponse(error?.message || 'Failed to update order', 'ORDER_UPDATE_ERROR'),
@@ -90,6 +194,8 @@ export async function PATCH(
   }
 }
 
+export const PUT = PATCH
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -97,35 +203,34 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const existing = await prisma.order.findFirst({
-      where: {
-        OR: [{ id }, { orderNumber: id }],
-      },
-    })
+    // 1. Remove from in-memory / session live queue
+    removeFallbackOrder(id)
+    updateFallbackOrder(id, { status: 'cancelled' })
 
-    if (!existing) {
-      return NextResponse.json(
-        errorResponse('Order not found', 'NOT_FOUND'),
-        { status: 404 }
-      )
+    // 2. Try soft-deleting in Prisma DB if available
+    try {
+      const existing = await prisma.order.findFirst({
+        where: {
+          OR: [{ id }, { orderNumber: id }],
+        },
+      })
+
+      if (existing) {
+        await prisma.order.update({
+          where: { id: existing.id },
+          data: {
+            deletedAt: new Date(),
+            status: 'cancelled',
+          },
+        })
+      }
+    } catch (dbErr) {
+      console.warn('Prisma order delete notice:', dbErr)
     }
-
-    // Soft-delete order and update status to cancelled
-    await prisma.order.update({
-      where: { id: existing.id },
-      data: {
-        deletedAt: new Date(),
-        status: 'cancelled',
-      },
-    })
-
-    // Remove from active KDS in-memory queue
-    updateFallbackOrder(id, { status: 'served' })
 
     return NextResponse.json(
       successResponse({
-        id: existing.id,
-        orderNumber: existing.orderNumber,
+        id,
         deleted: true,
         message: 'Order deleted successfully',
       })

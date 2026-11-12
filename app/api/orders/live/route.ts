@@ -1,11 +1,12 @@
 /**
  * GET /api/orders/live?branchId=<id>&status=<status>
- * Get active live orders directly from PostgreSQL via Prisma
+ * Get active live orders directly from PostgreSQL via Prisma or Real-Time In-Memory Queue
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
+import { getRealTimeLiveOrders } from '@/lib/kds-utils'
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,77 +23,152 @@ export async function GET(request: NextRequest) {
       'PREPARING',
     ]
 
-    // Fetch all live orders for the branch
-    const rawOrders = await prisma.order.findMany({
-      where: {
-        ...(branchId ? { branchId } : {}),
-        status: {
-          in: liveStatuses as any,
+    let formattedOrders: any[] = []
+
+    try {
+      // Fetch all live orders for the branch
+      const rawOrders = await prisma.order.findMany({
+        where: {
+          ...(branchId ? { branchId } : {}),
+          status: {
+            in: liveStatuses as any,
+          },
+          deletedAt: null,
         },
-        deletedAt: null,
-      },
-      include: {
-        table: true,
-        items: true,
-        createdBy: true,
-        customer: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-      take: 100,
-    })
+        include: {
+          table: true,
+          items: true,
+          createdBy: true,
+          customer: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        take: 100,
+      })
 
-    const now = Date.now()
+      const now = Date.now()
 
-    // Map Prisma orders to live order shape
-    const formattedOrders = rawOrders.map((order) => {
-      const rawStatus = (order.status || 'pending').toLowerCase()
-      // Normalize status:
-      // 'confirmed' -> 'accepted', 'preparing' -> 'cooking'
-      let normalizedStatus: 'pending' | 'accepted' | 'cooking' | 'ready' | 'served' = 'pending'
-      if (rawStatus === 'confirmed') normalizedStatus = 'accepted'
-      else if (rawStatus === 'preparing') normalizedStatus = 'cooking'
-      else if (rawStatus === 'ready') normalizedStatus = 'ready'
-      else if (rawStatus === 'served' || rawStatus === 'completed') normalizedStatus = 'served'
-      else normalizedStatus = 'pending'
+      if (rawOrders && rawOrders.length > 0) {
+        formattedOrders = rawOrders.map((order) => {
+          const rawStatus = (order.status || 'pending').toLowerCase()
+          let normalizedStatus: 'pending' | 'accepted' | 'cooking' | 'ready' | 'served' = 'pending'
+          if (rawStatus === 'confirmed') normalizedStatus = 'accepted'
+          else if (rawStatus === 'preparing') normalizedStatus = 'cooking'
+          else if (rawStatus === 'ready') normalizedStatus = 'ready'
+          else if (rawStatus === 'served' || rawStatus === 'completed') normalizedStatus = 'served'
+          else normalizedStatus = 'pending'
 
-      const minutesAgo = Math.max(
-        0,
-        Math.floor((now - new Date(order.createdAt).getTime()) / 60000)
-      )
+          const minutesAgo = Math.max(
+            0,
+            Math.floor((now - new Date(order.createdAt).getTime()) / 60000)
+          )
 
-      let priority: 'normal' | 'high' | 'urgent' = 'normal'
-      if (minutesAgo > 25) {
-        priority = 'urgent'
-      } else if (minutesAgo > 15) {
-        priority = 'high'
+          let priority: 'normal' | 'high' | 'urgent' = 'normal'
+          if (minutesAgo > 25) {
+            priority = 'urgent'
+          } else if (minutesAgo > 15) {
+            priority = 'high'
+          }
+
+          return {
+            id: order.orderNumber || order.id.slice(0, 8),
+            fullId: order.id,
+            tableNumber: order.table?.tableNumber || 'Takeaway',
+            waiter: order.createdBy?.name || order.createdBy?.firstName || 'Staff',
+            status: normalizedStatus,
+            priority,
+            ticketTime: minutesAgo,
+            items: order.items.map((i) => ({
+              id: i.id,
+              name: i.itemName,
+              quantity: i.quantity,
+              price: Number(i.basePrice || 0),
+              notes: i.specialInstructions || undefined,
+            })),
+            subtotal: Number(order.subtotal || order.totalAmount || 0),
+            discount: Number(order.discountAmount || 0),
+            tax: Number(order.taxAmount || 0),
+            total: Number(order.totalAmount || order.total || 0),
+            createdAt: order.createdAt,
+            isLocationLocked: Boolean(order.isLocationLocked ?? (order.metadata as any)?.isLocationLocked),
+            vehicleNumber: order.vehicleNumber ?? (order.metadata as any)?.vehicleNumber ?? null,
+            landmarkNote: order.landmarkNote ?? (order.metadata as any)?.landmarkNote ?? null,
+            customerLat:
+              order.customerLat !== null && order.customerLat !== undefined
+                ? Number(order.customerLat)
+                : (order.metadata as any)?.customerLat !== undefined
+                ? Number((order.metadata as any).customerLat)
+                : null,
+            customerLng:
+              order.customerLng !== null && order.customerLng !== undefined
+                ? Number(order.customerLng)
+                : (order.metadata as any)?.customerLng !== undefined
+                ? Number((order.metadata as any).customerLng)
+                : null,
+            locationAccuracy:
+              order.locationAccuracy !== null && order.locationAccuracy !== undefined
+                ? Number(order.locationAccuracy)
+                : (order.metadata as any)?.locationAccuracy !== undefined
+                ? Number((order.metadata as any).locationAccuracy)
+                : null,
+            locationCapturedAt: order.locationCapturedAt ?? (order.metadata as any)?.locationCapturedAt ?? null,
+          }
+        })
       }
+    } catch (dbErr) {
+      console.warn('Orders live DB lookup notice:', dbErr)
+    }
 
-      return {
-        id: order.orderNumber || order.id.slice(0, 8),
-        fullId: order.id,
-        tableNumber: order.table?.tableNumber || 'Takeaway',
-        waiter: order.createdBy?.name || order.createdBy?.firstName || 'Staff',
-        status: normalizedStatus,
-        priority,
-        ticketTime: minutesAgo,
-        items: order.items.map((i) => ({
-          id: i.id,
-          name: i.itemName,
-          quantity: i.quantity,
-          price: Number(i.basePrice || 0),
-          notes: i.specialInstructions || undefined,
-        })),
-        subtotal: Number(order.subtotal || order.totalAmount || 0),
-        discount: Number(order.discountAmount || 0),
-        tax: Number(order.taxAmount || 0),
-        total: Number(order.totalAmount || order.total || 0),
-        createdAt: order.createdAt,
+    // Merge fallback live orders from in-memory session if DB has fewer orders
+    const memoryOrders = getRealTimeLiveOrders()
+    for (const mo of memoryOrders) {
+      if (!formattedOrders.some((fo) => fo.id === mo.id || fo.fullId === mo.fullId)) {
+        const subtotal = (mo.items || []).reduce(
+          (sum: number, it: any) => sum + (it.price || 150) * it.quantity,
+          0
+        )
+        const tax = Math.round(subtotal * 0.05 * 100) / 100
+        const total = subtotal + tax
+
+        formattedOrders.push({
+          id: mo.id,
+          fullId: mo.fullId || mo.id,
+          tableNumber: mo.tableNumber,
+          waiter: mo.waiter || 'Staff',
+          customerName: mo.customerName,
+          customerPhone: mo.customerPhone,
+          status: mo.status || 'cooking',
+          priority: mo.priority || 'normal',
+          ticketTime: mo.ticketTime || 5,
+          items: (mo.items || []).map((it: any) => ({
+            id: it.id,
+            name: it.name,
+            quantity: it.quantity,
+            price: it.price || 150,
+            notes: it.notes,
+          })),
+          subtotal,
+          discount: 0,
+          tax,
+          total,
+          createdAt: mo.createdAt || new Date().toISOString(),
+          isLocationLocked: Boolean(mo.isLocationLocked),
+          vehicleNumber: mo.vehicleNumber || null,
+          landmarkNote: mo.landmarkNote || null,
+          customerLat: mo.customerLat ?? null,
+          customerLng: mo.customerLng ?? null,
+          locationAccuracy: mo.locationAccuracy ?? null,
+          locationCapturedAt: mo.locationCapturedAt ?? null,
+        })
       }
-    })
+    }
 
     // Compute status counts across all live orders
+    const carOrdersCount = formattedOrders.filter(
+      (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
+    ).length
+
     const counts = {
       all: formattedOrders.length,
       pending: formattedOrders.filter((o) => o.status === 'pending').length,
@@ -100,16 +176,21 @@ export async function GET(request: NextRequest) {
       cooking: formattedOrders.filter((o) => o.status === 'cooking').length,
       ready: formattedOrders.filter((o) => o.status === 'ready').length,
       served: formattedOrders.filter((o) => o.status === 'served').length,
+      carOrders: carOrdersCount,
     }
 
     const urgentCount = formattedOrders.filter((o) => o.priority === 'urgent').length
-    const overdueCount = formattedOrders.filter((o) => o.ticketTime > 20).length
+    const overdueCount = formattedOrders.filter((o) => (o.ticketTime || 0) > 20).length
 
     // Filter by tab if specified
-    const filteredOrders =
-      statusFilter === 'all'
-        ? formattedOrders
-        : formattedOrders.filter((o) => o.status === statusFilter)
+    let filteredOrders = formattedOrders
+    if (statusFilter === 'car_orders' || statusFilter === 'car') {
+      filteredOrders = formattedOrders.filter(
+        (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
+      )
+    } else if (statusFilter !== 'all') {
+      filteredOrders = formattedOrders.filter((o) => o.status === statusFilter)
+    }
 
     return NextResponse.json(
       successResponse({
@@ -121,6 +202,7 @@ export async function GET(request: NextRequest) {
           readyCount: counts.ready,
           urgentCount,
           overdueCount,
+          carOrdersCount,
         },
       })
     )

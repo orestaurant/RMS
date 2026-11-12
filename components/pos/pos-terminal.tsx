@@ -17,6 +17,10 @@ import {
   UtensilsCrossed,
   Package,
   QrCode,
+  Car,
+  MapPin,
+  Lock,
+  Unlock,
 } from 'lucide-react'
 import { QRCodeSVG } from '@/lib/qr-code'
 import { Button } from '@/components/ui/button'
@@ -33,6 +37,7 @@ import {
 } from '@/components/ui/dialog'
 import { usePOSStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
+import { CustomerLocationLock, CustomerLocationData, isValidCoord } from '@/components/orders/CustomerLocationLock'
 
 export type PaymentMethod = 'cash' | 'card' | 'upi'
 
@@ -137,10 +142,14 @@ function PaymentDialog({
   open,
   onClose,
   tables,
+  locationData,
+  setLocationData,
 }: {
   open: boolean
   onClose: () => void
   tables: POSTable[]
+  locationData: CustomerLocationData
+  setLocationData: (data: CustomerLocationData) => void
 }) {
   const { cartItems, paymentMethod, setPaymentMethod, getTotal, clearCart, selectedTableId } = usePOSStore()
   const [paid, setPaid] = useState(false)
@@ -154,7 +163,19 @@ function PaymentDialog({
     try {
       setSubmitting(true)
       const tableObj = tables.find((t) => t.id === selectedTableId)
-      const tableNum = tableObj ? String(tableObj.number) : 'Takeaway'
+      const validCoords = isValidCoord(locationData.customerLat, locationData.customerLng)
+      const isCarDelivery = Boolean(
+        locationData.vehicleNumber || locationData.landmarkNote || validCoords
+      )
+      const tableNum = tableObj
+        ? String(tableObj.number)
+        : isCarDelivery && locationData.vehicleNumber
+        ? `Car ${locationData.vehicleNumber}`
+        : 'Takeaway'
+
+      const customerName = locationData.vehicleNumber
+        ? `Car Guest (${locationData.vehicleNumber})`
+        : 'POS Guest'
 
       // 1. Submit real Order to backend
       const res = await fetch('/api/orders', {
@@ -165,7 +186,7 @@ function PaymentDialog({
           tableId: tableObj?.id || null,
           isDineIn: !!selectedTableId,
           source: 'POS',
-          customerName: 'POS Guest',
+          customerName,
           requestedStatus: 'confirmed',
           items: cartItems.map((item) => ({
             menuItemId: item.menuItemId,
@@ -173,6 +194,13 @@ function PaymentDialog({
             quantity: item.quantity,
             price: item.price,
           })),
+          isLocationLocked: Boolean(locationData.isLocationLocked),
+          vehicleNumber: locationData.vehicleNumber ? locationData.vehicleNumber.trim().toUpperCase() : null,
+          landmarkNote: locationData.landmarkNote ? locationData.landmarkNote.trim() : null,
+          customerLat: validCoords ? locationData.customerLat : null,
+          customerLng: validCoords ? locationData.customerLng : null,
+          locationAccuracy: validCoords ? (locationData.locationAccuracy ?? null) : null,
+          locationCapturedAt: validCoords ? (locationData.locationCapturedAt ?? null) : null,
         }),
       })
 
@@ -183,10 +211,10 @@ function PaymentDialog({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             id: `ORD-POS-${Date.now().toString().slice(-4)}`,
-            tableNumber: tableNum.startsWith('Table') ? tableNum : `Table ${tableNum}`,
-            source: 'dine_in',
+            tableNumber: locationData.vehicleNumber ? `🚗 ${locationData.vehicleNumber}` : tableNum.startsWith('Table') ? tableNum : `Table ${tableNum}`,
+            source: isCarDelivery ? 'delivery' : selectedTableId ? 'dine_in' : 'takeaway',
             waiter: 'POS Staff',
-            customerName: 'POS Guest',
+            customerName,
             status: 'accepted',
             priority: 'normal',
             items: cartItems.map((item) => ({
@@ -203,6 +231,15 @@ function PaymentDialog({
       setPaid(true)
       setTimeout(() => {
         clearCart()
+        setLocationData({
+          isLocationLocked: false,
+          vehicleNumber: '',
+          landmarkNote: '',
+          customerLat: null,
+          customerLng: null,
+          locationAccuracy: null,
+          locationCapturedAt: null,
+        })
         setPaid(false)
         onClose()
       }, 1800)
@@ -211,7 +248,7 @@ function PaymentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {paid ? 'Payment Successful' : 'Confirm Payment'}
@@ -230,11 +267,19 @@ function PaymentDialog({
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-4">
             {/* Order summary */}
             <div className="rounded-xl bg-muted/50 p-4">
-              <p className="text-xs font-medium text-muted-foreground mb-2">ORDER SUMMARY</p>
-              <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-medium text-muted-foreground">ORDER SUMMARY</p>
+                {locationData.vehicleNumber && (
+                  <Badge variant="outline" className="text-[10px] font-mono gap-1 border-primary/30 text-primary">
+                    <Car className="size-2.5" />
+                    {locationData.vehicleNumber}
+                  </Badge>
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
                 {cartItems.map((item) => (
                   <div key={item.id} className="flex items-center justify-between text-sm">
                     <span className="truncate pr-2">{item.quantity}× {item.name}</span>
@@ -397,7 +442,17 @@ export function POSTerminal() {
   const [activeCategory, setActiveCategory] = useState('all')
   const [search, setSearch] = useState('')
   const [paymentOpen, setPaymentOpen] = useState(false)
+  const [spotDialogOpen, setSpotDialogOpen] = useState(false)
   const [discountInput, setDiscountInput] = useState('')
+  const [locationData, setLocationData] = useState<CustomerLocationData>({
+    isLocationLocked: false,
+    vehicleNumber: '',
+    landmarkNote: '',
+    customerLat: null,
+    customerLng: null,
+    locationAccuracy: null,
+    locationCapturedAt: null,
+  })
 
   const {
     cartItems,
@@ -478,7 +533,33 @@ export function POSTerminal() {
         open={paymentOpen}
         onClose={() => setPaymentOpen(false)}
         tables={tables}
+        locationData={locationData}
+        setLocationData={setLocationData}
       />
+
+      {/* Dedicated Spot / Vehicle Details Dialog for POS */}
+      <Dialog open={spotDialogOpen} onOpenChange={setSpotDialogOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              <Car className="size-4 text-primary" /> Customer Vehicle & Delivery Spot
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <CustomerLocationLock
+              data={locationData}
+              onChange={setLocationData}
+              showToggle={false}
+              title="Drive-In / Car Delivery Spot"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <Button size="sm" onClick={() => setSpotDialogOpen(false)}>
+              Save & Done
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="flex h-[calc(100vh-56px)] overflow-hidden">
         {/* ── Left: Menu / Inventory browser ────────────── */}
@@ -689,6 +770,56 @@ export function POSTerminal() {
           {cartItems.length > 0 && (
             <div className="border-t border-border bg-background/50 p-4">
               <div className="flex flex-col gap-2 mb-4 text-sm">
+                {/* Drive-in / Car Delivery location widget in cart */}
+                <div className="mb-1">
+                  {locationData.vehicleNumber || locationData.landmarkNote || isValidCoord(locationData.customerLat, locationData.customerLng) ? (
+                    <div
+                      onClick={() => setSpotDialogOpen(true)}
+                      className="flex items-center justify-between p-2 rounded-lg bg-primary/10 border border-primary/20 cursor-pointer hover:bg-primary/15 transition-all text-xs"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Car className="size-3.5 text-primary shrink-0" />
+                        <span className="font-mono font-bold text-primary truncate">
+                          {locationData.vehicleNumber || 'Car Delivery'}
+                        </span>
+                        {locationData.landmarkNote && (
+                          <span className="text-[10px] text-muted-foreground truncate max-w-[90px]">
+                            • {locationData.landmarkNote}
+                          </span>
+                        )}
+                        {isValidCoord(locationData.customerLat, locationData.customerLng) && (
+                          <span className="text-[9px] font-mono text-emerald-600 bg-emerald-500/10 px-1 py-0.5 rounded">
+                            GPS Pin
+                          </span>
+                        )}
+                      </div>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'text-[9px] h-4 px-1 gap-0.5',
+                          locationData.isLocationLocked
+                            ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
+                            : 'text-muted-foreground'
+                        )}
+                      >
+                        {locationData.isLocationLocked ? <Lock className="size-2" /> : <Unlock className="size-2" />}
+                        {locationData.isLocationLocked ? 'Locked' : 'Edit'}
+                      </Badge>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full h-8 text-xs font-semibold gap-1.5 border-dashed border-primary/50 text-primary bg-primary/5 hover:bg-primary/10"
+                      onClick={() => setSpotDialogOpen(true)}
+                    >
+                      <Car className="size-3.5" />
+                      <span>🚗 Drive-In / Lock Car Spot & GPS</span>
+                    </Button>
+                  )}
+                </div>
+
                 {/* Discount input */}
                 <div className="flex items-center gap-2">
                   <Tag className="size-3.5 text-muted-foreground shrink-0" />

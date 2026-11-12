@@ -9,6 +9,8 @@ import {
   Clock,
   ArrowRight,
   Armchair,
+  Car,
+  Navigation,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -164,6 +166,33 @@ export function DashboardOverview() {
           iconColor="text-chart-4"
           loading={statsLoading}
         />
+      </div>
+
+      {/* Drive-in & Car Delivery Orders Overview Action */}
+      <div className="flex items-center justify-between p-3.5 rounded-xl bg-card border border-border/80 shadow-sm flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <div className="size-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <Car className="size-4.5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold text-foreground">Drive-in & Remote Customer Spot Deliveries</p>
+              <Badge variant="outline" className="text-[10px] h-4.5 px-1.5 border-primary/30 text-primary font-medium">
+                Live GPS & Vehicle
+              </Badge>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Track vehicle license numbers, landmark pins, and real-time locked GPS locations for quick delivery
+            </p>
+          </div>
+        </div>
+        <Link href="/orders">
+          <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/10">
+            <Navigation className="size-3.5" />
+            View Car Orders & Map Pins
+            <ArrowRight className="size-3.5" />
+          </Button>
+        </Link>
       </div>
 
 

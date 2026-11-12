@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { registerActiveLiveOrder, getKitchenStation } from '@/lib/kds-utils'
+import { registerActiveLiveOrder, getKitchenStation, getRealTimeLiveOrders } from '@/lib/kds-utils'
 import { Prisma } from '@prisma/client'
 
 /**
@@ -22,10 +22,26 @@ export async function GET(request: NextRequest) {
 
     const where: any = { deletedAt: null }
 
+    let tableVariants: string[] = []
     if (tableNumber) {
+      const cleanTable = String(tableNumber).trim()
+      const cleanNum = cleanTable.replace(/[^0-9]/g, '')
+      tableVariants = Array.from(
+        new Set([
+          cleanTable,
+          cleanNum,
+          `Table ${cleanTable}`,
+          `Table ${cleanNum}`,
+          `T${cleanNum}`,
+          cleanTable.toLowerCase(),
+        ])
+      ).filter(Boolean)
+
       where.OR = [
-        { table: { tableNumber: String(tableNumber).trim() } },
-        { metadata: { path: ['tableNumber'], equals: String(tableNumber).trim() } },
+        { table: { tableNumber: { in: tableVariants } } },
+        ...tableVariants.map((tv) => ({
+          metadata: { path: ['tableNumber'], equals: tv },
+        })),
       ]
     }
 
@@ -37,21 +53,26 @@ export async function GET(request: NextRequest) {
       where.branchId = branchId
     }
 
-    const orders = await prisma.order.findMany({
-      where,
-      include: {
-        table: true,
-        items: {
-          include: {
-            menuItem: true,
+    let orders: any[] = []
+    try {
+      orders = await prisma.order.findMany({
+        where,
+        include: {
+          table: true,
+          items: {
+            include: {
+              menuItem: true,
+            },
           },
         },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(limit, 50),
-    })
+        orderBy: { createdAt: 'desc' },
+        take: Math.min(limit, 50),
+      })
+    } catch (dbErr) {
+      console.warn('Orders findMany DB error, using fallback:', dbErr)
+    }
 
-    const formatted = orders.map((o) => ({
+    let formatted = orders.map((o) => ({
       id: o.id,
       orderNumber: o.orderNumber,
       tableNumber: o.table?.tableNumber || (o.metadata as any)?.tableNumber || 'Unknown',
@@ -60,15 +81,60 @@ export async function GET(request: NextRequest) {
       paymentStatus: o.paymentStatus,
       totalAmount: Number(o.totalAmount || o.total || 0),
       createdAt: o.createdAt,
-      items: o.items.map((i) => ({
+      isLocationLocked: Boolean(o.isLocationLocked ?? (o.metadata as any)?.isLocationLocked),
+      vehicleNumber: o.vehicleNumber ?? (o.metadata as any)?.vehicleNumber ?? null,
+      landmarkNote: o.landmarkNote ?? (o.metadata as any)?.landmarkNote ?? null,
+      customerLat: o.customerLat !== null && o.customerLat !== undefined ? Number(o.customerLat) : ((o.metadata as any)?.customerLat !== undefined ? Number((o.metadata as any).customerLat) : null),
+      customerLng: o.customerLng !== null && o.customerLng !== undefined ? Number(o.customerLng) : ((o.metadata as any)?.customerLng !== undefined ? Number((o.metadata as any).customerLng) : null),
+      locationAccuracy: o.locationAccuracy !== null && o.locationAccuracy !== undefined ? Number(o.locationAccuracy) : ((o.metadata as any)?.locationAccuracy !== undefined ? Number((o.metadata as any).locationAccuracy) : null),
+      locationCapturedAt: o.locationCapturedAt ?? (o.metadata as any)?.locationCapturedAt ?? null,
+      items: o.items.map((i: any) => ({
         id: i.id,
         menuItemId: i.menuItemId,
         name: i.itemName,
-        price: Number(i.basePrice),
+        price: Number(i.basePrice || 0),
         quantity: i.quantity,
-        total: Number(i.itemTotal),
+        total: Number(i.itemTotal || (i.basePrice * i.quantity) || 0),
       })),
     }))
+
+    // If DB returned no orders for table, merge from in-memory fallback
+    if (tableVariants.length > 0) {
+      const liveFallbacks = getRealTimeLiveOrders().filter((lo: any) => {
+        const tbl = String(lo.tableNumber || '').trim().toLowerCase()
+        return tableVariants.some((tv) => tbl.includes(tv.toLowerCase()) || tv.toLowerCase().includes(tbl))
+      })
+
+      for (const fb of liveFallbacks) {
+        if (!formatted.some((f) => f.id === fb.id || f.id === fb.fullId || f.orderNumber === fb.id)) {
+          formatted.unshift({
+            id: fb.fullId || fb.id,
+            orderNumber: fb.id,
+            tableNumber: fb.tableNumber,
+            orderType: 'dine_in',
+            status: fb.status === 'cooking' ? 'preparing' : fb.status === 'accepted' ? 'confirmed' : fb.status,
+            paymentStatus: 'pending',
+            totalAmount: (fb.items || []).reduce((s: number, it: any) => s + (it.price || 150) * it.quantity, 0),
+            createdAt: fb.createdAt || new Date().toISOString(),
+            isLocationLocked: Boolean(fb.isLocationLocked),
+            vehicleNumber: fb.vehicleNumber || null,
+            landmarkNote: fb.landmarkNote || null,
+            customerLat: fb.customerLat ?? null,
+            customerLng: fb.customerLng ?? null,
+            locationAccuracy: fb.locationAccuracy ?? null,
+            locationCapturedAt: fb.locationCapturedAt ?? null,
+            items: (fb.items || []).map((it: any) => ({
+              id: it.id,
+              menuItemId: it.id,
+              name: it.name,
+              price: it.price || 150,
+              quantity: it.quantity,
+              total: (it.price || 150) * it.quantity,
+            })),
+          })
+        }
+      }
+    }
 
     return NextResponse.json({
       success: true,
@@ -106,7 +172,22 @@ export async function POST(request: NextRequest) {
       status: requestedStatus = 'pending',
       notes = '',
       customerId = null,
+      isLocationLocked = false,
+      vehicleNumber = null,
+      landmarkNote = null,
+      customerLat = null,
+      customerLng = null,
+      locationAccuracy = null,
+      locationCapturedAt = null,
     } = body
+
+    const parsedLat = customerLat !== null && customerLat !== undefined && !isNaN(Number(customerLat)) ? Number(customerLat) : null
+    const parsedLng = customerLng !== null && customerLng !== undefined && !isNaN(Number(customerLng)) ? Number(customerLng) : null
+    const parsedAccuracy = locationAccuracy !== null && locationAccuracy !== undefined && !isNaN(Number(locationAccuracy)) ? Number(locationAccuracy) : null
+    const parsedCapturedAt = locationCapturedAt ? new Date(locationCapturedAt) : (parsedLat !== null ? new Date() : null)
+    const parsedVehicle = vehicleNumber ? String(vehicleNumber).trim().toUpperCase() : null
+    const parsedLandmark = landmarkNote ? String(landmarkNote).trim() : null
+    const parsedLocked = Boolean(isLocationLocked)
 
     let branchId = body.branchId
 
@@ -319,13 +400,27 @@ export async function POST(request: NextRequest) {
         totalAmount: new Prisma.Decimal(finalTotal),
         total: new Prisma.Decimal(finalTotal),
         notes: notes || null,
-        source: 'QR_MENU',
+        source: body.source || 'QR_MENU',
+        isLocationLocked: parsedLocked,
+        vehicleNumber: parsedVehicle,
+        landmarkNote: parsedLandmark,
+        customerLat: parsedLat,
+        customerLng: parsedLng,
+        locationAccuracy: parsedAccuracy,
+        locationCapturedAt: parsedCapturedAt,
         metadata: {
           tableNumber: finalTableNumber,
-          customerName: body.customerName || 'Table Guest',
-          placedVia: 'QR_SELF_ORDER',
+          customerName: body.customerName || (parsedVehicle ? `Car Guest (${parsedVehicle})` : 'Table Guest'),
+          placedVia: body.source === 'POS' ? 'POS_TERMINAL' : 'QR_SELF_ORDER',
           subtotal: calculatedSubtotal,
           taxAmount,
+          isLocationLocked: parsedLocked,
+          vehicleNumber: parsedVehicle,
+          landmarkNote: parsedLandmark,
+          customerLat: parsedLat,
+          customerLng: parsedLng,
+          locationAccuracy: parsedAccuracy,
+          locationCapturedAt: parsedCapturedAt ? parsedCapturedAt.toISOString() : null,
         },
         items: {
           create: orderItemsCreateData,
@@ -342,14 +437,21 @@ export async function POST(request: NextRequest) {
       registerActiveLiveOrder({
         id: order.orderNumber,
         fullId: order.id,
-        tableNumber: `Table ${finalTableNumber}`,
-        source: 'qr_order',
-        waiter: 'QR Self-Order',
-        customerName: body.customerName || `Guest (${finalTableNumber})`,
+        tableNumber: parsedVehicle ? `🚗 ${parsedVehicle}` : `Table ${finalTableNumber}`,
+        source: body.source === 'POS' ? 'pos' : 'qr_order',
+        waiter: body.waiter || (body.source === 'POS' ? 'POS Staff' : 'QR Self-Order'),
+        customerName: body.customerName || (parsedVehicle ? `Car (${parsedVehicle})` : `Guest (${finalTableNumber})`),
         status: order.status === 'confirmed' ? 'accepted' : 'pending',
         priority: 'normal',
         createdAt: order.createdAt.toISOString(),
         specialNotes: notes || undefined,
+        isLocationLocked: parsedLocked,
+        vehicleNumber: parsedVehicle,
+        landmarkNote: parsedLandmark,
+        customerLat: parsedLat,
+        customerLng: parsedLng,
+        locationAccuracy: parsedAccuracy,
+        locationCapturedAt: parsedCapturedAt ? parsedCapturedAt.toISOString() : null,
         items: order.items.map((i: any) => {
           const dbItem = menuItemMap.get(i.menuItemId)
           return {
@@ -382,6 +484,13 @@ export async function POST(request: NextRequest) {
           totalAmount: finalTotal,
           itemsCount: order.items.length,
           createdAt: order.createdAt,
+          isLocationLocked: order.isLocationLocked,
+          vehicleNumber: order.vehicleNumber,
+          landmarkNote: order.landmarkNote,
+          customerLat: order.customerLat,
+          customerLng: order.customerLng,
+          locationAccuracy: order.locationAccuracy,
+          locationCapturedAt: order.locationCapturedAt,
         },
       },
       { status: 201 }

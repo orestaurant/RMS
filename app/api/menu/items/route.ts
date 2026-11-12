@@ -7,7 +7,8 @@ export async function GET(request: NextRequest) {
     const category = searchParams.get('category') || 'all'
     const search = searchParams.get('search') || ''
     const branchId = searchParams.get('branchId')
-    let restaurantId = searchParams.get('restaurantId')
+    const explicitRestId = searchParams.get('restaurantId')
+    let restaurantId = explicitRestId
 
     // If branchId is provided, resolve restaurantId
     if (branchId) {
@@ -20,22 +21,23 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Fallback to first restaurant if not resolved
-    if (!restaurantId) {
-      const defaultRest = await prisma.restaurant.findFirst({
-        select: { id: true },
-      })
-      if (defaultRest) {
-        restaurantId = defaultRest.id
-      }
-    }
-
     const where: any = {
       deletedAt: null,
     }
 
+    // Only strictly filter by restaurantId if client requested it explicitly,
+    // or if the default restaurant has items in the database
     if (restaurantId) {
-      where.restaurantId = restaurantId
+      if (explicitRestId || branchId) {
+        where.restaurantId = restaurantId
+      } else {
+        const hasItems = await prisma.menuItem.count({
+          where: { restaurantId, deletedAt: null },
+        })
+        if (hasItems > 0) {
+          where.restaurantId = restaurantId
+        }
+      }
     }
 
     if (category && category !== 'all') {
@@ -84,13 +86,20 @@ export async function GET(request: NextRequest) {
       })) || [],
     }))
 
-    return NextResponse.json({
-      success: true,
-      data: formatted,
-      meta: {
-        total: formatted.length,
+    return NextResponse.json(
+      {
+        success: true,
+        data: formatted,
+        meta: {
+          total: formatted.length,
+        },
       },
-    })
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+        },
+      }
+    )
   } catch (error: any) {
     console.error('Error fetching menu items:', error)
     return NextResponse.json(

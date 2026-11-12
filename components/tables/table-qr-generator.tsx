@@ -42,15 +42,35 @@ export function TableQRGenerator({
   const [copied, setCopied] = useState<string | null>(null)
   const [activePrintTable, setActivePrintTable] = useState<string | null>(null)
 
-  // Resolve base URL
-  const baseUrl =
-    typeof window !== 'undefined'
-      ? process.env.NEXT_PUBLIC_APP_URL || window.location.origin
-      : 'https://restaurant.com'
+  // Host URL state & auto network IP resolution for mobile phone scanning
+  const [hostUrl, setHostUrl] = useState<string>('')
+  const [lanUrl, setLanUrl] = useState<string>('')
+
+  React.useEffect(() => {
+    // 1. Initial default
+    const localOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'
+    const defaultHost = process.env.NEXT_PUBLIC_APP_URL || localOrigin
+    setHostUrl(defaultHost)
+
+    // 2. Fetch server network LAN IP so phone scan works immediately on Wi-Fi
+    fetch('/api/system/network-info')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.networkUrl) {
+          setLanUrl(data.networkUrl)
+          // If accessing via localhost on laptop, default to LAN IP so phone scanning works out of the box!
+          if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+            setHostUrl(data.networkUrl)
+          }
+        }
+      })
+      .catch((err) => console.warn('Could not resolve LAN IP:', err))
+  }, [])
 
   const getTargetUrl = (table: string | number) => {
     const cleanTable = String(table).trim()
-    return `${baseUrl}/menu?table=${encodeURIComponent(cleanTable)}`
+    const base = hostUrl && hostUrl.trim() ? hostUrl.trim().replace(/\/$/, '') : 'http://localhost:3000'
+    return `${base}/menu?table=${encodeURIComponent(cleanTable)}`
   }
 
   const formatTableBadge = (tbl: string | number) => {

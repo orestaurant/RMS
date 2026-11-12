@@ -33,10 +33,17 @@ export async function GET(request: NextRequest) {
       itemCount: c._count.items,
     }))
 
-    return NextResponse.json({
-      success: true,
-      data: formatted,
-    })
+    return NextResponse.json(
+      {
+        success: true,
+        data: formatted,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+        },
+      }
+    )
   } catch (error: any) {
     console.error('Error fetching categories:', error)
     return NextResponse.json(

@@ -21,10 +21,17 @@ export async function POST(request: NextRequest) {
       where: { email },
     })
 
-    if (!user) {
+    if (!user || user.deletedAt) {
       return NextResponse.json(
         { success: false, message: 'Invalid email or password' },
         { status: 401 }
+      )
+    }
+
+    if (user.status === 'inactive') {
+      return NextResponse.json(
+        { success: false, message: 'Your account is deactivated. Please contact an administrator.' },
+        { status: 403 }
       )
     }
 

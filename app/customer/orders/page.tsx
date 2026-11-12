@@ -83,6 +83,18 @@ export default function CustomerOrdersPage() {
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [statusFilter, setStatusFilter] = useState<'all' | 'queue' | 'live' | 'completed'>('all')
+
+  const queueCount = orders.filter((o) => ['pending', 'confirmed'].includes(o.status.toLowerCase())).length
+  const liveCount = orders.filter((o) => ['preparing', 'ready'].includes(o.status.toLowerCase())).length
+
+  const filteredOrders = orders.filter((o) => {
+    const st = o.status.toLowerCase()
+    if (statusFilter === 'queue') return ['pending', 'confirmed'].includes(st)
+    if (statusFilter === 'live') return ['preparing', 'ready'].includes(st)
+    if (statusFilter === 'completed') return ['served', 'completed', 'cancelled'].includes(st)
+    return true
+  })
 
   // Fetch customer profile & orders
   const loadData = useCallback(async () => {
@@ -333,6 +345,64 @@ export default function CustomerOrdersPage() {
           </Button>
         </div>
 
+        {/* ── Status Tabs Filter (Queue vs Live vs Completed) ── */}
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+          <button
+            onClick={() => setStatusFilter('all')}
+            className={cn(
+              'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all border',
+              statusFilter === 'all'
+                ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                : 'bg-muted/40 text-muted-foreground border-border/60 hover:text-foreground'
+            )}
+          >
+            All Orders ({orders.length})
+          </button>
+          <button
+            onClick={() => setStatusFilter('queue')}
+            className={cn(
+              'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all border flex items-center gap-1.5',
+              statusFilter === 'queue'
+                ? 'bg-amber-500 text-black border-amber-500 shadow-xs font-bold'
+                : 'bg-amber-500/10 text-amber-500 border-amber-500/30 hover:bg-amber-500/20'
+            )}
+          >
+            <span>Kitchen Queue</span>
+            {queueCount > 0 && (
+              <Badge className="h-4 px-1 text-[10px] bg-amber-500 text-black font-extrabold">
+                {queueCount}
+              </Badge>
+            )}
+          </button>
+          <button
+            onClick={() => setStatusFilter('live')}
+            className={cn(
+              'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all border flex items-center gap-1.5',
+              statusFilter === 'live'
+                ? 'bg-chart-4 text-white border-chart-4 shadow-xs font-bold'
+                : 'bg-chart-4/10 text-chart-4 border-chart-4/30 hover:bg-chart-4/20'
+            )}
+          >
+            <span>Live in Kitchen</span>
+            {liveCount > 0 && (
+              <Badge className="h-4 px-1 text-[10px] bg-chart-4 text-white font-extrabold animate-pulse">
+                {liveCount}
+              </Badge>
+            )}
+          </button>
+          <button
+            onClick={() => setStatusFilter('completed')}
+            className={cn(
+              'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all border',
+              statusFilter === 'completed'
+                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs font-bold'
+                : 'bg-muted/40 text-muted-foreground border-border/60 hover:text-foreground'
+            )}
+          >
+            Served & History
+          </button>
+        </div>
+
         {/* ── Orders Listing ─────────────────────────────────── */}
         {loading ? (
           <div className="space-y-4">
@@ -340,15 +410,23 @@ export default function CustomerOrdersPage() {
               <div key={i} className="h-32 w-full rounded-xl shimmer border border-border/40" />
             ))}
           </div>
-        ) : orders.length === 0 ? (
+        ) : filteredOrders.length === 0 ? (
           <Card className="border-dashed border-2 border-border/80 bg-card/40">
             <CardContent className="flex flex-col items-center justify-center py-16 text-center">
               <div className="flex size-14 items-center justify-center rounded-full bg-muted/50 mb-3">
                 <ShoppingBag className="size-7 stroke-1 text-muted-foreground" />
               </div>
-              <h4 className="text-base font-semibold text-foreground">No orders placed yet</h4>
+              <h4 className="text-base font-semibold text-foreground">
+                {statusFilter === 'queue'
+                  ? 'No orders in queue right now'
+                  : statusFilter === 'live'
+                  ? 'No live orders cooking currently'
+                  : 'No orders found'}
+              </h4>
               <p className="text-xs text-muted-foreground max-w-sm mt-1 mb-5">
-                You haven&apos;t placed any dining or delivery orders yet. Click the button below to place your first test order!
+                {statusFilter === 'all'
+                  ? 'You haven\'t placed any dining or delivery orders yet. Click below to place your first order!'
+                  : 'Your orders will appear here automatically as their status updates in real time.'}
               </p>
               <Button onClick={handlePlaceTestOrder} disabled={actionLoading} className="gap-2">
                 <Plus className="size-4" />
@@ -358,7 +436,7 @@ export default function CustomerOrdersPage() {
           </Card>
         ) : (
           <div className="flex flex-col gap-4">
-            {orders.map((order) => {
+            {filteredOrders.map((order) => {
               const badgeCfg = statusBadgeStyles[order.status] || {
                 label: order.status,
                 className: 'bg-muted text-muted-foreground border-border',

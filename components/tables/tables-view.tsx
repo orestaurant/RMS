@@ -14,6 +14,7 @@ import {
   Calendar,
   AlertCircle,
   Search,
+  Trash2,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -33,11 +34,37 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { TableQRGenerator } from '@/components/tables/table-qr-generator'
 import { useAuthContext } from '@/hooks/useAuthContext'
+
+export function formatTableDisplay(tableNumber: string | number, isVip?: boolean) {
+  let s = String(tableNumber || '').trim()
+  if (!s) return isVip ? 'VIP Table' : 'Table'
+
+  // If accidentally stored with double TT (e.g. TT11, TT12), normalize to T11, T12
+  if (/^tt\d+/i.test(s)) {
+    s = s.replace(/^tt(\d+)/i, 'T$1')
+  }
+
+  const prefix = isVip && !s.toLowerCase().includes('vip') ? 'VIP ' : ''
+
+  // If already starts with T/t followed by numbers (e.g. T1, T12, t12)
+  if (/^t\d+/i.test(s)) {
+    return `${prefix}${s.toUpperCase()}`
+  }
+
+  // If purely digits (e.g. 1, 2, 12), show as T1, T2, T12
+  if (/^\d+$/.test(s)) {
+    return `${prefix}T${s}`
+  }
+
+  // If string already has a custom name like "Takeaway", "VIP-1", "Outdoor 5"
+  return `${prefix}${s}`
+}
 
 export type TableStatus = 'available' | 'occupied' | 'reserved' | 'cleaning' | 'out_of_service' | 'maintenance'
 
@@ -109,10 +136,12 @@ function TableCard({
   table,
   onGenerateQR,
   onUpdateStatus,
+  onDelete,
 }: {
   table: TableData
   onGenerateQR?: (tableNum: string | number) => void
   onUpdateStatus?: (tableId: string, status: TableStatus) => Promise<void>
+  onDelete?: (table: TableData) => void
 }) {
   const normStatus: TableStatus = statusConfig[table.status] ? table.status : 'available'
   const cfg = statusConfig[normStatus]
@@ -132,7 +161,7 @@ function TableCard({
           <div className="flex items-center gap-2">
             <span className={cn('size-2 rounded-full shrink-0', cfg.dot)} />
             <span className="font-bold text-base leading-none">
-              {isVip ? 'VIP ' : ''}T{table.tableNumber || table.number}
+              {formatTableDisplay(table.tableNumber || table.number, isVip)}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
@@ -145,7 +174,7 @@ function TableCard({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="size-6 opacity-60 hover:opacity-100 group-hover:opacity-100 transition-opacity"
                   />
                 }
               >
@@ -207,6 +236,18 @@ function TableCard({
                     Mark Available
                   </DropdownMenuItem>
                 )}
+
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDelete?.(table)
+                  }}
+                  className="gap-2 text-destructive focus:text-destructive focus:bg-destructive/10 cursor-pointer"
+                >
+                  <Trash2 className="size-3.5" />
+                  Delete Table
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -331,6 +372,11 @@ export function TablesView() {
   const [addLoading, setAddLoading] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
 
+  // Delete Table Modal state
+  const [deleteTableTarget, setDeleteTableTarget] = useState<TableData | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
   // Fetch real tables from dynamic database API
   const fetchTables = useCallback(async () => {
     try {
@@ -384,10 +430,14 @@ export function TablesView() {
   // Handle Add Table form submit
   const handleAddTable = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newTableNum.trim()) {
+    const trimmed = newTableNum.trim()
+    if (!trimmed) {
       setAddError('Table number is required')
       return
     }
+
+    // Normalize if user accidentally typed TT12 or similar
+    const cleanTableNum = /^tt\d+/i.test(trimmed) ? trimmed.replace(/^tt(\d+)/i, 'T$1') : trimmed
 
     try {
       setAddLoading(true)
@@ -397,7 +447,7 @@ export function TablesView() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tableNumber: newTableNum.trim(),
+          tableNumber: cleanTableNum,
           capacity: parseInt(newCapacity) || 4,
           section: newSection,
           branchId: branchId || undefined,
@@ -420,6 +470,32 @@ export function TablesView() {
     }
   }
 
+  // Delete Table from database
+  const handleConfirmDeleteTable = async () => {
+    if (!deleteTableTarget) return
+    try {
+      setDeleteLoading(true)
+      setDeleteError(null)
+
+      const res = await fetch(`/api/tables?id=${encodeURIComponent(deleteTableTarget.id)}`, {
+        method: 'DELETE',
+      })
+
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to delete table')
+      }
+
+      setDeleteTableTarget(null)
+      fetchTables()
+    } catch (err: any) {
+      console.error('Delete table error:', err)
+      setDeleteError(err.message || 'Failed to delete table')
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
   const handleOpenQR = (tableNum: string | number) => {
     setQrTable(tableNum)
     setQrOpen(true)
@@ -437,6 +513,7 @@ export function TablesView() {
     const matchSearch =
       !search ||
       String(t.tableNumber || t.number).toLowerCase().includes(search.toLowerCase()) ||
+      formatTableDisplay(t.tableNumber || t.number).toLowerCase().includes(search.toLowerCase()) ||
       t.section.toLowerCase().includes(search.toLowerCase())
     return matchSection && matchStatus && matchSearch
   })
@@ -677,10 +754,93 @@ export function TablesView() {
               table={table}
               onGenerateQR={handleOpenQR}
               onUpdateStatus={handleUpdateStatus}
+              onDelete={(tbl) => {
+                setDeleteError(null)
+                setDeleteTableTarget(tbl)
+              }}
             />
           ))}
         </div>
       )}
+
+      {/* Delete Table Confirmation Dialog */}
+      <Dialog
+        open={!!deleteTableTarget}
+        onOpenChange={(open) => !open && !deleteLoading && setDeleteTableTarget(null)}
+      >
+        <DialogContent className="sm:max-w-md bg-card border-border shadow-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg text-destructive">
+              <Trash2 className="size-5" />
+              Delete Table
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Are you sure you want to remove this table from the floor layout?
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteTableTarget && (
+            <div className="space-y-3 py-2 text-xs">
+              <div className="p-3.5 rounded-xl border border-destructive/20 bg-destructive/5 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="size-10 rounded-lg bg-destructive/15 text-destructive font-bold text-sm flex items-center justify-center">
+                    {formatTableDisplay(deleteTableTarget.tableNumber || deleteTableTarget.number)}
+                  </div>
+                  <div>
+                    <div className="font-semibold text-foreground text-sm">
+                      Table {formatTableDisplay(deleteTableTarget.tableNumber || deleteTableTarget.number)}
+                    </div>
+                    <div className="text-muted-foreground">
+                      Section: <span className="capitalize text-foreground font-medium">{deleteTableTarget.section}</span> • Capacity: {deleteTableTarget.capacity} seats
+                    </div>
+                  </div>
+                </div>
+                <Badge variant="outline" className="capitalize text-[10px]">
+                  {deleteTableTarget.status}
+                </Badge>
+              </div>
+
+              {deleteTableTarget.status === 'occupied' && (
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs flex items-start gap-2">
+                  <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Warning:</strong> This table currently has active guests or an order. Deleting it will release the table spot.
+                  </span>
+                </div>
+              )}
+
+              {deleteError && (
+                <div className="p-2.5 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-xs">
+                  {deleteError}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteTableTarget(null)}
+              disabled={deleteLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={handleConfirmDeleteTable}
+              disabled={deleteLoading}
+              className="gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteLoading && <Loader2 className="size-3.5 animate-spin" />}
+              {deleteLoading ? 'Deleting...' : 'Yes, Delete Table'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   )
 }

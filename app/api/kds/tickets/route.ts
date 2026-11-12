@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import {
   getKitchenStation,
+  getItemCuisine,
   registerActiveLiveOrder,
   getRealTimeLiveOrders,
 } from '@/lib/kds-utils'
@@ -35,7 +36,11 @@ export async function GET(request: NextRequest) {
           table: true,
           items: {
             include: {
-              menuItem: true,
+              menuItem: {
+                include: {
+                  category: true,
+                },
+              },
             },
           },
           createdBy: true,
@@ -76,6 +81,23 @@ export async function GET(request: NextRequest) {
             ? (order.customer.name || `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() || 'Customer')
             : undefined
 
+          const ticketItems = order.items.map((i) => {
+            const rawCat = (i.menuItem as any)?.category?.name
+            const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
+            const catName = rawCat && !isUuid(rawCat) ? rawCat : undefined
+            return {
+              id: i.id,
+              name: i.itemName,
+              quantity: i.quantity,
+              notes: i.specialInstructions || undefined,
+              station: getKitchenStation(i.itemName, catName),
+              cuisine: getItemCuisine(i.itemName, catName),
+              completed: i.status === 'ready' || i.status === 'served',
+            }
+          })
+
+          const ticketCuisines = Array.from(new Set(ticketItems.map((ti) => ti.cuisine)))
+
           return {
             id: order.orderNumber || `ORD-${order.id.slice(0, 4)}`,
             fullId: order.id,
@@ -88,17 +110,8 @@ export async function GET(request: NextRequest) {
             ticketTime: minutesAgo,
             createdAt: order.createdAt.toISOString(),
             specialNotes: order.notes || undefined,
-            items: order.items.map((i) => ({
-              id: i.id,
-              name: i.itemName,
-              quantity: i.quantity,
-              notes: i.specialInstructions || undefined,
-              station: getKitchenStation(
-                i.itemName,
-                (i.menuItem as any)?.category?.name || (i.menuItem as any)?.categoryId
-              ),
-              completed: i.status === 'ready' || i.status === 'served',
-            })),
+            cuisines: ticketCuisines,
+            items: ticketItems,
           }
         })
       }

@@ -767,6 +767,13 @@ model Order {
   deliveryInstructions String?
   notes                String?
   source               String?           @db.VarChar(100)
+  isLocationLocked     Boolean           @default(false)
+  vehicleNumber        String?           @db.VarChar(50)
+  landmarkNote         String?
+  customerLat          Float?
+  customerLng          Float?
+  locationAccuracy     Float?
+  locationCapturedAt   DateTime?
   preparedAt           DateTime?
   servedAt             DateTime?
   cancelledAt          DateTime?

@@ -45,14 +45,15 @@ export async function authenticateAdmin(
         lastName: true,
         role: true,
         status: true,
+        deletedAt: true,
         organizationId: true,
       },
     })
 
-    if (!user) {
+    if (!user || user.deletedAt) {
       return {
         auth: null,
-        errorResponse: { message: 'Unauthorized: Admin account not found', status: 401 },
+        errorResponse: { message: 'Unauthorized: Admin account not found or has been deactivated', status: 401 },
       }
     }
 

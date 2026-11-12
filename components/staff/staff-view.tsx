@@ -25,6 +25,7 @@ import {
   Mail,
   Calendar,
   Crown,
+  Trash2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -141,6 +142,10 @@ export function StaffView() {
   const [editStatus, setEditStatus] = useState<'active' | 'inactive'>('active')
   const [isUpdating, setIsUpdating] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+
+  // Delete User Confirmation Modal state
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<ManagedUser | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // Create Staff User Modal state
   const [isCreateOpen, setIsCreateOpen] = useState(false)
@@ -266,6 +271,45 @@ export function StaffView() {
       setEditError(err.message || 'Failed to update user role')
     } finally {
       setIsUpdating(false)
+    }
+  }
+
+  // Delete User Action
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmUser) return
+    if (isCurrentAdmin(deleteConfirmUser.id)) {
+      triggerFeedback('error', 'Cannot delete your own active Admin account.')
+      setDeleteConfirmUser(null)
+      return
+    }
+
+    if (!canModifyUser(deleteConfirmUser)) {
+      triggerFeedback('error', 'Permission Denied: Only Super Admin can delete Admin accounts.')
+      setDeleteConfirmUser(null)
+      return
+    }
+
+    try {
+      setIsDeleting(true)
+      const res = await fetch(`/api/admin/users/${deleteConfirmUser.id}`, {
+        method: 'DELETE',
+      })
+
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to delete user')
+      }
+
+      triggerFeedback('success', data.message || `User ${deleteConfirmUser.name} deleted successfully!`)
+      setDeleteConfirmUser(null)
+      if (editUser?.id === deleteConfirmUser.id) {
+        setEditUser(null)
+      }
+      fetchUsers()
+    } catch (err: any) {
+      triggerFeedback('error', err.message || 'Error deleting user')
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -769,26 +813,49 @@ export function StaffView() {
 
                       {/* Actions */}
                       <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleOpenEdit(user)}
-                          disabled={!canModifyUser(user)}
-                          title={
-                            !canModifyUser(user)
-                              ? 'Only Super Admin can modify Admin accounts'
-                              : 'Edit role & status'
-                          }
-                          className={cn(
-                            'gap-1.5 text-xs h-8 border-border transition-all',
-                            canModifyUser(user)
-                              ? 'hover:bg-primary hover:text-primary-foreground'
-                              : 'opacity-40 cursor-not-allowed'
-                          )}
-                        >
-                          {!canModifyUser(user) ? <Lock className="size-3.5" /> : <Edit3 className="size-3.5" />}
-                          Edit Role
-                        </Button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleOpenEdit(user)}
+                            disabled={!canModifyUser(user)}
+                            title={
+                              !canModifyUser(user)
+                                ? 'Only Super Admin can modify Admin accounts'
+                                : 'Edit role & status'
+                            }
+                            className={cn(
+                              'gap-1.5 text-xs h-8 border-border transition-all',
+                              canModifyUser(user)
+                                ? 'hover:bg-primary hover:text-primary-foreground'
+                                : 'opacity-40 cursor-not-allowed'
+                            )}
+                          >
+                            {!canModifyUser(user) ? <Lock className="size-3.5" /> : <Edit3 className="size-3.5" />}
+                            Edit Role
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setDeleteConfirmUser(user)}
+                            disabled={isSelf || !canModifyUser(user)}
+                            title={
+                              isSelf
+                                ? 'Cannot delete logged-in account'
+                                : !canModifyUser(user)
+                                ? 'Only Super Admin can delete Admin accounts'
+                                : 'Delete user'
+                            }
+                            className={cn(
+                              'h-8 w-8 p-0 border-border transition-all',
+                              !isSelf && canModifyUser(user)
+                                ? 'hover:bg-destructive hover:text-destructive-foreground hover:border-destructive text-muted-foreground'
+                                : 'opacity-30 cursor-not-allowed'
+                            )}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )
@@ -950,25 +1017,118 @@ export function StaffView() {
             </div>
           )}
 
+          <DialogFooter className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center sm:justify-between gap-2 pt-3 border-t border-border/40">
+            {editUser && (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                onClick={() => setDeleteConfirmUser(editUser)}
+                disabled={isUpdating || isDeleting || isCurrentAdmin(editUser.id) || !canModifyUser(editUser)}
+                title={
+                  isCurrentAdmin(editUser.id)
+                    ? 'Cannot delete your own active account'
+                    : !canModifyUser(editUser)
+                    ? 'Permission Denied: Only Super Admin can delete Admin accounts'
+                    : 'Delete user account'
+                }
+                className="gap-1.5 bg-destructive/10 hover:bg-destructive text-destructive hover:text-destructive-foreground border border-destructive/30 transition-all justify-center sm:justify-start"
+              >
+                <Trash2 className="size-3.5" />
+                Delete User
+              </Button>
+            )}
+            <div className="flex items-center gap-2 justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditUser(null)}
+                disabled={isUpdating || isDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveRole}
+                disabled={isUpdating || isDeleting}
+                className="gap-1.5 bg-primary text-primary-foreground"
+              >
+                {isUpdating && <RefreshCw className="size-3.5 animate-spin" />}
+                {isUpdating ? 'Saving Changes...' : 'Save Role & Status'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ========================================================================= */}
+      {/* CONFIRM DELETE USER MODAL                                                 */}
+      {/* ========================================================================= */}
+      <Dialog open={!!deleteConfirmUser} onOpenChange={(open) => !open && !isDeleting && setDeleteConfirmUser(null)}>
+        <DialogContent className="sm:max-w-md bg-card border-border shadow-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg text-destructive">
+              <Trash2 className="size-5" />
+              Delete User Account
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Are you sure you want to delete this user? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteConfirmUser && (
+            <div className="space-y-4 py-2">
+              <div className="p-3.5 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-3">
+                <Avatar className="size-10 border border-destructive/30">
+                  <AvatarFallback className="bg-destructive/20 text-destructive font-bold text-xs">
+                    {getInitials(deleteConfirmUser.name)}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex flex-col min-w-0">
+                  <span className="font-semibold text-sm truncate text-foreground">{deleteConfirmUser.name}</span>
+                  <span className="text-xs text-muted-foreground truncate">{deleteConfirmUser.email}</span>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[11px] text-muted-foreground">
+                      Role: <span className="font-medium text-foreground">{deleteConfirmUser.role}</span>
+                    </span>
+                    <span className="text-muted-foreground">•</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      Status: <span className="font-medium capitalize text-foreground">{deleteConfirmUser.status}</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-lg bg-muted/40 border border-border/70 text-xs text-muted-foreground">
+                <p className="leading-relaxed">
+                  Deleting this user will revoke their login access immediately and remove them from your active team directory in PostgreSQL.
+                </p>
+              </div>
+            </div>
+          )}
+
           <DialogFooter className="gap-2 sm:gap-0 pt-2">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => setEditUser(null)}
-              disabled={isUpdating}
+              onClick={() => setDeleteConfirmUser(null)}
+              disabled={isDeleting}
             >
               Cancel
             </Button>
             <Button
               type="button"
+              variant="destructive"
               size="sm"
-              onClick={handleSaveRole}
-              disabled={isUpdating}
-              className="gap-1.5 bg-primary text-primary-foreground"
+              onClick={handleConfirmDelete}
+              disabled={isDeleting}
+              className="gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {isUpdating && <RefreshCw className="size-3.5 animate-spin" />}
-              {isUpdating ? 'Saving Changes...' : 'Save Role & Status'}
+              {isDeleting && <RefreshCw className="size-3.5 animate-spin" />}
+              {isDeleting ? 'Deleting User...' : 'Yes, Delete User'}
             </Button>
           </DialogFooter>
         </DialogContent>

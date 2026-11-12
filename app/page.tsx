@@ -1,7 +1,9 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
+import gsap from 'gsap'
+import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import {
   UtensilsCrossed,
   ChefHat,
@@ -12,6 +14,7 @@ import {
   Sparkles,
   ShieldCheck,
   ArrowRight,
+  ArrowDown,
   CheckCircle2,
   Layers,
   Store,
@@ -21,14 +24,93 @@ import {
   Check,
   ChevronDown,
   Percent,
-  LogIn,
   UserCheck,
   HeartHandshake,
+  Zap,
+  Clock,
+  TrendingUp,
+  Smartphone,
+  ExternalLink,
+  Printer,
+  MessageSquare,
+  Phone,
+  QrCode,
+  BookOpen,
+  Bell,
 } from 'lucide-react'
+
+if (typeof window !== 'undefined') {
+  gsap.registerPlugin(ScrollTrigger)
+}
 
 export default function HomePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [faqOpen, setFaqOpen] = useState<number | null>(0)
+
+  const heroRef = useRef<HTMLElement>(null)
+  const heroVisualRef = useRef<HTMLDivElement>(null)
+
+  // ── GSAP TIMELINES, PARALLAX & SCROLLTRIGGERS ──
+  useEffect(() => {
+    const ctx = gsap.context(() => {
+      // 1. Hero Entrance Timeline
+      const tl = gsap.timeline({ defaults: { ease: 'power3.out' } })
+      tl.from('.gsap-hero-badge', { y: -25, opacity: 0, scale: 0.9, duration: 0.7 })
+        .from('.gsap-hero-title', { y: 35, opacity: 0, duration: 0.8, stagger: 0.1 }, '-=0.4')
+        .from('.gsap-hero-subtitle', { y: 20, opacity: 0, duration: 0.7 }, '-=0.5')
+        .from('.gsap-hero-btn', { y: 20, opacity: 0, scale: 0.94, stagger: 0.1, duration: 0.6, ease: 'back.out(1.7)' }, '-=0.4')
+        .from('.gsap-hero-trust', { opacity: 0, y: 15, duration: 0.6 }, '-=0.3')
+        .from('.gsap-float-chip', { opacity: 0, scale: 0.8, stagger: 0.1, duration: 0.7, ease: 'back.out(1.5)' }, '-=0.5')
+
+      // 2. Continuous Floating Sinusoidal Ambient Motion
+      gsap.to('.gsap-float-chip-1', { y: -10, rotation: 1.5, repeat: -1, yoyo: true, duration: 3.2, ease: 'sine.inOut' })
+      gsap.to('.gsap-float-chip-2', { y: 12, rotation: -2, repeat: -1, yoyo: true, duration: 3.8, ease: 'sine.inOut', delay: 0.3 })
+      gsap.to('.gsap-float-chip-3', { y: -8, rotation: 1.8, repeat: -1, yoyo: true, duration: 4.1, ease: 'sine.inOut', delay: 0.6 })
+      gsap.to('.gsap-float-chip-4', { y: 10, rotation: -1.5, repeat: -1, yoyo: true, duration: 3.5, ease: 'sine.inOut', delay: 0.9 })
+    })
+
+    return () => ctx.revert()
+  }, [])
+
+  // ── MOUSE PARALLAX TILT EFFECT ──
+  const handleHeroMouseMove = (e: React.MouseEvent<HTMLElement>) => {
+    if (!heroRef.current) return
+    const rect = heroRef.current.getBoundingClientRect()
+    const x = (e.clientX - (rect.left + rect.width / 2)) / (rect.width / 2)
+    const y = (e.clientY - (rect.top + rect.height / 2)) / (rect.height / 2)
+
+    gsap.to('.gsap-float-chip-1', { x: x * 22, y: y * 22, duration: 0.5, ease: 'power2.out' })
+    gsap.to('.gsap-float-chip-2', { x: -x * 20, y: -y * 20, duration: 0.5, ease: 'power2.out' })
+    gsap.to('.gsap-float-chip-3', { x: x * 18, y: -y * 18, duration: 0.5, ease: 'power2.out' })
+    gsap.to('.gsap-float-chip-4', { x: -x * 24, y: y * 24, duration: 0.5, ease: 'power2.out' })
+
+    if (heroVisualRef.current) {
+      gsap.to(heroVisualRef.current, {
+        rotateY: x * 6,
+        rotateX: -y * 6,
+        transformPerspective: 1000,
+        duration: 0.6,
+        ease: 'power2.out',
+      })
+    }
+  }
+
+  const handleHeroMouseLeave = () => {
+    gsap.to('.gsap-float-chip-1, .gsap-float-chip-2, .gsap-float-chip-3, .gsap-float-chip-4', {
+      x: 0,
+      y: 0,
+      duration: 0.8,
+      ease: 'power2.out',
+    })
+    if (heroVisualRef.current) {
+      gsap.to(heroVisualRef.current, {
+        rotateY: 0,
+        rotateX: 0,
+        duration: 0.8,
+        ease: 'power2.out',
+      })
+    }
+  }
 
   const faqs = [
     {
@@ -57,13 +139,13 @@ export default function HomePage() {
     <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-orange-500 selection:text-white font-sans antialiased overflow-x-hidden">
       {/* ────────────────── TOP GLOW & AMBIENT EFFECTS ────────────────── */}
       <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-        <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[1000px] h-[550px] bg-gradient-to-b from-orange-500/20 via-rose-500/10 to-transparent blur-[140px] rounded-full" />
-        <div className="absolute top-96 -left-48 w-[600px] h-[600px] bg-amber-500/10 blur-[150px] rounded-full" />
+        <div className="gsap-orb-top absolute -top-40 left-1/2 -translate-x-1/2 w-[1000px] h-[550px] bg-gradient-to-b from-orange-500/20 via-rose-500/10 to-transparent blur-[140px] rounded-full" />
+        <div className="gsap-orb-mid absolute top-96 -left-48 w-[600px] h-[600px] bg-amber-500/10 blur-[150px] rounded-full" />
         <div className="absolute top-1/2 -right-48 w-[600px] h-[600px] bg-indigo-500/10 blur-[150px] rounded-full" />
       </div>
 
       {/* ────────────────── NAVIGATION BAR ────────────────── */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-slate-950/80 border-b border-slate-800/80 transition-all">
+      <header className="sticky top-0 z-40 backdrop-blur-xl bg-slate-950/80 border-b border-slate-800/80 transition-all">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-3 group">
@@ -80,137 +162,208 @@ export default function HomePage() {
             </div>
           </Link>
 
-          {/* Desktop Nav Links (Cleaned: Live POS & KDS and Roles removed) */}
+          {/* Desktop Nav Links (Pure Marketing) */}
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
-            <a href="#features" className="hover:text-orange-400 transition-colors">
-              Features
-            </a>
-            <a href="#portals" className="hover:text-orange-400 transition-colors">
-              Sign In Portals
+            <a href="#capabilities" className="hover:text-orange-400 transition-colors">
+              Capabilities
             </a>
             <a href="#pricing" className="hover:text-orange-400 transition-colors">
               Pricing
+            </a>
+            <a href="#testimonials" className="hover:text-orange-400 transition-colors">
+              Reviews
             </a>
             <a href="#faq" className="hover:text-orange-400 transition-colors">
               FAQ
             </a>
           </nav>
 
-          {/* Action & Sign In Buttons */}
-          <div className="hidden lg:flex items-center gap-3">
-            {/* Customer Sign In Pill */}
-            <Link
-              href="/customer/auth"
-              className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all flex items-center gap-1.5"
-            >
-              <UserCheck className="w-3.5 h-3.5 text-rose-400" />
-              <span>Customer Login</span>
-            </Link>
-
-            {/* Staff Sign In Primary */}
-            <Link
-              href="/login"
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-slate-900 border border-orange-500/30 hover:border-orange-500 hover:bg-orange-500/10 transition-all flex items-center gap-2 shadow-sm"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-orange-400" />
-              <span>Staff Sign In</span>
-            </Link>
-
-            {/* Launch App / Dashboard */}
+          {/* Action CTAs & Hamburger Menu Trigger */}
+          <div className="flex items-center gap-3">
+            {/* Live Interactive Demo CTA (Marketing) */}
             <Link
               href="/dashboard"
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:opacity-95 shadow-lg shadow-orange-500/25 transition-all flex items-center gap-1.5 active:scale-95"
+              className="hidden sm:flex px-4 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:opacity-95 shadow-lg shadow-orange-500/25 transition-all items-center gap-1.5 active:scale-95"
             >
-              <span>Launch Dashboard</span>
+              <span>Explore Demo</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
-          </div>
 
-          {/* Mobile Menu Button */}
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-slate-800 focus:outline-none"
-            aria-label="Toggle Menu"
-          >
-            {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
+            {/* Hamburger Menu Button - Hosts Login and Full Navigation */}
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className="px-3 sm:px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:text-white bg-slate-900 border border-slate-800 hover:border-orange-500/50 hover:bg-slate-850 transition-all flex items-center gap-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/40"
+              aria-label="Open Navigation and Sign In Menu"
+            >
+              <Menu className="w-4 h-4 text-orange-400" />
+              <span className="text-slate-300 font-medium">Menu & Login</span>
+            </button>
+          </div>
         </div>
-
-        {/* Mobile Dropdown Menu (Cleaned: Live POS & KDS and Roles removed) */}
-        {mobileMenuOpen && (
-          <div className="md:hidden px-4 pt-3 pb-6 bg-slate-950/95 border-b border-slate-800 space-y-4">
-            <div className="flex flex-col space-y-3 text-sm font-medium text-slate-300">
-              <a
-                href="#features"
-                onClick={() => setMobileMenuOpen(false)}
-                className="py-1 hover:text-orange-400"
-              >
-                Features
-              </a>
-              <a
-                href="#portals"
-                onClick={() => setMobileMenuOpen(false)}
-                className="py-1 hover:text-orange-400"
-              >
-                Sign In Portals
-              </a>
-              <a
-                href="#pricing"
-                onClick={() => setMobileMenuOpen(false)}
-                className="py-1 hover:text-orange-400"
-              >
-                Pricing
-              </a>
-              <a
-                href="#faq"
-                onClick={() => setMobileMenuOpen(false)}
-                className="py-1 hover:text-orange-400"
-              >
-                FAQ
-              </a>
-            </div>
-
-            <div className="pt-3 border-t border-slate-800 flex flex-col gap-2.5">
-              <Link
-                href="/login"
-                onClick={() => setMobileMenuOpen(false)}
-                className="w-full py-2.5 rounded-xl text-center text-sm font-semibold bg-slate-900 text-slate-100 border border-orange-500/40 flex items-center justify-center gap-2"
-              >
-                <ShieldCheck className="w-4 h-4 text-orange-400" />
-                Staff & Admin Sign In
-              </Link>
-              <Link
-                href="/customer/auth"
-                onClick={() => setMobileMenuOpen(false)}
-                className="w-full py-2.5 rounded-xl text-center text-sm font-semibold bg-slate-900 text-slate-200 border border-slate-800 flex items-center justify-center gap-2"
-              >
-                <UserCheck className="w-4 h-4 text-rose-400" />
-                Customer & Guest Portal
-              </Link>
-              <Link
-                href="/dashboard"
-                onClick={() => setMobileMenuOpen(false)}
-                className="w-full py-2.5 rounded-xl text-center text-sm font-semibold text-white bg-gradient-to-r from-orange-500 to-rose-500 shadow-md shadow-orange-500/25 flex items-center justify-center gap-2"
-              >
-                Open Dashboard <ArrowRight className="w-4 h-4" />
-              </Link>
-            </div>
-          </div>
-        )}
       </header>
 
-      {/* ────────────────── HERO SECTION ────────────────── */}
-      <section className="relative z-10 pt-10 pb-16 md:pt-16 md:pb-24 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto text-center">
+      {/* ────────────────── SLIDE-OVER HAMBURGER DRAWER (LOGINS + NAVIGATION) ────────────────── */}
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          {/* Backdrop Blur */}
+          <div
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity"
+            onClick={() => setMobileMenuOpen(false)}
+            aria-hidden="true"
+          />
+
+          {/* Drawer Content */}
+          <aside
+            className="relative w-full max-w-sm sm:max-w-md bg-slate-950 border-l border-slate-800 h-full p-6 flex flex-col justify-between overflow-y-auto shadow-2xl z-10"
+            role="dialog"
+            aria-label="Site Navigation and Login Portals"
+          >
+            <div>
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between pb-5 border-b border-slate-800/80">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center text-white shadow-md shadow-orange-500/20">
+                    <UtensilsCrossed className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="text-base font-bold text-white block">
+                      Resto<span className="text-orange-400">Sphere</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 tracking-wider uppercase block">
+                      Sign In Portals
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="p-2 rounded-xl bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800 transition-all"
+                  aria-label="Close menu"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* ─── PRIMARY SECTION: LOGIN PORTALS ─── */}
+              <div className="mt-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <ShieldCheck className="w-4 h-4 text-orange-400" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                    Sign In Portals
+                  </span>
+                </div>
+
+                <div className="space-y-4">
+                  {/* Staff & Admin Sign In */}
+                  <Link
+                    href="/login"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="group block p-4 sm:p-5 rounded-2xl bg-gradient-to-b from-slate-900/90 to-slate-900/60 border border-orange-500/30 hover:border-orange-500 transition-all hover:shadow-lg hover:shadow-orange-500/10"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center text-orange-400 group-hover:scale-105 transition-transform">
+                          <ShieldCheck className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <span className="text-sm font-bold text-white group-hover:text-orange-300 transition-colors block">
+                            Staff & Admin Sign In
+                          </span>
+                          <span className="text-[11px] text-orange-400/90 font-medium">
+                            Owners, Managers & Kitchen
+                          </span>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-orange-400 group-hover:translate-x-1 transition-transform" />
+                    </div>
+                    <p className="text-xs text-slate-400 pl-12 leading-relaxed">
+                      Role-based access for POS Billing, Live Kitchen KDS, Inventory, and Admin controls.
+                    </p>
+                  </Link>
+
+                  {/* Customer & Guest Login */}
+                  <Link
+                    href="/customer/auth"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="group block p-4 sm:p-5 rounded-2xl bg-gradient-to-b from-slate-900/90 to-slate-900/60 border border-rose-500/30 hover:border-rose-500 transition-all hover:shadow-lg hover:shadow-rose-500/10"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 group-hover:scale-105 transition-transform">
+                          <UserCheck className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <span className="text-sm font-bold text-white group-hover:text-rose-300 transition-colors block">
+                            Customer & Guest Portal
+                          </span>
+                          <span className="text-[11px] text-rose-400/90 font-medium">
+                            Diners & Table Guests
+                          </span>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-rose-400 group-hover:translate-x-1 transition-transform" />
+                    </div>
+                    <p className="text-xs text-slate-400 pl-12 leading-relaxed">
+                      Browse digital photo menus, book tables, track live orders, and redeem reward coins.
+                    </p>
+                  </Link>
+
+                  {/* Customer Register Link */}
+                  <div className="pt-2 flex items-center justify-between px-2 text-xs">
+                    <span className="text-slate-400">New dining guest?</span>
+                    <Link
+                      href="/customer/register"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="text-orange-400 hover:text-orange-300 font-semibold underline underline-offset-2"
+                    >
+                      Create Guest Account
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* ────────────────── HERO SECTION (MARKETING-FOCUSED) ────────────────── */}
+      <section
+        ref={heroRef}
+        onMouseMove={handleHeroMouseMove}
+        onMouseLeave={handleHeroMouseLeave}
+        className="relative z-10 pt-10 pb-16 md:pt-16 md:pb-24 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto text-center"
+      >
+        {/* Floating 3D Parallax Glassmorphism Badges */}
+        <div className="gsap-float-chip gsap-float-chip-1 absolute top-2 sm:top-6 left-0 sm:left-4 z-20 pointer-events-none hidden sm:flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-slate-900/80 border border-orange-500/30 backdrop-blur-md shadow-xl shadow-orange-500/10">
+          <Zap className="w-4 h-4 text-orange-400" />
+          <span className="text-xs font-bold text-white">0.8s Superfast POS</span>
+        </div>
+
+        <div className="gsap-float-chip gsap-float-chip-2 absolute top-4 sm:top-8 right-0 sm:right-4 z-20 pointer-events-none hidden sm:flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-slate-900/80 border border-amber-500/30 backdrop-blur-md shadow-xl shadow-amber-500/10">
+          <Bell className="w-4 h-4 text-amber-400 animate-pulse" />
+          <span className="text-xs font-bold text-white">Live KDS Active</span>
+        </div>
+
+        <div className="gsap-float-chip gsap-float-chip-3 absolute -bottom-6 left-2 sm:left-10 z-20 pointer-events-none hidden md:flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-slate-900/80 border border-emerald-500/30 backdrop-blur-md shadow-xl shadow-emerald-500/10">
+          <QrCode className="w-4 h-4 text-emerald-400" />
+          <span className="text-xs font-bold text-white">Dynamic UPI QR Checkout</span>
+        </div>
+
+        <div className="gsap-float-chip gsap-float-chip-4 absolute -bottom-4 right-2 sm:right-10 z-20 pointer-events-none hidden md:flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-slate-900/80 border border-indigo-500/30 backdrop-blur-md shadow-xl shadow-indigo-500/10">
+          <TrendingUp className="w-4 h-4 text-indigo-400" />
+          <span className="text-xs font-bold text-white">Daily Sales Auto-Settled</span>
+        </div>
+
         {/* Animated Badge */}
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/30 text-orange-400 text-xs sm:text-sm font-semibold shadow-inner mb-6 backdrop-blur-md">
+        <div className="gsap-hero-badge inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/30 text-orange-400 text-xs sm:text-sm font-semibold shadow-inner mb-6 backdrop-blur-md">
           <Sparkles className="w-4 h-4 text-amber-400 animate-spin" style={{ animationDuration: '4s' }} />
           <span>Next-Generation Restaurant Operating System 2026</span>
           <span className="hidden sm:inline-block w-1.5 h-1.5 rounded-full bg-orange-400" />
           <span className="hidden sm:inline-block text-slate-400 font-normal">Cloud & AI Powered</span>
         </div>
 
-        {/* Main Headline (Reduced Font Size: text-2xl sm:text-4xl lg:text-5xl) */}
-        <h1 className="text-2xl sm:text-4xl lg:text-5xl font-bold tracking-tight max-w-4xl mx-auto leading-tight text-white">
+        {/* Main Headline */}
+        <h1 className="gsap-hero-title text-2xl sm:text-4xl lg:text-5xl font-bold tracking-tight max-w-4xl mx-auto leading-tight text-white">
           Run Your Restaurant With{' '}
           <span className="bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 bg-clip-text text-transparent">
             Unstoppable Speed
@@ -219,44 +372,44 @@ export default function HomePage() {
         </h1>
 
         {/* Subtitle */}
-        <p className="mt-5 text-sm sm:text-lg text-slate-300 max-w-2xl mx-auto leading-relaxed font-normal">
+        <p className="gsap-hero-subtitle mt-5 text-sm sm:text-lg text-slate-300 max-w-2xl mx-auto leading-relaxed font-normal">
           From lightning-fast POS billing and live kitchen displays to interactive table reservations,
           smart inventory, and contactless Razorpay UPI checkout — everything you need to scale your food business.
         </p>
 
         {/* Hero CTAs */}
         <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4 max-w-lg mx-auto">
-          {/* Primary Staff Sign In Button */}
-          <Link
-            href="/login"
-            className="w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:from-orange-600 hover:to-rose-600 text-white font-bold text-sm shadow-xl shadow-orange-500/25 hover:shadow-orange-500/40 hover:-translate-y-0.5 active:translate-y-0 transition-all flex items-center justify-center gap-2 group"
+          {/* Primary Capabilities Explorer Button */}
+          <a
+            href="#capabilities"
+            className="gsap-hero-btn w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:from-orange-600 hover:to-rose-600 text-white font-bold text-sm shadow-xl shadow-orange-500/25 hover:shadow-orange-500/40 hover:-translate-y-0.5 active:translate-y-0 transition-all flex items-center justify-center gap-2 group cursor-pointer"
           >
-            <ShieldCheck className="w-4 h-4 text-amber-200" />
-            <span>Staff Sign In</span>
+            <Sparkles className="w-4 h-4 text-amber-200" />
+            <span>Explore Capabilities</span>
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-          </Link>
+          </a>
 
-          {/* Customer Portal Sign In */}
-          <Link
-            href="/customer/auth"
-            className="w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 hover:text-white font-semibold text-sm border border-slate-700/80 hover:border-slate-600 transition-all flex items-center justify-center gap-2 shadow-lg"
-          >
-            <UserCheck className="w-4 h-4 text-rose-400" />
-            <span>Customer Sign In</span>
-          </Link>
-
-          {/* Direct Dashboard Link */}
+          {/* Interactive Live Demo */}
           <Link
             href="/dashboard"
-            className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-slate-950/80 hover:bg-slate-900 text-orange-400 hover:text-orange-300 font-semibold text-sm border border-orange-500/30 hover:border-orange-500/60 transition-all flex items-center justify-center gap-1.5"
+            className="gsap-hero-btn w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 hover:text-white font-semibold text-sm border border-slate-700/80 hover:border-slate-600 transition-all flex items-center justify-center gap-2 shadow-lg"
           >
-            <LayoutDashboard className="w-4 h-4" />
-            <span>Dashboard</span>
+            <LayoutDashboard className="w-4 h-4 text-orange-400" />
+            <span>View Live Demo</span>
           </Link>
+
+          {/* Pricing Jump */}
+          <a
+            href="#pricing"
+            className="gsap-hero-btn w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-slate-950/80 hover:bg-slate-900 text-orange-400 hover:text-orange-300 font-semibold text-sm border border-orange-500/30 hover:border-orange-500/60 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <Percent className="w-4 h-4" />
+            <span>Pricing Plans</span>
+          </a>
         </div>
 
         {/* Trust Badges Bar */}
-        <div className="mt-10 pt-6 border-t border-slate-800/80 flex flex-wrap items-center justify-center gap-5 sm:gap-10 text-xs text-slate-400">
+        <div className="gsap-hero-trust mt-10 pt-6 border-t border-slate-800/80 flex flex-wrap items-center justify-center gap-5 sm:gap-10 text-xs text-slate-400">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             <span>Zero Proprietary Hardware</span>
@@ -276,211 +429,139 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ────────────────── DEDICATED SIGN IN ACCESS HUB ────────────────── */}
-      <section id="portals" className="relative z-10 py-16 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto">
-        <div className="text-center mb-10">
+      {/* ────────────────── PRODUCT CAPABILITIES & ARCHITECTURE SHOWCASE ────────────────── */}
+      <section id="capabilities" className="relative z-10 py-16 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto">
+        <div className="text-center mb-12">
           <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs font-semibold text-orange-400 mb-3">
-            <LogIn className="w-3.5 h-3.5" />
-            <span>Quick Access</span>
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Purpose-Built Hospitality Ecosystem</span>
           </div>
           <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight">
-            Choose Your <span className="text-orange-400">Sign In Portal</span>
+            Engineered for <span className="text-orange-400">High-Velocity Operations</span>
           </h2>
           <p className="mt-2 text-slate-400 text-sm sm:text-base max-w-xl mx-auto">
-            Separate, purpose-built workspaces designed specifically for operational staff and valued diners.
+            RestoSphere connects your front of house, kitchen line, and business analytics into one synchronized engine.
           </p>
         </div>
 
+        {/* 2 Big Feature Highlights */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
-          {/* Staff & Admin Card */}
-          <div className="group relative rounded-3xl p-8 bg-gradient-to-b from-slate-900/90 via-slate-900/60 to-slate-950 border border-orange-500/30 hover:border-orange-500/70 transition-all duration-300 shadow-xl shadow-orange-500/5 hover:shadow-orange-500/15 flex flex-col justify-between overflow-hidden">
-            <div className="absolute top-0 right-0 w-36 h-36 bg-orange-500/10 rounded-full blur-3xl pointer-events-none group-hover:bg-orange-500/20 transition-all" />
-
+          {/* Front of House Card */}
+          <div className="gsap-cap-card relative rounded-3xl p-8 bg-gradient-to-b from-slate-900/90 via-slate-900/60 to-slate-950 border border-orange-500/30 hover:border-orange-500/60 transition-all duration-300 shadow-xl shadow-orange-500/5 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-6">
                 <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-orange-500 to-amber-500 flex items-center justify-center shadow-lg shadow-orange-500/20 text-white">
-                  <ShieldCheck className="w-7 h-7" />
+                  <Receipt className="w-7 h-7" />
                 </div>
                 <span className="px-3 py-1 rounded-full text-xs font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-300">
-                  Staff & Management
+                  Front of House
                 </span>
               </div>
 
-              <h3 className="text-2xl font-bold text-white mb-2">Restaurant Staff Portal</h3>
+              <h3 className="text-2xl font-bold text-white mb-2">Lightning Fast Billing & Floor Control</h3>
               <p className="text-slate-300 text-sm leading-relaxed mb-6">
-                Secure access for Owners, Restaurant Managers, Cashiers, Waiters, and Head Chefs. Manage orders,
-                inventory, billing, live kitchen, and staff rosters.
+                Equip your cashiers and waitstaff with an intuitive interface. Split bills by item or cover, manage table turnovers, and accept dynamic UPI QR payments with instant settlements.
               </p>
 
               <div className="space-y-2.5 text-xs text-slate-400 mb-8">
                 <div className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Ultra-fast POS Terminal & Split Billing</span>
+                  <span>Sub-second 0.8s order punching & thermal receipt printing</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Live Kitchen Order Tickets (KDS Dispatch)</span>
+                  <span>Interactive visual floor map with live vacant/seated statuses</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Floor Plan, Table Occupancy & Server Assignment</span>
+                  <span>Razorpay UPI QR codes directly printed on diner bill slips</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Stock Alerts, Recipe Costs & Daily EOD Reports</span>
+                  <span>Multi-counter split payments, cash drawers, and discount controls</span>
                 </div>
               </div>
             </div>
 
             <Link
-              href="/login"
-              className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 hover:from-orange-600 hover:to-amber-600 text-white font-bold text-sm shadow-lg shadow-orange-500/25 flex items-center justify-center gap-2 transition-all group-hover:scale-[1.01]"
+              href="/pos"
+              className="w-full py-3.5 px-6 rounded-2xl bg-slate-900 hover:bg-slate-850 text-orange-400 hover:text-white font-bold text-sm border border-orange-500/40 hover:border-orange-500 flex items-center justify-center gap-2 transition-all"
             >
-              <span>Sign In to Staff Portal</span>
+              <span>Explore POS Terminal Experience</span>
               <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
 
-          {/* Customer & Guest Card */}
-          <div className="group relative rounded-3xl p-8 bg-gradient-to-b from-slate-900/90 via-slate-900/60 to-slate-950 border border-rose-500/30 hover:border-rose-500/70 transition-all duration-300 shadow-xl shadow-rose-500/5 hover:shadow-rose-500/15 flex flex-col justify-between overflow-hidden">
-            <div className="absolute top-0 right-0 w-36 h-36 bg-rose-500/10 rounded-full blur-3xl pointer-events-none group-hover:bg-rose-500/20 transition-all" />
-
+          {/* Kitchen & Back of House Card */}
+          <div className="gsap-cap-card relative rounded-3xl p-8 bg-gradient-to-b from-slate-900/90 via-slate-900/60 to-slate-950 border border-rose-500/30 hover:border-rose-500/60 transition-all duration-300 shadow-xl shadow-rose-500/5 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-6">
                 <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-rose-500 to-pink-500 flex items-center justify-center shadow-lg shadow-rose-500/20 text-white">
-                  <UserCheck className="w-7 h-7" />
+                  <ChefHat className="w-7 h-7" />
                 </div>
                 <span className="px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/15 border border-rose-500/30 text-rose-300">
-                  Diners & Guests
+                  Kitchen & Operations
                 </span>
               </div>
 
-              <h3 className="text-2xl font-bold text-white mb-2">Customer & Guest Portal</h3>
+              <h3 className="text-2xl font-bold text-white mb-2">Live Kitchen KDS & Smart Inventory</h3>
               <p className="text-slate-300 text-sm leading-relaxed mb-6">
-                Personalized dining lounge for guests. Reserve tables in advance, view digital photo menus, order from
-                phone, track live prep, and earn loyalty perks.
+                Replace chaotic paper kitchen slips with real-time digital ticket dispatch. Track prep times, send acoustic alerts, and automatically deduct raw ingredients with every dish served.
               </p>
 
               <div className="space-y-2.5 text-xs text-slate-400 mb-8">
                 <div className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Instant Table Reservations & Pre-orders</span>
+                  <span>Live Kitchen Display System (KDS) with color-coded countdowns</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Live Order Tracking from Kitchen to Table</span>
+                  <span>Automated recipe-level raw stock deductions per order</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Loyalty Coins & Exclusive Food Discounts</span>
+                  <span>Smart low-stock alerts before ingredients hit critical levels</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Digital Receipts & WhatsApp Order History</span>
+                  <span>Consolidated daily revenue, food cost margins, and audit logs</span>
                 </div>
               </div>
             </div>
 
             <Link
-              href="/customer/auth"
-              className="w-full py-3.5 px-6 rounded-2xl bg-slate-900 hover:bg-slate-800 text-rose-300 hover:text-white font-bold text-sm border border-rose-500/40 hover:border-rose-500/80 shadow-lg flex items-center justify-center gap-2 transition-all group-hover:scale-[1.01]"
+              href="/kitchen"
+              className="w-full py-3.5 px-6 rounded-2xl bg-slate-900 hover:bg-slate-850 text-rose-300 hover:text-white font-bold text-sm border border-rose-500/40 hover:border-rose-500 flex items-center justify-center gap-2 transition-all"
             >
-              <span>Sign In as Customer</span>
+              <span>Explore Kitchen KDS Workflow</span>
               <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
         </div>
-      </section>
 
-      {/* ────────────────── 6 CORE PILLARS / FEATURES ────────────────── */}
-      <section id="features" className="relative z-10 py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
-        <div className="text-center mb-16">
-          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs font-semibold text-orange-400 mb-3">
-            <Layers className="w-3.5 h-3.5" />
-            <span>Enterprise Hospitality Engine</span>
+        {/* 4 Impact Numbers */}
+        <div className="gsap-stats-row mt-12 grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
+          <div className="gsap-stat-box p-5 rounded-2xl bg-slate-900/60 border border-slate-800 text-center hover:border-orange-500/40 transition-colors">
+            <div className="text-2xl sm:text-3xl font-extrabold text-orange-400">0.8s</div>
+            <div className="text-xs text-slate-400 mt-1">POS Billing Speed</div>
           </div>
-          <h2 className="text-3xl sm:text-5xl font-extrabold tracking-tight">
-            Every Operation Connected.{' '}
-            <span className="bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 bg-clip-text text-transparent">
-              Zero Friction.
-            </span>
-          </h2>
-          <p className="mt-4 text-slate-400 text-sm sm:text-base max-w-2xl mx-auto">
-            From single-counter cafes to high-volume multi-floor dining lounges, RestoSphere elevates every step of your workflow.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {/* 1. POS */}
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800/80 hover:border-orange-500/50 transition-all duration-300 hover:-translate-y-1 group">
-            <div className="w-12 h-12 rounded-2xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400 mb-6 group-hover:scale-110 transition-transform">
-              <Receipt className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">Lightning Cloud POS</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">
-              Designed for extreme speed. Split bills by items or seats, customize ingredients, apply promo codes, and print KOTs in under 1 second.
-            </p>
+          <div className="gsap-stat-box p-5 rounded-2xl bg-slate-900/60 border border-slate-800 text-center hover:border-amber-500/40 transition-colors">
+            <div className="text-2xl sm:text-3xl font-extrabold text-amber-400">&lt; 15 min</div>
+            <div className="text-xs text-slate-400 mt-1">Setup & Onboarding</div>
           </div>
-
-          {/* 2. KDS */}
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800/80 hover:border-amber-500/50 transition-all duration-300 hover:-translate-y-1 group">
-            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-6 group-hover:scale-110 transition-transform">
-              <ChefHat className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">Live Kitchen Display (KDS)</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">
-              Eliminate lost paper tickets. Real-time digital dispatch with cook-time countdowns, prep urgency colors, and kitchen bump bar support.
-            </p>
+          <div className="gsap-stat-box p-5 rounded-2xl bg-slate-900/60 border border-slate-800 text-center hover:border-emerald-500/40 transition-colors">
+            <div className="text-2xl sm:text-3xl font-extrabold text-emerald-400">-22%</div>
+            <div className="text-xs text-slate-400 mt-1">Food Waste Reduction</div>
           </div>
-
-          {/* 3. Table Floor Plan */}
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800/80 hover:border-rose-500/50 transition-all duration-300 hover:-translate-y-1 group">
-            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 mb-6 group-hover:scale-110 transition-transform">
-              <Store className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">Visual Floor & Table Map</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">
-              Drag-and-drop table layouts matching your real dining room. Instantly see vacant, seated, billing, and reserved statuses at a glance.
-            </p>
-          </div>
-
-          {/* 4. Inventory & Recipes */}
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800/80 hover:border-emerald-500/50 transition-all duration-300 hover:-translate-y-1 group">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-6 group-hover:scale-110 transition-transform">
-              <Layers className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">Smart Recipe & Inventory</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">
-              Automatic raw ingredient deductions on every order. Real-time low-stock alerts prevent 86'd menu items during prime dinner rushes.
-            </p>
-          </div>
-
-          {/* 5. Razorpay & Payments */}
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800/80 hover:border-indigo-500/50 transition-all duration-300 hover:-translate-y-1 group">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mb-6 group-hover:scale-110 transition-transform">
-              <CreditCard className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">Razorpay & UPI Payments</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">
-              Direct UPI QR integration on bill prints and customer phones. Support credit cards, tap-to-pay, cash, and digital split payments.
-            </p>
-          </div>
-
-          {/* 6. Customer CRM & Loyalty */}
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800/80 hover:border-pink-500/50 transition-all duration-300 hover:-translate-y-1 group">
-            <div className="w-12 h-12 rounded-2xl bg-pink-500/10 border border-pink-500/30 flex items-center justify-center text-pink-400 mb-6 group-hover:scale-110 transition-transform">
-              <HeartHandshake className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">Customer CRM & Loyalty</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">
-              Reward your regulars automatically. Track diner preferences, allergy notes, birthdays, and send instant WhatsApp bills and discount coupons.
-            </p>
+          <div className="gsap-stat-box p-5 rounded-2xl bg-slate-900/60 border border-slate-800 text-center hover:border-rose-500/40 transition-colors">
+            <div className="text-2xl sm:text-3xl font-extrabold text-rose-400">+35%</div>
+            <div className="text-xs text-slate-400 mt-1">Faster Table Turns</div>
           </div>
         </div>
       </section>
 
       {/* ────────────────── PRICING PLANS ────────────────── */}
-      <section id="pricing" className="relative z-10 py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+      <section id="pricing" className="relative z-10 py-12 md:py-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs font-semibold text-orange-400 mb-3">
             <Percent className="w-3.5 h-3.5" />
@@ -496,7 +577,7 @@ export default function HomePage() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto">
           {/* Starter Plan */}
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800 flex flex-col justify-between">
+          <div className="p-8 rounded-3xl bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border-2 border-orange-500 shadow-xl shadow-orange-500/10 flex flex-col justify-between">
             <div>
               <h3 className="text-xl font-bold text-white mb-2">Starter Cafe</h3>
               <p className="text-xs text-slate-400 mb-6">Perfect for small bistros, food trucks, and single-counter coffee shops.</p>
@@ -520,10 +601,10 @@ export default function HomePage() {
               </ul>
             </div>
             <Link
-              href="/login"
-              className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs text-center transition-all"
+              href="/dashboard"
+              className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs text-center transition-all block"
             >
-              Start Free Trial
+              Explore Starter Demo
             </Link>
           </div>
 
@@ -558,15 +639,15 @@ export default function HomePage() {
               </ul>
             </div>
             <Link
-              href="/login"
-              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:opacity-95 text-white font-bold text-xs text-center shadow-lg shadow-orange-500/25 transition-all"
+              href="/dashboard"
+              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:opacity-95 text-white font-bold text-xs text-center shadow-lg shadow-orange-500/25 transition-all block"
             >
-              Get Started with Pro
+              Get Started with Pro Demo
             </Link>
           </div>
 
           {/* Enterprise Plan */}
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800 flex flex-col justify-between">
+          <div className="p-8 rounded-3xl bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border-2 border-orange-500 shadow-xl shadow-orange-500/10 flex flex-col justify-between">
             <div>
               <h3 className="text-xl font-bold text-white mb-2">Franchise & Chain</h3>
               <p className="text-xs text-slate-400 mb-6">Centralized control for multi-branch dining brands and franchises.</p>
@@ -589,18 +670,18 @@ export default function HomePage() {
                 </li>
               </ul>
             </div>
-            <Link
-              href="/login"
-              className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs text-center transition-all"
+            <a
+              href="#faq"
+              className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs text-center transition-all block"
             >
               Contact Enterprise Sales
-            </Link>
+            </a>
           </div>
         </div>
       </section>
 
       {/* ────────────────── TESTIMONIALS ────────────────── */}
-      <section className="relative z-10 py-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+      <section id="testimonials" className="relative z-10 py-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
         <div className="text-center mb-12">
           <h2 className="text-3xl font-extrabold tracking-tight">
             Trusted by 500+ Top Restaurateurs
@@ -707,7 +788,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ────────────────── FINAL VIBRANT CTA BANNER ────────────────── */}
+      {/* ────────────────── FINAL MARKETING CTA BANNER ────────────────── */}
       <section className="relative z-10 py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
         <div className="relative rounded-3xl p-8 sm:p-14 overflow-hidden bg-gradient-to-r from-orange-600 via-amber-600 to-rose-600 shadow-2xl shadow-orange-500/20 text-center">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.2),transparent_60%)] pointer-events-none" />
@@ -717,34 +798,38 @@ export default function HomePage() {
               Ready to Modernize Your Restaurant Experience?
             </h2>
             <p className="mt-4 text-orange-100 text-sm sm:text-lg max-w-xl mx-auto">
-              Get started right now. Sign in to your staff portal or access the customer dining lounge with one click.
+              Experience the modern cloud POS and live kitchen operating system. Explore the interactive demo or choose a plan to get started.
             </p>
 
             <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
-                href="/login"
+                href="/dashboard"
                 className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-white text-slate-950 hover:bg-orange-50 font-bold text-sm shadow-xl hover:scale-105 active:scale-100 transition-all flex items-center justify-center gap-2"
               >
-                <ShieldCheck className="w-4 h-4 text-orange-600" />
-                <span>Staff & Admin Sign In</span>
+                <LayoutDashboard className="w-4 h-4 text-orange-600" />
+                <span>Launch Interactive Demo</span>
                 <ArrowRight className="w-4 h-4" />
               </Link>
 
-              <Link
-                href="/customer/auth"
+              <a
+                href="#pricing"
                 className="w-full sm:w-auto px-7 py-4 rounded-2xl bg-slate-950/40 hover:bg-slate-950/60 text-white font-bold text-sm border border-white/20 hover:border-white/40 transition-all flex items-center justify-center gap-2"
               >
-                <UserCheck className="w-4 h-4 text-amber-200" />
-                <span>Customer Sign In</span>
-              </Link>
+                <Percent className="w-4 h-4 text-amber-200" />
+                <span>View Pricing Plans</span>
+              </a>
             </div>
+
+            <p className="mt-4 text-orange-200/80 text-xs">
+              Looking for portal access? Open the top-right <span className="font-semibold text-white">Menu & Login</span> button anytime.
+            </p>
           </div>
         </div>
       </section>
 
       {/* ────────────────── FOOTER ────────────────── */}
-      <footer className="relative z-10 border-t border-slate-800/80 bg-slate-950 py-12 px-4 sm:px-6 lg:px-8 text-xs text-slate-400">
-        <div className="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-5 gap-8 mb-12">
+      <footer className="relative z-10 border-t border-slate-800/80 bg-slate-950 py-8 px-4 sm:px-6 lg:px-8 text-xs text-slate-400">
+        <div className="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-5 gap-8 mb-8">
           {/* Col 1 */}
           <div className="col-span-2">
             <div className="flex items-center gap-2.5 mb-3">
@@ -815,17 +900,23 @@ export default function HomePage() {
 
           {/* Col 4 */}
           <div>
-            <h4 className="font-bold text-slate-200 mb-3 uppercase tracking-wider text-[11px]">Sign In Portals</h4>
+            <h4 className="font-bold text-slate-200 mb-3 uppercase tracking-wider text-[11px]">Portals & Access</h4>
             <ul className="space-y-2">
               <li>
-                <Link href="/login" className="text-orange-400 hover:text-orange-300 font-semibold transition-colors flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5" /> Staff Sign In
-                </Link>
+                <button
+                  onClick={() => setMobileMenuOpen(true)}
+                  className="text-orange-400 hover:text-orange-300 font-semibold transition-colors flex items-center gap-1 text-left"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" /> Staff Sign In (Menu)
+                </button>
               </li>
               <li>
-                <Link href="/customer/auth" className="text-rose-400 hover:text-rose-300 font-semibold transition-colors flex items-center gap-1">
-                  <UserCheck className="w-3.5 h-3.5" /> Customer Sign In
-                </Link>
+                <button
+                  onClick={() => setMobileMenuOpen(true)}
+                  className="text-rose-400 hover:text-rose-300 font-semibold transition-colors flex items-center gap-1 text-left"
+                >
+                  <UserCheck className="w-3.5 h-3.5" /> Customer Sign In (Menu)
+                </button>
               </li>
               <li>
                 <Link href="/customer/register" className="hover:text-white transition-colors">

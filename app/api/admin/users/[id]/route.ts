@@ -87,19 +87,41 @@ export async function DELETE(
       return NextResponse.json({ success: false, message: 'User not found' }, { status: 404 })
     }
 
-    // Soft delete by marking inactive or deletedAt
-    await prisma.user.update({
-      where: { id },
-      data: {
-        status: 'inactive',
-        deletedAt: new Date(),
-      },
-    })
+    const targetRole = String(user.role).toUpperCase()
+    if (
+      !auth.isSuperAdmin &&
+      (targetRole === 'SUPER_ADMIN' || targetRole === 'SUPERADMIN' || targetRole === 'ADMIN')
+    ) {
+      return NextResponse.json(
+        { success: false, message: 'Permission Denied: Only Super Admin can delete Admin accounts.' },
+        { status: 403 }
+      )
+    }
 
-    return NextResponse.json({
-      success: true,
-      message: `User ${user.name || user.email} has been deactivated.`,
-    })
+    // Try permanent hard delete first (e.g. if newly created or no cascade-blocking foreign keys)
+    try {
+      await prisma.user.delete({
+        where: { id },
+      })
+      return NextResponse.json({
+        success: true,
+        message: `User ${user.name || user.email} has been deleted successfully.`,
+      })
+    } catch (dbErr: any) {
+      console.warn('Permanent delete blocked by linked foreign records; performing soft delete:', dbErr.message)
+      // Soft delete by marking inactive and recording deletedAt
+      await prisma.user.update({
+        where: { id },
+        data: {
+          status: 'inactive',
+          deletedAt: new Date(),
+        },
+      })
+      return NextResponse.json({
+        success: true,
+        message: `User ${user.name || user.email} has been deactivated and removed.`,
+      })
+    }
   } catch (error: any) {
     console.error('DELETE /api/admin/users/[id] error:', error)
     return NextResponse.json(

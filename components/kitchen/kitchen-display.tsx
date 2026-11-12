@@ -17,7 +17,18 @@ import {
   ArrowRight,
   Check,
   UtensilsCrossed,
+  Lock,
+  Unlock,
+  Sparkles,
+  Timer,
+  AlertOctagon,
+  Bell,
+  MessageSquare,
+  Phone,
+  Send,
+  X,
 } from 'lucide-react'
+import { getItemCuisine } from '@/lib/kds-utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -41,13 +52,16 @@ export interface KitchenTicketItem {
   quantity: number
   notes?: string
   station?: string
+  cuisine?: string
   completed?: boolean
 }
 
 export interface KitchenTicket {
   id: string
   fullId?: string
+  orderNumber?: string
   tableNumber: number | string
+  tableName?: string
   source?: 'dine_in' | 'takeaway' | 'qr_order' | 'delivery'
   waiter?: string
   customerName?: string
@@ -55,7 +69,18 @@ export interface KitchenTicket {
   priority: PriorityLevel
   createdAt: string
   specialNotes?: string
+  cuisines?: string[]
   items: KitchenTicketItem[]
+}
+
+export interface CuisineBatch {
+  cuisine: string
+  startedAt: number
+  expiresAt: number
+  remainingSeconds: number
+  isLocked: boolean
+  leadTicketId: string
+  ticketIds: string[]
 }
 
 export interface BatchItem {
@@ -125,6 +150,36 @@ const nextTransitionLabels: Record<'pending' | 'accepted' | 'cooking' | 'ready',
   ready: 'Mark Served',
 }
 
+// Kitchen lock notification sound (Web Audio API)
+function playLockChime() {
+  if (typeof window === 'undefined') return
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+    if (!AudioContextClass) return
+    const ctx = new AudioContextClass()
+
+    const now = ctx.currentTime
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+
+    osc.type = 'sawtooth'
+    osc.frequency.setValueAtTime(440, now) // A4
+    osc.frequency.setValueAtTime(330, now + 0.15) // E4
+    osc.frequency.setValueAtTime(220, now + 0.3) // A3
+
+    gain.gain.setValueAtTime(0.2, now)
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5)
+
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+
+    osc.start(now)
+    osc.stop(now + 0.5)
+  } catch (e) {
+    // Audio context may be restricted by autoplay policy
+  }
+}
+
 // Kitchen sound synthesizer (Web Audio API)
 function playKitchenChime() {
   if (typeof window === 'undefined') return
@@ -156,6 +211,37 @@ function playKitchenChime() {
     osc2.start(now + 0.15)
     osc1.stop(now + 0.6)
     osc2.stop(now + 0.6)
+  } catch (e) {
+    // Audio context may be restricted by autoplay policy
+  }
+}
+
+// Order Prepared notification chime (Pleasant ascending chime C5 -> E5 -> G5 -> C6)
+function playOrderPreparedChime() {
+  if (typeof window === 'undefined') return
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+    if (!AudioContextClass) return
+    const ctx = new AudioContextClass()
+
+    const now = ctx.currentTime
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(523.25, now) // C5
+    osc.frequency.setValueAtTime(659.25, now + 0.12) // E5
+    osc.frequency.setValueAtTime(783.99, now + 0.24) // G5
+    osc.frequency.setValueAtTime(1046.5, now + 0.36) // C6
+
+    gain.gain.setValueAtTime(0.22, now)
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7)
+
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+
+    osc.start(now)
+    osc.stop(now + 0.7)
   } catch (e) {
     // Audio context may be restricted by autoplay policy
   }
@@ -210,14 +296,38 @@ function KitchenOrderCard({
   onAdvance,
   onToggleItem,
   onReprioritize,
+  cuisineBatches,
+  onQuickAddBatch,
 }: {
   ticket: KitchenTicket
   onAdvance: (id: string, nextStatus: KanbanStatus) => void
   onToggleItem: (ticketId: string, itemId: string) => void
   onReprioritize: (ticketId: string, priority: PriorityLevel) => void
+  cuisineBatches: Record<string, CuisineBatch>
+  onQuickAddBatch?: (ticketId: string, cuisine: string) => void
 }) {
   const currentStatus = ticket.status as 'pending' | 'accepted' | 'cooking' | 'ready'
   const nextStatus = nextTransitions[currentStatus] || null
+
+  // Compute cuisines for this ticket
+  const ticketCuisines = useMemo(() => {
+    if (ticket.cuisines && ticket.cuisines.length > 0) return ticket.cuisines
+    return Array.from(
+      new Set(
+        ticket.items.map((it) => it.cuisine || getItemCuisine(it.name, it.station))
+      )
+    )
+  }, [ticket])
+
+  // Check if any cuisine of this ticket has an active batch in the 20s window or is locked
+  const matchingBatch = useMemo(() => {
+    for (const c of ticketCuisines) {
+      if (cuisineBatches[c]) {
+        return cuisineBatches[c]
+      }
+    }
+    return null
+  }, [ticketCuisines, cuisineBatches])
 
   const priorityStyles: Record<PriorityLevel, { ring: string; badge: string; dot: string; label: string }> = {
     normal: {
@@ -275,6 +385,20 @@ function KitchenOrderCard({
             <span className="text-muted-foreground/40">·</span>
             <span className="truncate">{ticket.customerName || ticket.waiter || 'Staff'}</span>
           </div>
+
+          {/* Cuisines Tag List */}
+          {ticketCuisines.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap mt-0.5">
+              {ticketCuisines.map((c) => (
+                <span
+                  key={c}
+                  className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20"
+                >
+                  {c}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Timer & Priority Dropdown */}
@@ -296,9 +420,23 @@ function KitchenOrderCard({
                 </button>
               }
             />
-            <DropdownMenuContent align="end" className="w-36">
-              <DropdownMenuLabel className="text-xs">Set Priority</DropdownMenuLabel>
+            <DropdownMenuContent align="end" className="w-40">
+              <DropdownMenuLabel className="text-xs">Quick Advance</DropdownMenuLabel>
+              {currentStatus !== 'cooking' && (
+                <DropdownMenuItem onClick={() => onAdvance(ticket.id, 'cooking')} className="text-xs text-chart-4 font-semibold">
+                  Start Cooking
+                </DropdownMenuItem>
+              )}
+              {currentStatus !== 'ready' && (
+                <DropdownMenuItem onClick={() => onAdvance(ticket.id, 'ready')} className="text-xs text-success font-semibold">
+                  Mark Ready
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={() => onAdvance(ticket.id, 'served')} className="text-xs">
+                Mark Served
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-xs">Set Priority</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => onReprioritize(ticket.id, 'normal')} className="text-xs">
                 Normal Priority
               </DropdownMenuItem>
@@ -312,6 +450,62 @@ function KitchenOrderCard({
           </DropdownMenu>
         </div>
       </div>
+
+      {/* 20-Second Batch Cooking Indicator for Queued Orders */}
+      {(currentStatus === 'pending' || currentStatus === 'accepted') && matchingBatch && (
+        <div
+          className={cn(
+            'p-2.5 rounded-xl border text-xs flex flex-col gap-1.5 transition-all',
+            !matchingBatch.isLocked
+              ? 'bg-amber-500/10 border-amber-500/40 text-amber-500'
+              : 'bg-destructive/10 border-destructive/30 text-destructive'
+          )}
+        >
+          <div className="flex items-center justify-between font-bold">
+            <span className="flex items-center gap-1.5">
+              {!matchingBatch.isLocked ? (
+                <>
+                  <Timer className="size-3.5 animate-spin" style={{ animationDuration: '3s' }} />
+                  <span>Same Cuisine: {matchingBatch.cuisine}</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="size-3.5" />
+                  <span>{matchingBatch.cuisine} Locked</span>
+                </>
+              )}
+            </span>
+            <Badge
+              variant="outline"
+              className={cn(
+                'text-[10px] px-1.5 py-0 font-bold',
+                !matchingBatch.isLocked ? 'border-amber-500 text-amber-500' : 'border-destructive text-destructive'
+              )}
+            >
+              {!matchingBatch.isLocked ? `${matchingBatch.remainingSeconds}s window` : '20s Expired'}
+            </Badge>
+          </div>
+
+          {!matchingBatch.isLocked ? (
+            <div className="flex items-center justify-between gap-2 mt-0.5">
+              <span className="text-[11px] text-muted-foreground">
+                Batch cooking window active! Add now with same cuisine.
+              </span>
+              <Button
+                size="sm"
+                className="h-7 text-xs bg-amber-500 hover:bg-amber-600 text-black font-extrabold shadow-sm shrink-0 px-2.5"
+                onClick={() => onQuickAddBatch && onQuickAddBatch(ticket.id, matchingBatch.cuisine)}
+              >
+                + Add ({matchingBatch.remainingSeconds}s)
+              </Button>
+            </div>
+          ) : (
+            <p className="text-[11px] text-destructive/90 leading-tight">
+              20s selection timer expired. Chef cannot add this to active {matchingBatch.cuisine} batch.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Items list with individual check-off per PRD */}
       <div className="flex flex-col gap-2 my-1">
@@ -376,15 +570,15 @@ function KitchenOrderCard({
       )}
 
       {/* Action Advance Button */}
-      <div className="mt-1 flex items-center gap-2">
+      <div className="mt-2 pt-2 border-t border-border/40 flex items-center gap-2 shrink-0">
         {nextStatus ? (
           <Button
             size="sm"
             className={cn(
-              'flex-1 h-10 text-sm font-bold tracking-wide transition-all shadow-sm active:scale-[0.98]',
+              'flex-1 h-10 text-sm font-bold tracking-wide transition-all shadow-sm active:scale-[0.98] cursor-pointer',
               currentStatus === 'pending' && 'bg-primary hover:bg-primary/90 text-primary-foreground',
               currentStatus === 'accepted' && 'bg-chart-4 hover:bg-chart-4/90 text-white',
-              currentStatus === 'cooking' && 'bg-success hover:bg-success/90 text-success-foreground'
+              currentStatus === 'cooking' && 'bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold shadow-md'
             )}
             onClick={() => onAdvance(ticket.id, nextStatus)}
           >
@@ -395,7 +589,7 @@ function KitchenOrderCard({
           <Button
             size="sm"
             variant="outline"
-            className="flex-1 h-10 text-sm font-bold border-success/50 text-success hover:bg-success/15 active:scale-[0.98]"
+            className="flex-1 h-10 text-sm font-bold border-success/50 text-success hover:bg-success/15 active:scale-[0.98] cursor-pointer"
             onClick={() => onAdvance(ticket.id, 'served')}
           >
             <CheckCircle2 className="size-4 mr-1.5" />
@@ -452,6 +646,62 @@ export function KitchenDisplay() {
     }
   }, [activeStation, soundEnabled])
 
+  // Active 20-second cuisine batch timers state
+  const [cuisineBatches, setCuisineBatches] = useState<Record<string, CuisineBatch>>({})
+  const [batchLockAlert, setBatchLockAlert] = useState<{
+    open: boolean
+    cuisine: string
+    message: string
+  } | null>(null)
+
+  // Order Prepared Notification State (Sound + Toast + WhatsApp/SMS Dispatch)
+  const [orderPreparedAlert, setOrderPreparedAlert] = useState<{
+    open: boolean
+    orderNumber: string
+    tableNumber: string
+    customerName: string
+    itemsSummary: string
+  } | null>(null)
+
+  // 20-Second Ticking Interval for active preparation batches
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCuisineBatches((prev) => {
+        const now = Date.now()
+        let hasChanges = false
+        const nextBatches = { ...prev }
+
+        for (const [cuisine, batch] of Object.entries(nextBatches)) {
+          if (!batch.isLocked) {
+            const diff = Math.max(0, Math.ceil((batch.expiresAt - now) / 1000))
+            if (diff !== batch.remainingSeconds) {
+              hasChanges = true
+              if (diff === 0) {
+                nextBatches[cuisine] = {
+                  ...batch,
+                  remainingSeconds: 0,
+                  isLocked: true,
+                }
+                if (soundEnabled) {
+                  playLockChime()
+                }
+              } else {
+                nextBatches[cuisine] = {
+                  ...batch,
+                  remainingSeconds: diff,
+                }
+              }
+            }
+          }
+        }
+
+        return hasChanges ? nextBatches : prev
+      })
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [soundEnabled])
+
   // Initial load and periodic polling every 5 seconds for real-time dynamic sync
   useEffect(() => {
     fetchTickets(true)
@@ -461,21 +711,157 @@ export function KitchenDisplay() {
     return () => clearInterval(interval)
   }, [fetchTickets])
 
-  // Optimistic status advance with backend persistence
+  // Reset or manual unlock of cuisine batch
+  const handleResetCuisineBatch = (cuisine: string) => {
+    setCuisineBatches((prev) => {
+      const copy = { ...prev }
+      delete copy[cuisine]
+      return copy
+    })
+  }
+
+  // Quick add queued order to existing active batch
+  const handleQuickAddBatch = (ticketId: string, cuisine: string) => {
+    const batch = cuisineBatches[cuisine]
+    if (batch && batch.isLocked) {
+      setBatchLockAlert({
+        open: true,
+        cuisine,
+        message: `The 20-second selection timer for ${cuisine} has expired. Chef cannot add more ${cuisine} orders to this preparation batch.`,
+      })
+      return
+    }
+    handleAdvance(ticketId, 'cooking')
+  }
+
+  // Optimistic status advance with backend persistence & 20s cuisine batch timer logic
   const handleAdvance = async (id: string, nextStatus: KanbanStatus) => {
+    const targetTicket = tickets.find((t) => t.id === id || t.fullId === id)
+    if (!targetTicket) return
+
+    // When advancing into Preparation (Cooking) from Queue:
+    if (nextStatus === 'cooking') {
+      const ticketCuisines = targetTicket.cuisines || Array.from(
+        new Set(targetTicket.items.map((it) => it.cuisine || getItemCuisine(it.name, it.station)))
+      )
+
+      // Initialize or start fresh 20-second batch timer for each cuisine
+      setCuisineBatches((prev) => {
+        const next = { ...prev }
+        const now = Date.now()
+
+        for (const c of ticketCuisines) {
+          const existing = next[c]
+          // If no active batch OR the previous batch was locked/expired, start a fresh 20-second window!
+          if (!existing || existing.isLocked) {
+            next[c] = {
+              cuisine: c,
+              startedAt: now,
+              expiresAt: now + 20_000,
+              remainingSeconds: 20,
+              isLocked: false,
+              leadTicketId: targetTicket.id,
+              ticketIds: [targetTicket.id],
+            }
+          } else if (!existing.isLocked) {
+            if (!existing.ticketIds.includes(targetTicket.id)) {
+              existing.ticketIds.push(targetTicket.id)
+            }
+          }
+        }
+
+        return next
+      })
+    }
+
+    // When tickets are served or ready, clean up completed batches
+    if (nextStatus === 'ready' || nextStatus === 'served') {
+      if (nextStatus === 'ready') {
+        if (soundEnabled) {
+          playOrderPreparedChime()
+        }
+        const targetOrderNumber = targetTicket.orderNumber || targetTicket.fullId || targetTicket.id
+        const tableDisplay =
+          targetTicket.tableName ||
+          (typeof targetTicket.tableNumber === 'number' || !isNaN(Number(targetTicket.tableNumber))
+            ? `Table ${targetTicket.tableNumber}`
+            : targetTicket.tableNumber) ||
+          'Dine-In'
+        const itemsSummary = targetTicket.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')
+
+        setOrderPreparedAlert({
+          open: true,
+          orderNumber: targetOrderNumber,
+          tableNumber: tableDisplay,
+          customerName: targetTicket.customerName || 'Valued Guest',
+          itemsSummary,
+        })
+
+        // Auto-dismiss notification after 7 seconds
+        setTimeout(() => {
+          setOrderPreparedAlert((curr) => (curr?.orderNumber === targetOrderNumber ? null : curr))
+        }, 7000)
+
+        // Automatically dispatch WhatsApp & SMS alerts to Communication Ledger
+        fetch('/api/communication/ledger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'order_prepared',
+            orderNumber: targetOrderNumber,
+            tableNumber: tableDisplay,
+            customerName: targetTicket.customerName || 'Valued Guest',
+          }),
+        }).catch((e) => console.warn('Could not post order prepared alert to ledger:', e))
+
+        // Dispatch live notification to TopNavbar bell
+        fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'order_prepared',
+            orderNumber: targetOrderNumber,
+            tableNumber: tableDisplay,
+            customerName: targetTicket.customerName || 'Valued Guest',
+            itemsSummary,
+          }),
+        }).catch((e) => console.warn('Could not post order prepared alert to notifications:', e))
+      }
+
+      setCuisineBatches((prev) => {
+        const next = { ...prev }
+        for (const [cuisine, batch] of Object.entries(next)) {
+          if (batch.ticketIds.includes(targetTicket.id) || batch.ticketIds.includes(id)) {
+            const activeRemaining = tickets.filter(
+              (t) => (t.id !== id && t.fullId !== id) && batch.ticketIds.includes(t.id) && t.status === 'cooking'
+            )
+            if (activeRemaining.length === 0) {
+              delete next[cuisine]
+            }
+          }
+        }
+        return next
+      })
+    }
+
     // Optimistic UI update
     setTickets((prev) => {
       if (nextStatus === 'served') {
-        return prev.filter((t) => t.id !== id)
+        return prev.filter((t) => t.id !== id && t.fullId !== id)
       }
-      return prev.map((t) => (t.id === id ? { ...t, status: nextStatus } : t))
+      return prev.map((t) => (t.id === id || t.fullId === id ? { ...t, status: nextStatus } : t))
     })
 
     try {
-      await fetch(`/api/kds/tickets/${id}`, {
+      const sendId = targetTicket.fullId || targetTicket.id || id
+      await fetch(`/api/kds/tickets/${encodeURIComponent(sendId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: nextStatus }),
+        body: JSON.stringify({
+          status: nextStatus,
+          fullId: targetTicket.fullId,
+          orderNumber: targetTicket.orderNumber || targetTicket.id,
+        }),
       })
       // Refresh silently
       fetchTickets(false)
@@ -524,7 +910,7 @@ export function KitchenDisplay() {
     }
   }
 
-  // Filtered tickets based on search & active station
+  // Filtered tickets based on search
   const filteredTickets = useMemo(() => {
     return tickets.filter((t) => {
       const matchSearch =
@@ -535,13 +921,9 @@ export function KitchenDisplay() {
         (t.customerName || '').toLowerCase().includes(search.toLowerCase()) ||
         t.items.some((i) => i.name.toLowerCase().includes(search.toLowerCase()))
 
-      const matchStation =
-        activeStation === 'All' ||
-        t.items.some((i) => i.station === activeStation)
-
-      return matchSearch && matchStation
+      return matchSearch
     })
-  }, [tickets, search, activeStation])
+  }, [tickets, search])
 
   return (
     <main className="flex h-[calc(100vh-56px)] flex-col gap-0 overflow-hidden bg-background">
@@ -654,27 +1036,6 @@ export function KitchenDisplay() {
         </div>
       </div>
 
-      {/* ── Kitchen Station Filter Bar (PRD Section 7) ──────────── */}
-      <div className="flex items-center gap-2 border-b border-border bg-card/30 px-6 py-2 overflow-x-auto no-scrollbar shrink-0">
-        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap mr-1">
-          Station:
-        </span>
-        {stations.map((st) => (
-          <button
-            key={st}
-            onClick={() => setActiveStation(st)}
-            className={cn(
-              'px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all border',
-              activeStation === st
-                ? 'bg-primary text-primary-foreground border-primary shadow-xs'
-                : 'bg-muted/40 text-muted-foreground border-border/60 hover:bg-muted hover:text-foreground'
-            )}
-          >
-            {st}
-          </button>
-        ))}
-      </div>
-
       {/* ── Main Content Area ──────────────────────────────────── */}
       {tickets.length === 0 && !loading && (
         <div className="flex items-center justify-between px-6 py-2 bg-muted/20 border-b border-border text-xs shrink-0">
@@ -689,12 +1050,18 @@ export function KitchenDisplay() {
       )}
 
       {viewMode === 'kanban' ? (
-        /* Kanban Columns */
-        <div className="flex flex-1 gap-0 overflow-hidden divide-x divide-border">
+        /* Kanban Columns with full horizontal and vertical responsiveness */
+        <div className="flex flex-1 gap-0 overflow-x-auto overflow-y-hidden divide-x divide-border min-h-0 w-full">
           {columns.map((col) => {
             const colTickets = filteredTickets.filter((t) => t.status === col.id)
             return (
-              <div key={col.id} className={cn('flex flex-1 flex-col min-w-0', col.bg.split(' ')[1])}>
+              <div
+                key={col.id}
+                className={cn(
+                  'flex flex-1 flex-col min-w-[280px] sm:min-w-[320px] max-w-[420px] h-full min-h-0',
+                  col.bg.split(' ')[1]
+                )}
+              >
                 {/* Column Header */}
                 <div
                   className={cn(
@@ -715,9 +1082,71 @@ export function KitchenDisplay() {
                   </Badge>
                 </div>
 
-                {/* Column Cards Container */}
-                <ScrollArea className="flex-1">
+                {/* Column Cards Container - Native Smooth Scroll */}
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0">
                   <div className="flex flex-col gap-3 p-4">
+                    {/* Active 20-Second Cuisine Batch Countdown Card in Cooking Column */}
+                    {col.id === 'cooking' && Object.keys(cuisineBatches).length > 0 && (
+                      <div className="flex flex-col gap-2 mb-1 shrink-0">
+                        {Object.values(cuisineBatches).map((batch) => {
+                          const displayName = batch.cuisine.length > 20 ? 'Station' : batch.cuisine
+                          return (
+                            <div
+                              key={batch.cuisine}
+                              className={cn(
+                                'p-2.5 rounded-xl border flex flex-col gap-1.5 shadow-xs transition-all',
+                                !batch.isLocked
+                                  ? 'bg-amber-500/10 border-amber-500/40 text-amber-500'
+                                  : 'bg-muted/40 border-border text-muted-foreground'
+                              )}
+                            >
+                              <div className="flex items-center justify-between font-bold text-xs">
+                                <div className="flex items-center gap-1.5">
+                                  {!batch.isLocked ? (
+                                    <Timer className="size-3.5 animate-spin text-amber-500" style={{ animationDuration: '3s' }} />
+                                  ) : (
+                                    <Lock className="size-3.5 text-muted-foreground" />
+                                  )}
+                                  <span className="font-extrabold truncate max-w-[170px]">{displayName} Batch</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <Badge
+                                    className={cn(
+                                      'text-[10px] font-mono font-bold px-1.5 py-0',
+                                      !batch.isLocked ? 'bg-amber-500 text-black animate-pulse' : 'bg-secondary text-muted-foreground'
+                                    )}
+                                  >
+                                    {!batch.isLocked ? `${batch.remainingSeconds}s Window` : '20s Closed'}
+                                  </Badge>
+                                  <button
+                                    onClick={() => handleResetCuisineBatch(batch.cuisine)}
+                                    className="text-[10px] text-muted-foreground hover:text-foreground p-0.5"
+                                    title="Dismiss"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              </div>
+
+                              {!batch.isLocked && (
+                                <div className="space-y-1">
+                                  <div className="w-full bg-amber-500/20 h-1.5 rounded-full overflow-hidden">
+                                    <div
+                                      className="bg-amber-500 h-full transition-all duration-1000 ease-linear rounded-full"
+                                      style={{ width: `${(batch.remainingSeconds / 20) * 100}%` }}
+                                    />
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground">
+                                    Chef selection window: Add queued orders before timer ends ({batch.remainingSeconds}s).
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
                     {colTickets.length === 0 ? (
                       <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
                         <div className="flex size-12 items-center justify-center rounded-2xl bg-muted/60 border border-border">
@@ -733,11 +1162,13 @@ export function KitchenDisplay() {
                           onAdvance={handleAdvance}
                           onToggleItem={handleToggleItem}
                           onReprioritize={handleReprioritize}
+                          cuisineBatches={cuisineBatches}
+                          onQuickAddBatch={handleQuickAddBatch}
                         />
                       ))
                     )}
                   </div>
-                </ScrollArea>
+                </div>
               </div>
             )
           })}
@@ -816,6 +1247,82 @@ export function KitchenDisplay() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Order Prepared Notification Floating Alert ── */}
+      {orderPreparedAlert && (
+        <div className="fixed top-16 right-6 z-50 max-w-md w-full animate-in slide-in-from-top-4 fade-in duration-300">
+          <div className="relative rounded-2xl bg-card border-2 border-success/40 shadow-2xl p-4 bg-gradient-to-r from-success/10 via-card to-card">
+            <button
+              onClick={() => setOrderPreparedAlert(null)}
+              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground p-1 rounded-md"
+            >
+              <X className="size-4" />
+            </button>
+            <div className="flex items-start gap-3.5">
+              <div className="size-11 rounded-xl bg-success/20 text-success flex items-center justify-center shrink-0 border border-success/30">
+                <Bell className="size-5 animate-bounce" />
+              </div>
+              <div className="flex-1 pr-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-success uppercase tracking-wider">
+                    Order Prepared & Ready
+                  </span>
+                  <Badge variant="outline" className="border-success/30 text-success text-[10px] h-4">
+                    {orderPreparedAlert.tableNumber}
+                  </Badge>
+                </div>
+                <h4 className="text-sm font-extrabold text-foreground mt-0.5">
+                  Order #{orderPreparedAlert.orderNumber}
+                </h4>
+                <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
+                  {orderPreparedAlert.itemsSummary}
+                </p>
+
+                {/* Readiness Badge */}
+                <div className="mt-2.5 pt-2 border-t border-border/50 flex items-center justify-between text-[11px]">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-success/15 text-success font-semibold border border-success/30">
+                    <CheckCircle2 className="size-3" /> Ready for Table Pickup
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Waitstaff Alerted
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 20-Second Cuisine Batch Lock Alert Modal ── */}
+      {batchLockAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="relative w-full max-w-sm bg-card border border-destructive/40 shadow-2xl rounded-3xl p-6 text-center space-y-4">
+            <div className="size-14 rounded-2xl bg-destructive/15 text-destructive flex items-center justify-center mx-auto border border-destructive/30">
+              <Lock className="size-7" />
+            </div>
+            <div>
+              <Badge variant="outline" className="border-destructive/40 text-destructive text-xs mb-2">
+                20s Timer Expired
+              </Badge>
+              <h3 className="text-lg font-bold text-foreground">
+                Cannot Add {batchLockAlert.cuisine} Order
+              </h3>
+              <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+                {batchLockAlert.message}
+              </p>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button
+                variant="default"
+                className="w-full bg-primary hover:bg-primary/90 font-bold text-xs rounded-xl h-11"
+                onClick={() => setBatchLockAlert(null)}
+              >
+                Understood, Return to Kitchen
+              </Button>
+            </div>
           </div>
         </div>
       )}

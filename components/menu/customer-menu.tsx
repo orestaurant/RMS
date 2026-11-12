@@ -23,12 +23,14 @@ import {
   Sparkles,
   ChevronRight,
   ShieldCheck,
+  Star,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 
 export interface CustomerMenuItem {
   id: string
@@ -81,19 +83,23 @@ export function CustomerMenu() {
   const [loading, setLoading] = useState<boolean>(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
-  // 3. Filters
+  // 3. Table Orders & Live Queue State
+  const [tableOrders, setTableOrders] = useState<any[]>([])
+  const [showOrdersModal, setShowOrdersModal] = useState<boolean>(false)
+
+  // 4. Filters
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [vegOnly, setVegOnly] = useState<boolean>(false)
 
-  // 4. Cart & Drawer State
+  // 5. Cart & Drawer State
   const [cart, setCart] = useState<{ [id: string]: CartItem }>({})
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false)
   const [orderNotes, setOrderNotes] = useState<string>('')
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [orderError, setOrderError] = useState<string | null>(null)
 
-  // 5. Order Confirmation State
+  // 6. Order Confirmation State
   const [confirmedOrder, setConfirmedOrder] = useState<OrderConfirmationData | null>(null)
   const [liveStatus, setLiveStatus] = useState<string>('pending')
 
@@ -122,16 +128,18 @@ export function CustomerMenu() {
       setFetchError(null)
 
       const [itemsRes, catRes] = await Promise.all([
-        fetch('/api/menu/items'),
-        fetch('/api/menu/categories'),
+        fetch('/api/menu/items', { cache: 'no-store' }),
+        fetch('/api/menu/categories', { cache: 'no-store' }),
       ])
 
       const itemsJson = await itemsRes.json()
       const catJson = await catRes.json()
 
       if (itemsJson.success && Array.isArray(itemsJson.data)) {
-        // Strict filter: display ONLY items where isAvailable === true
-        const availableOnly = itemsJson.data.filter((item: CustomerMenuItem) => item.isAvailable === true)
+        // Display all available menu items (isAvailable !== false)
+        const availableOnly = itemsJson.data.filter(
+          (item: CustomerMenuItem) => item.isAvailable !== false
+        )
         setMenuItems(availableOnly)
       } else {
         throw new Error(itemsJson.message || 'Failed to load menu items')
@@ -148,9 +156,31 @@ export function CustomerMenu() {
     }
   }, [])
 
+  // Poll active table orders so customer sees live queue & cooking updates in real time
+  const fetchTableOrders = useCallback(async () => {
+    if (!tableNumber) return
+    try {
+      const res = await fetch(`/api/orders?table=${encodeURIComponent(tableNumber)}`)
+      if (res.ok) {
+        const json = await res.json()
+        if (json.success && Array.isArray(json.data)) {
+          setTableOrders(json.data)
+        }
+      }
+    } catch (err) {
+      console.warn('Error fetching live table orders:', err)
+    }
+  }, [tableNumber])
+
   useEffect(() => {
     loadMenu()
   }, [loadMenu])
+
+  useEffect(() => {
+    fetchTableOrders()
+    const timer = setInterval(fetchTableOrders, 4000)
+    return () => clearInterval(timer)
+  }, [fetchTableOrders])
 
   // Handle manual table entry submission
   const handleSetTable = (e: React.FormEvent) => {
@@ -219,17 +249,57 @@ export function CustomerMenu() {
   const cartTax = Math.round(cartSubtotal * 0.05 * 100) / 100
   const cartGrandTotal = Math.round((cartSubtotal + cartTax) * 100) / 100
 
+  // Derived Table Orders for Live Queue and Preparation
+  const queueOrders = useMemo(
+    () =>
+      tableOrders.filter(
+        (o) =>
+          o.status === 'pending' ||
+          o.status === 'confirmed' ||
+          o.status === 'PENDING' ||
+          o.status === 'CONFIRMED'
+      ),
+    [tableOrders]
+  )
+
+  const prepOrders = useMemo(
+    () =>
+      tableOrders.filter(
+        (o) =>
+          o.status === 'preparing' ||
+          o.status === 'cooking' ||
+          o.status === 'PREPARING'
+      ),
+    [tableOrders]
+  )
+
+  const readyOrServedOrders = useMemo(
+    () =>
+      tableOrders.filter(
+        (o) =>
+          o.status === 'ready' ||
+          o.status === 'served' ||
+          o.status === 'completed' ||
+          o.status === 'READY' ||
+          o.status === 'SERVED' ||
+          o.status === 'COMPLETED'
+      ),
+    [tableOrders]
+  )
+
+  const totalActiveOrders = queueOrders.length + prepOrders.length
+
   // Filtered Menu Items
   const filteredItems = useMemo(() => {
     return menuItems.filter((item) => {
       // Must be available
-      if (item.isAvailable !== true) return false
+      if (item.isAvailable === false) return false
 
       // Category match
       if (selectedCategory !== 'all') {
         const matchesCat =
           item.categoryId === selectedCategory ||
-          item.category.toLowerCase() === selectedCategory.toLowerCase()
+          (item.category || '').toLowerCase() === selectedCategory.toLowerCase()
         if (!matchesCat) return false
       }
 
@@ -347,42 +417,73 @@ export function CustomerMenu() {
     return () => clearInterval(interval)
   }, [confirmedOrder?.id])
 
-  // Helper format badge
-  const displayTableBadge = tableNumber
-    ? /^\d+$/.test(tableNumber)
-      ? `Table ${tableNumber.padStart(2, '0')}`
-      : `Table ${tableNumber}`
-    : 'No Table'
+  // Clean description helper to remove internal warehouse/SKU text
+  const getCleanDescription = (desc?: string) => {
+    if (!desc) return ''
+    if (/sku:/i.test(desc) || /in stock:/i.test(desc)) {
+      const stripped = desc
+        .replace(/sku:\s*[^\s|]+\s*\|?\s*/gi, '')
+        .replace(/in\s*stock:\s*[^|]+\s*\|?\s*/gi, '')
+        .trim()
+      return stripped
+    }
+    return desc
+  }
+
+  // Helper format table badge (e.g. T12, Table 01)
+  const displayTableBadge = useMemo(() => {
+    if (!tableNumber) return 'No Table'
+    let s = String(tableNumber).trim()
+    if (/^tt\d+/i.test(s)) s = s.replace(/^tt(\d+)/i, 'T$1')
+    if (/^t\d+/i.test(s)) return s.toUpperCase()
+    if (/^\d+$/.test(s)) return `Table ${s.padStart(2, '0')}`
+    return s
+  }, [tableNumber])
+
+  // Active categories with available items only (hides empty 0-item categories)
+  const activeCategories = useMemo(() => {
+    return categories.filter((cat) => {
+      const count = menuItems.filter(
+        (i) => i.categoryId === cat.id || (i.category || '').toLowerCase() === cat.name.toLowerCase()
+      ).length
+      return count > 0
+    })
+  }, [categories, menuItems])
 
   return (
-    <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 text-foreground flex flex-col antialiased">
+    <div className="min-h-screen bg-background text-foreground flex flex-col antialiased selection:bg-primary/20 transition-colors duration-200">
       {/* 1. TOP CUSTOMER HEADER */}
-      <header className="sticky top-0 z-30 bg-background/95 backdrop-blur-md border-b border-border/80 px-4 py-3 shadow-sm">
-        <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
+      <header className="sticky top-0 z-30 bg-background/90 backdrop-blur-xl border-b border-border/70 px-4 py-3 shadow-xs">
+        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           {/* Brand */}
-          <div className="flex items-center gap-2.5">
-            <div className="size-9 rounded-xl bg-primary text-primary-foreground flex items-center justify-center font-bold shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="size-10 rounded-2xl bg-gradient-to-tr from-primary to-indigo-600 text-primary-foreground flex items-center justify-center font-bold shadow-md shadow-primary/25">
               <UtensilsCrossed className="size-5" />
             </div>
             <div>
-              <h1 className="text-base font-extrabold tracking-tight leading-none text-foreground">
-                Spice Garden
-              </h1>
-              <span className="text-[11px] text-muted-foreground font-medium">
-                Dine-In Self Ordering
-              </span>
+              <div className="flex items-center gap-2">
+                <h1 className="text-base font-black tracking-tight leading-none text-foreground">
+                  Spice Garden
+                </h1>
+                <span className="hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary border border-primary/20">
+                  Dine-in
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground font-medium mt-0.5">
+                Table Self-Ordering Menu
+              </p>
             </div>
           </div>
 
-          {/* Right Header Actions: Locked Table Badge + Cart Trigger */}
+          {/* Right Header Actions: Table Badge + Live Orders + Cart */}
           <div className="flex items-center gap-2">
             {/* Locked Table Number Badge */}
             {tableNumber ? (
               <div
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 text-xs font-bold shadow-xs select-none"
-                title="Ordering for this table (Session locked)"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 text-xs font-black shadow-xs select-none"
+                title="Table locked for dine-in delivery"
               >
-                <Lock className="size-3 text-emerald-600 dark:text-emerald-400" />
+                <Lock className="size-3" />
                 <span>{displayTableBadge}</span>
               </div>
             ) : (
@@ -390,10 +491,34 @@ export function CustomerMenu() {
                 variant="outline"
                 size="sm"
                 onClick={() => setShowTableModal(true)}
-                className="h-8 text-xs font-semibold gap-1 text-primary border-primary/40"
+                className="h-9 px-3 rounded-xl text-xs font-bold gap-1.5 text-primary border-primary/40 hover:bg-primary/10"
               >
                 <QrCode className="size-3.5" />
-                Enter Table
+                Select Table
+              </Button>
+            )}
+
+            {/* Live Orders & Queue Tracker Button */}
+            {tableOrders.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowOrdersModal(true)}
+                className="h-9 px-3 rounded-xl font-bold gap-1.5 border-primary/40 text-primary hover:bg-primary/10 shadow-xs"
+              >
+                <Clock className="size-3.5 text-primary" />
+                <span className="hidden sm:inline">Orders</span>
+                {totalActiveOrders > 0 ? (
+                  <span className="flex items-center gap-1 text-[11px] bg-primary text-primary-foreground px-2 py-0.5 rounded-full font-extrabold animate-pulse">
+                    {queueOrders.length > 0 && `Queue (${queueOrders.length})`}
+                    {queueOrders.length > 0 && prepOrders.length > 0 && ' · '}
+                    {prepOrders.length > 0 && `Prep (${prepOrders.length})`}
+                  </span>
+                ) : (
+                  <Badge variant="secondary" className="text-[10px] px-1.5 h-4">
+                    {tableOrders.length}
+                  </Badge>
+                )}
               </Button>
             )}
 
@@ -402,12 +527,12 @@ export function CustomerMenu() {
               variant="default"
               size="sm"
               onClick={() => setIsCartOpen(true)}
-              className="relative h-9 px-3.5 rounded-xl font-bold gap-2 shadow-sm"
+              className="relative h-9 px-3.5 rounded-xl font-extrabold gap-2 shadow-md shadow-primary/25 cursor-pointer"
             >
               <ShoppingBag className="size-4" />
               <span className="hidden sm:inline">Cart</span>
               {cartItemCount > 0 && (
-                <span className="flex size-5 items-center justify-center rounded-full bg-white text-primary text-[11px] font-extrabold shadow-sm">
+                <span className="flex size-5 items-center justify-center rounded-full bg-white text-primary text-[11px] font-black shadow-sm">
                   {cartItemCount}
                 </span>
               )}
@@ -560,45 +685,265 @@ export function CustomerMenu() {
         </div>
       )}
 
-      {/* 4. MAIN CONTENT AREA */}
-      <main className="flex-1 max-w-4xl w-full mx-auto p-4 space-y-4 pb-28">
+      {/* 4. LIVE TABLE ORDERS & QUEUE MODAL */}
+      {showOrdersModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in">
+          <div className="relative w-full max-w-lg bg-card border border-border shadow-2xl rounded-3xl overflow-hidden p-6 text-left space-y-4 max-h-[85vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-border/70">
+              <div className="flex items-center gap-2.5">
+                <div className="size-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold">
+                  <ChefHat className="size-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-extrabold text-foreground">
+                    Live Table Orders & Kitchen Queue
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Active tickets for {displayTableBadge}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowOrdersModal(false)}
+                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+
+            {/* Content List */}
+            <div className="overflow-y-auto flex-1 space-y-4 pr-1">
+              {/* 1. Queue Orders */}
+              {queueOrders.length > 0 && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-500">
+                    <Clock className="size-4 animate-spin" style={{ animationDuration: '4s' }} />
+                    <span>In Kitchen Queue ({queueOrders.length})</span>
+                  </div>
+                  <div className="space-y-2">
+                    {queueOrders.map((ord) => (
+                      <div
+                        key={ord.id}
+                        className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-bold text-xs text-foreground">
+                            {ord.orderNumber}
+                          </span>
+                          <Badge className="bg-amber-500 text-black text-[10px] font-extrabold">
+                            In Queue
+                          </Badge>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Order received. Waiting for chef to select into preparation.
+                        </p>
+                        <div className="space-y-1 pt-1 border-t border-amber-500/20 text-xs">
+                          {(ord.items || []).map((it: any, i: number) => (
+                            <div key={i} className="flex justify-between items-center text-foreground font-medium">
+                              <span>
+                                {it.quantity}x {it.name}
+                              </span>
+                              <span className="text-muted-foreground font-mono">
+                                ₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 2. Preparation Orders */}
+              {prepOrders.length > 0 && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary">
+                    <Flame className="size-4 animate-pulse text-chart-4" />
+                    <span>In Kitchen Preparation ({prepOrders.length})</span>
+                  </div>
+                  <div className="space-y-2">
+                    {prepOrders.map((ord) => (
+                      <div
+                        key={ord.id}
+                        className="p-3.5 rounded-2xl bg-primary/10 border border-primary/30 space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-bold text-xs text-foreground">
+                            {ord.orderNumber}
+                          </span>
+                          <Badge className="bg-chart-4 text-white text-[10px] font-extrabold animate-pulse">
+                            Chef Cooking
+                          </Badge>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Chef has selected this order and is actively preparing your dishes.
+                        </p>
+                        <div className="space-y-1 pt-1 border-t border-primary/20 text-xs">
+                          {(ord.items || []).map((it: any, i: number) => (
+                            <div key={i} className="flex justify-between items-center text-foreground font-medium">
+                              <span>
+                                {it.quantity}x {it.name}
+                              </span>
+                              <span className="text-muted-foreground font-mono">
+                                ₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Ready / Served Orders */}
+              {readyOrServedOrders.length > 0 && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-600">
+                    <CheckCircle2 className="size-4 text-emerald-500" />
+                    <span>Ready / Served ({readyOrServedOrders.length})</span>
+                  </div>
+                  <div className="space-y-2">
+                    {readyOrServedOrders.map((ord) => (
+                      <div
+                        key={ord.id}
+                        className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-1.5 opacity-85"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-bold text-xs text-foreground">
+                            {ord.orderNumber}
+                          </span>
+                          <Badge className="bg-emerald-600 text-white text-[10px] font-bold">
+                            {ord.status === 'ready' ? 'Ready' : 'Served'}
+                          </Badge>
+                        </div>
+                        <div className="space-y-1 text-xs">
+                          {(ord.items || []).map((it: any, i: number) => (
+                            <div key={i} className="flex justify-between items-center text-muted-foreground">
+                              <span>
+                                {it.quantity}x {it.name}
+                              </span>
+                              <span>₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {tableOrders.length === 0 && (
+                <div className="py-12 text-center text-muted-foreground space-y-2">
+                  <UtensilsCrossed className="size-10 mx-auto opacity-40" />
+                  <p className="text-sm font-semibold">No active orders for this table yet</p>
+                  <p className="text-xs">Browse the menu below and add items to your cart to order.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="pt-3 border-t border-border flex gap-2">
+              <Button
+                variant="default"
+                className="w-full h-11 rounded-xl font-bold"
+                onClick={() => setShowOrdersModal(false)}
+              >
+                + Order More Items from Menu
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. MAIN CONTENT AREA */}
+      <main className="flex-1 max-w-5xl w-full mx-auto p-4 space-y-5 pb-28">
         {/* Table Banner Notification if locked */}
         {tableNumber && (
-          <div className="flex items-center justify-between bg-primary/5 border border-primary/15 rounded-2xl px-4 py-2.5 text-xs text-foreground">
-            <div className="flex items-center gap-2">
-              <Lock className="size-3.5 text-primary" />
-              <span>
-                Ordering for <strong className="font-bold text-primary">{displayTableBadge}</strong>. Dishes will be delivered directly to this table.
-              </span>
+          <div className="relative overflow-hidden rounded-2xl border border-primary/20 bg-card p-4 shadow-xs">
+            <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="size-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                  <UtensilsCrossed className="size-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-extrabold text-sm text-foreground">
+                      Dining at <span className="text-primary">{displayTableBadge}</span>
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+                      <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Dine-in Locked
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                    Dishes will be delivered directly to your table
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setManualTableInput(tableNumber)
+                  setShowTableModal(true)
+                }}
+                className="h-8 text-xs font-bold rounded-xl border-primary/30 text-primary hover:bg-primary/10 shrink-0 ml-auto sm:ml-0 cursor-pointer"
+              >
+                Change Table
+              </Button>
             </div>
-            <button
-              onClick={() => {
-                setManualTableInput(tableNumber)
-                setShowTableModal(true)
-              }}
-              className="text-[11px] font-semibold text-primary underline underline-offset-2 hover:opacity-80 ml-2 shrink-0 cursor-pointer"
-            >
-              Change
-            </button>
+          </div>
+        )}
+
+        {/* Live Orders Status Quick Pill Banner */}
+        {totalActiveOrders > 0 && (
+          <div
+            onClick={() => setShowOrdersModal(true)}
+            className="flex items-center justify-between p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/10 via-primary/10 to-emerald-500/10 border border-primary/30 shadow-xs cursor-pointer hover:border-primary transition-all"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="size-8 rounded-xl bg-primary text-primary-foreground flex items-center justify-center font-bold">
+                <ChefHat className="size-4 animate-bounce" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-foreground">
+                  {queueOrders.length > 0 && prepOrders.length > 0
+                    ? `${queueOrders.length} in Queue · ${prepOrders.length} in Kitchen Prep`
+                    : queueOrders.length > 0
+                    ? `${queueOrders.length} order waiting in Kitchen Queue`
+                    : `${prepOrders.length} order actively cooking in Kitchen`}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  Tap to track live cooking progress & queue orders
+                </p>
+              </div>
+            </div>
+            <Button size="sm" variant="outline" className="h-7 text-xs font-bold rounded-lg border-primary/40">
+              Track <ChevronRight className="size-3.5 ml-1" />
+            </Button>
           </div>
         )}
 
         {/* Search & Vegetarian Filter Row */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search dishes, drinks, ingredients..."
-              className="pl-9 h-11 rounded-xl bg-card border-border/80 text-sm shadow-xs"
+              className="pl-10 h-11 rounded-2xl bg-card border-border/80 text-sm shadow-xs focus-visible:ring-primary/40"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1 cursor-pointer"
+                aria-label="Clear search"
               >
-                <X className="size-4" />
+                <X className="size-3.5" />
               </button>
             )}
           </div>
@@ -607,42 +952,50 @@ export function CustomerMenu() {
           <button
             type="button"
             onClick={() => setVegOnly(!vegOnly)}
-            className={`flex items-center gap-1.5 h-11 px-3.5 rounded-xl border text-xs font-bold transition-all shadow-xs cursor-pointer ${
+            className={cn(
+              'flex items-center gap-2 h-11 px-4 rounded-2xl border text-xs font-extrabold transition-all shadow-xs cursor-pointer select-none shrink-0',
               vegOnly
-                ? 'bg-emerald-500/10 border-emerald-500 text-emerald-700 dark:text-emerald-300'
-                : 'bg-card border-border/80 text-muted-foreground hover:text-foreground'
-            }`}
+                ? 'bg-emerald-500/15 border-emerald-500 text-emerald-600 dark:text-emerald-400 shadow-emerald-500/10'
+                : 'bg-card border-border/80 text-muted-foreground hover:text-foreground hover:border-border'
+            )}
           >
-            <span className="size-2 rounded-full bg-emerald-600" />
-            Veg Only
+            <span
+              className={cn(
+                'size-2.5 rounded-full transition-all',
+                vegOnly ? 'bg-emerald-500 ring-4 ring-emerald-500/20' : 'bg-muted-foreground/40'
+              )}
+            />
+            <span>Veg Only</span>
           </button>
         </div>
 
-        {/* Category Pills (Horizontal Scroll) */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 no-scrollbar">
+        {/* Category Pills (Horizontal Sticky Bar) */}
+        <div className="sticky top-[61px] z-20 -mx-4 px-4 py-2.5 bg-background/95 backdrop-blur-md border-b border-border/40 flex items-center gap-2 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setSelectedCategory('all')}
-            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={cn(
+              'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition-all cursor-pointer select-none',
               selectedCategory === 'all'
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'bg-card border border-border/80 text-muted-foreground hover:text-foreground'
-            }`}
+                ? 'bg-primary text-primary-foreground shadow-md shadow-primary/25 scale-[1.02]'
+                : 'bg-card border border-border/80 text-muted-foreground hover:text-foreground hover:border-primary/30'
+            )}
           >
             All Items ({menuItems.length})
           </button>
-          {categories.map((cat) => {
+          {activeCategories.map((cat) => {
             const count = menuItems.filter(
-              (i) => i.categoryId === cat.id || i.category.toLowerCase() === cat.name.toLowerCase()
+              (i) => i.categoryId === cat.id || (i.category || '').toLowerCase() === cat.name.toLowerCase()
             ).length
             return (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
-                className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                className={cn(
+                  'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition-all cursor-pointer select-none',
                   selectedCategory === cat.id
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'bg-card border border-border/80 text-muted-foreground hover:text-foreground'
-                }`}
+                    ? 'bg-primary text-primary-foreground shadow-md shadow-primary/25 scale-[1.02]'
+                    : 'bg-card border border-border/80 text-muted-foreground hover:text-foreground hover:border-primary/30'
+                )}
               >
                 {cat.name} ({count})
               </button>
@@ -652,9 +1005,21 @@ export function CustomerMenu() {
 
         {/* Loading / Error States */}
         {loading ? (
-          <div className="py-20 text-center space-y-3">
-            <RefreshCw className="size-8 text-primary animate-spin mx-auto" />
-            <p className="text-xs text-muted-foreground font-medium">Loading live menu...</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-32 rounded-2xl border border-border/60 bg-card/60 p-4 animate-pulse flex justify-between"
+              >
+                <div className="space-y-2.5 flex-1 pr-4">
+                  <div className="h-4 w-12 bg-muted rounded" />
+                  <div className="h-5 w-32 bg-muted rounded" />
+                  <div className="h-3 w-48 bg-muted rounded" />
+                  <div className="h-5 w-16 bg-muted rounded pt-1" />
+                </div>
+                <div className="size-24 rounded-2xl bg-muted shrink-0" />
+              </div>
+            ))}
           </div>
         ) : fetchError ? (
           <div className="py-12 px-6 text-center bg-card rounded-3xl border border-destructive/20 space-y-3">
@@ -687,132 +1052,144 @@ export function CustomerMenu() {
           </div>
         ) : (
           /* Structured Dishes Grid */
-          <div className="space-y-6">
+          <div className="space-y-8 pt-2">
             {Array.from(itemsByCategory.entries()).map(([catName, items]) => (
-              <section key={catName} className="space-y-3">
-                <div className="flex items-center justify-between border-b border-border/60 pb-2">
-                  <h2 className="text-sm font-extrabold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                    <span>{catName}</span>
-                    <span className="text-[11px] font-normal text-muted-foreground/70">
-                      ({items.length})
+              <section key={catName} className="space-y-3.5">
+                <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-sm font-black uppercase tracking-wider text-foreground">
+                      {catName}
+                    </h2>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                      {items.length}
                     </span>
-                  </h2>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {items.map((item) => {
                     const inCartQty = cart[item.id]?.quantity || 0
+                    const desc = getCleanDescription(item.description)
 
                     return (
-                      <Card
+                      <div
                         key={item.id}
-                        className="overflow-hidden border border-border/80 bg-card rounded-2xl shadow-xs hover:border-primary/40 transition-all flex flex-col justify-between"
+                        className="group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-border/70 bg-card p-4 shadow-xs hover:border-primary/50 hover:shadow-lg transition-all duration-200"
                       >
-                        <CardContent className="p-3.5 flex gap-3.5">
+                        <div className="flex gap-4 items-start">
                           {/* Left: Info */}
-                          <div className="flex-1 space-y-1">
+                          <div className="flex-1 min-w-0 space-y-1.5">
                             {/* Dietary badge */}
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-2 flex-wrap">
                               {item.isVeg ? (
                                 <span
-                                  className="size-3.5 border border-emerald-600 rounded-sm flex items-center justify-center p-0.5 shrink-0"
-                                  title="Vegetarian"
+                                  className="size-4 border-2 border-emerald-600 dark:border-emerald-500 rounded-sm flex items-center justify-center p-0.5 shrink-0"
+                                  title="Pure Vegetarian"
                                 >
-                                  <span className="size-1.5 bg-emerald-600 rounded-full" />
+                                  <span className="size-2 bg-emerald-600 dark:bg-emerald-500 rounded-full" />
                                 </span>
                               ) : (
                                 <span
-                                  className="size-3.5 border border-rose-600 rounded-sm flex items-center justify-center p-0.5 shrink-0"
+                                  className="size-4 border-2 border-rose-600 dark:border-rose-500 rounded-sm flex items-center justify-center p-0.5 shrink-0"
                                   title="Non-Vegetarian"
                                 >
-                                  <span className="size-1.5 bg-rose-600 rounded-full" />
+                                  <span className="size-2 bg-rose-600 dark:border-rose-500 rounded-full" />
                                 </span>
                               )}
 
                               {item.isSpicy && (
-                                <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 font-semibold">
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                                   <Flame className="size-3" />
                                   Spicy
                                 </span>
                               )}
-                            </div>
 
-                            <h3 className="font-bold text-sm text-foreground leading-snug">
-                              {item.name}
-                            </h3>
-
-                            {item.description && (
-                              <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                                {item.description}
-                              </p>
-                            )}
-
-                            <div className="flex items-center gap-2 pt-1">
-                              <span className="text-base font-extrabold text-foreground">
-                                ₹{item.price.toFixed(2)}
-                              </span>
                               {item.prepTime && (
-                                <span className="text-[11px] text-muted-foreground flex items-center gap-1 font-medium">
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
                                   <Clock className="size-3" />
                                   {item.prepTime}m
                                 </span>
                               )}
                             </div>
+
+                            {/* Dish Name */}
+                            <h3 className="font-extrabold text-base text-foreground group-hover:text-primary transition-colors leading-snug">
+                              {item.name}
+                            </h3>
+
+                            {/* Clean Description */}
+                            {desc && (
+                              <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                                {desc}
+                              </p>
+                            )}
+
+                            {/* Price */}
+                            <div className="pt-2">
+                              <span className="text-lg font-black text-foreground tracking-tight">
+                                ₹{item.price.toFixed(2)}
+                              </span>
+                            </div>
                           </div>
 
                           {/* Right: Dish Image / Add Button */}
-                          <div className="flex flex-col items-center justify-between shrink-0 w-24">
+                          <div className="flex flex-col items-center justify-between shrink-0 w-28 gap-2.5">
                             {/* Image container */}
-                            <div className="size-20 rounded-xl bg-muted/60 overflow-hidden relative flex items-center justify-center border border-border/60">
+                            <div className="relative size-24 rounded-2xl overflow-hidden bg-muted/40 border border-border/80 shadow-xs flex items-center justify-center group-hover:scale-[1.02] transition-transform">
                               {item.image ? (
                                 <img
                                   src={item.image}
                                   alt={item.name}
-                                  className="w-full h-full object-cover"
+                                  className="size-full object-cover"
                                   onError={(e) => {
-                                    // Fallback to placeholder icon
                                     ;(e.target as HTMLElement).style.display = 'none'
                                   }}
                                 />
                               ) : (
-                                <UtensilsCrossed className="size-6 text-muted-foreground/40" />
+                                <div className="size-full flex flex-col items-center justify-center bg-gradient-to-br from-primary/10 via-muted/30 to-background p-2 text-center">
+                                  <UtensilsCrossed className="size-7 text-primary/40 mb-1" />
+                                  <span className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-wider">
+                                    {item.category?.slice(0, 8) || 'Fresh'}
+                                  </span>
+                                </div>
                               )}
                             </div>
 
                             {/* Controls: Add or Quantity increment/decrement */}
-                            <div className="w-full mt-2">
+                            <div className="w-full">
                               {inCartQty === 0 ? (
                                 <Button
                                   size="sm"
-                                  variant="outline"
                                   onClick={() => addToCart(item)}
-                                  className="w-full h-8 text-xs font-bold rounded-xl border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground shadow-xs cursor-pointer"
+                                  className="w-full h-8 text-xs font-extrabold rounded-xl bg-primary/10 hover:bg-primary text-primary hover:text-primary-foreground border border-primary/30 transition-all shadow-xs cursor-pointer active:scale-95"
                                 >
-                                  + Add
+                                  + ADD
                                 </Button>
                               ) : (
-                                <div className="flex items-center justify-between w-full h-8 bg-primary text-primary-foreground rounded-xl px-1.5 shadow-sm">
+                                <div className="flex items-center justify-between w-full h-8 bg-primary text-primary-foreground rounded-xl px-1.5 shadow-md shadow-primary/20 font-bold">
                                   <button
                                     onClick={() => decrementCart(item.id)}
-                                    className="size-6 flex items-center justify-center rounded-lg hover:bg-white/20 transition-colors"
+                                    className="size-6 flex items-center justify-center rounded-lg hover:bg-white/20 active:scale-90 transition-all cursor-pointer"
+                                    aria-label="Decrease quantity"
                                   >
-                                    <Minus className="size-3" />
+                                    <Minus className="size-3.5" />
                                   </button>
                                   <span className="font-extrabold text-xs px-1">
                                     {inCartQty}
                                   </span>
                                   <button
                                     onClick={() => addToCart(item)}
-                                    className="size-6 flex items-center justify-center rounded-lg hover:bg-white/20 transition-colors"
+                                    className="size-6 flex items-center justify-center rounded-lg hover:bg-white/20 active:scale-90 transition-all cursor-pointer"
+                                    aria-label="Increase quantity"
                                   >
-                                    <Plus className="size-3" />
+                                    <Plus className="size-3.5" />
                                   </button>
                                 </div>
                               )}
                             </div>
                           </div>
-                        </CardContent>
-                      </Card>
+                        </div>
+                      </div>
                     )
                   })}
                 </div>
@@ -824,24 +1201,28 @@ export function CustomerMenu() {
 
       {/* 5. STICKY BOTTOM CART FLOATING BAR (MOBILE & DESKTOP) */}
       {cartItemCount > 0 && !isCartOpen && (
-        <div className="fixed bottom-4 inset-x-4 max-w-xl mx-auto z-40 animate-in slide-in-from-bottom-4">
+        <div className="fixed bottom-5 inset-x-4 max-w-lg mx-auto z-40 animate-in slide-in-from-bottom-5 duration-300">
           <button
             onClick={() => setIsCartOpen(true)}
-            className="w-full flex items-center justify-between p-3.5 bg-foreground text-background rounded-2xl shadow-xl hover:opacity-95 transition-all cursor-pointer font-bold"
+            className="w-full flex items-center justify-between px-5 py-3.5 bg-primary text-primary-foreground rounded-2xl shadow-2xl hover:brightness-105 active:scale-[0.99] transition-all cursor-pointer font-bold border border-primary-foreground/20"
           >
             <div className="flex items-center gap-3">
-              <span className="size-8 rounded-xl bg-background/20 text-background flex items-center justify-center text-xs font-extrabold">
+              <div className="size-9 rounded-xl bg-white/20 flex items-center justify-center text-xs font-black shadow-inner">
                 {cartItemCount}
-              </span>
+              </div>
               <div className="text-left leading-tight">
-                <p className="text-xs font-semibold opacity-90">View Your Order</p>
-                <p className="text-sm font-extrabold">₹{cartGrandTotal.toFixed(2)}</p>
+                <p className="text-[11px] font-semibold text-primary-foreground/85 uppercase tracking-wide">
+                  {cartItemCount === 1 ? '1 Dish' : `${cartItemCount} Dishes`} Added
+                </p>
+                <p className="text-base font-extrabold tracking-tight">
+                  ₹{cartGrandTotal.toFixed(2)}
+                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5 text-xs font-extrabold">
-              <span>Checkout</span>
-              <ChevronRight className="size-4" />
+            <div className="flex items-center gap-1.5 text-xs font-black bg-white/20 px-3.5 py-1.5 rounded-xl">
+              <span>View Cart</span>
+              <ArrowRight className="size-4" />
             </div>
           </button>
         </div>

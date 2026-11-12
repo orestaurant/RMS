@@ -148,6 +148,13 @@ export interface Order {
   tax: number;
   discount: number;
   notes: string;
+  isLocationLocked?: boolean;
+  vehicleNumber?: string | null;
+  landmarkNote?: string | null;
+  customerLat?: number | null;
+  customerLng?: number | null;
+  locationAccuracy?: number | null;
+  locationCapturedAt?: Date | string | null;
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
@@ -175,6 +182,13 @@ export interface CreateOrderRequest {
   customerId?: string;
   items: CreateOrderItemRequest[];
   notes?: string;
+  isLocationLocked?: boolean;
+  vehicleNumber?: string | null;
+  landmarkNote?: string | null;
+  customerLat?: number | null;
+  customerLng?: number | null;
+  locationAccuracy?: number | null;
+  locationCapturedAt?: Date | string | null;
 }
 
 export interface CreateOrderItemRequest {
@@ -186,6 +200,14 @@ export interface CreateOrderItemRequest {
 export interface UpdateOrderRequest {
   status?: OrderStatus;
   notes?: string;
+  isLocationLocked?: boolean;
+  vehicleNumber?: string | null;
+  landmarkNote?: string | null;
+  customerLat?: number | null;
+  customerLng?: number | null;
+  locationAccuracy?: number | null;
+  locationCapturedAt?: Date | string | null;
+  unlockOverride?: boolean;
 }
 
 export interface UpdateOrderItemRequest {
