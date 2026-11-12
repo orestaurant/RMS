@@ -1,26 +1,72 @@
 'use client'
 
-import { useState } from 'react'
-import { Users, Clock, ChefHat, MoreVertical, Plus, Filter } from 'lucide-react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useState, useEffect, useCallback } from 'react'
+import {
+  Users,
+  Clock,
+  ChefHat,
+  MoreVertical,
+  Plus,
+  Filter,
+  QrCode,
+  RefreshCw,
+  Loader2,
+  Calendar,
+  AlertCircle,
+  Search,
+} from 'lucide-react'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { tables, liveOrders, type DiningTable, type TableStatus } from '@/lib/mock-data'
 import { cn } from '@/lib/utils'
+import { TableQRGenerator } from '@/components/tables/table-qr-generator'
+import { useAuthContext } from '@/hooks/useAuthContext'
 
-type Section = 'all' | 'indoor' | 'outdoor' | 'vip' | 'beach'
+export type TableStatus = 'available' | 'occupied' | 'reserved' | 'cleaning' | 'out_of_service' | 'maintenance'
 
-const statusConfig: Record<TableStatus, {
-  label: string
-  dot: string
-  card: string
-  badge: string
-}> = {
+export interface TableData {
+  id: string
+  number: number | string
+  tableNumber: string
+  section: string
+  rawSection?: string
+  capacity: number
+  status: TableStatus
+  waiter?: string
+  occupiedSince?: string
+  guestCount?: number
+  order?: { id: string; status: string }
+  activeReservation?: { guestName: string; guestCount: number; time?: string }
+  x?: number
+  y?: number
+}
+
+const statusConfig: Record<
+  TableStatus,
+  {
+    label: string
+    dot: string
+    card: string
+    badge: string
+  }
+> = {
   available: {
     label: 'Available',
     dot: 'bg-success',
@@ -45,6 +91,12 @@ const statusConfig: Record<TableStatus, {
     card: 'border-border bg-muted/30',
     badge: 'border-border bg-muted text-muted-foreground',
   },
+  maintenance: {
+    label: 'Maintenance',
+    dot: 'bg-destructive/50',
+    card: 'border-destructive/20 bg-destructive/5 opacity-70',
+    badge: 'border-destructive/30 bg-destructive/10 text-destructive',
+  },
   out_of_service: {
     label: 'Out of Service',
     dot: 'bg-destructive/50',
@@ -53,135 +105,193 @@ const statusConfig: Record<TableStatus, {
   },
 }
 
-function TableCard({ table }: { table: DiningTable }) {
-  const cfg = statusConfig[table.status]
-  const order = liveOrders.find((o) => o.tableId === table.id)
+function TableCard({
+  table,
+  onGenerateQR,
+  onUpdateStatus,
+}: {
+  table: TableData
+  onGenerateQR?: (tableNum: string | number) => void
+  onUpdateStatus?: (tableId: string, status: TableStatus) => Promise<void>
+}) {
+  const normStatus: TableStatus = statusConfig[table.status] ? table.status : 'available'
+  const cfg = statusConfig[normStatus]
   const occupancyPct = table.guestCount ? Math.round((table.guestCount / table.capacity) * 100) : 0
+  const isVip = table.section.toLowerCase().includes('vip')
 
   return (
-    <div className={cn(
-      'group relative rounded-2xl border p-4 transition-all duration-200 cursor-pointer select-none',
-      cfg.card
-    )}>
-      {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className={cn('size-2 rounded-full shrink-0', cfg.dot)} />
-          <span className="font-bold text-base leading-none">
-            {table.section === 'vip' ? 'VIP ' : ''}T{table.number}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Badge variant="outline" className={cn('text-[10px] h-5 px-1.5 font-medium', cfg.badge)}>
-            {cfg.label}
-          </Badge>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                />
-              }
-            >
-              <MoreVertical className="size-3" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {table.status === 'available' && (
-                <>
-                  <DropdownMenuItem>Assign Waiter</DropdownMenuItem>
-                  <DropdownMenuItem>Mark Reserved</DropdownMenuItem>
-                  <DropdownMenuItem>Mark Cleaning</DropdownMenuItem>
-                </>
-              )}
-              {table.status === 'occupied' && (
-                <>
-                  <DropdownMenuItem>View Order</DropdownMenuItem>
-                  <DropdownMenuItem>Request Bill</DropdownMenuItem>
-                  <DropdownMenuItem>Transfer Table</DropdownMenuItem>
-                </>
-              )}
-              {table.status === 'cleaning' && (
-                <DropdownMenuItem>Mark Available</DropdownMenuItem>
-              )}
-              {table.status === 'reserved' && (
-                <>
-                  <DropdownMenuItem>Seat Guests</DropdownMenuItem>
-                  <DropdownMenuItem>Cancel Reservation</DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
+    <div
+      className={cn(
+        'group relative rounded-2xl border p-4 transition-all duration-200 cursor-pointer select-none flex flex-col justify-between',
+        cfg.card
+      )}
+    >
+      <div>
+        {/* Header */}
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className={cn('size-2 rounded-full shrink-0', cfg.dot)} />
+            <span className="font-bold text-base leading-none">
+              {isVip ? 'VIP ' : ''}T{table.tableNumber || table.number}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Badge variant="outline" className={cn('text-[10px] h-5 px-1.5 font-medium', cfg.badge)}>
+              {cfg.label}
+            </Badge>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                  />
+                }
+              >
+                <MoreVertical className="size-3" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => onGenerateQR?.(table.tableNumber || table.number)}
+                  className="gap-2 font-medium text-primary"
+                >
+                  <QrCode className="size-3.5" />
+                  Print QR Sticker
+                </DropdownMenuItem>
 
-      {/* Capacity row */}
-      <div className="flex items-center gap-1.5 mb-2">
-        <Users className="size-3.5 text-muted-foreground" />
-        {table.status === 'occupied' && table.guestCount ? (
-          <span className="text-xs text-foreground font-medium">
-            {table.guestCount}/{table.capacity} guests
-          </span>
-        ) : (
-          <span className="text-xs text-muted-foreground">Seats {table.capacity}</span>
+                {normStatus === 'available' && (
+                  <>
+                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'occupied')}>
+                      Seat Guests
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'reserved')}>
+                      Mark Reserved
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'cleaning')}>
+                      Mark Cleaning
+                    </DropdownMenuItem>
+                  </>
+                )}
+
+                {normStatus === 'occupied' && (
+                  <>
+                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'cleaning')}>
+                      Mark Cleaning
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'available')}>
+                      Free Table (Available)
+                    </DropdownMenuItem>
+                  </>
+                )}
+
+                {normStatus === 'cleaning' && (
+                  <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'available')}>
+                    Mark Available
+                  </DropdownMenuItem>
+                )}
+
+                {normStatus === 'reserved' && (
+                  <>
+                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'occupied')}>
+                      Seat Guests
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'available')}>
+                      Release Reservation
+                    </DropdownMenuItem>
+                  </>
+                )}
+
+                {normStatus === 'maintenance' && (
+                  <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'available')}>
+                    Mark Available
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+
+        {/* Capacity row */}
+        <div className="flex items-center gap-1.5 mb-2">
+          <Users className="size-3.5 text-muted-foreground" />
+          {normStatus === 'occupied' && table.guestCount ? (
+            <span className="text-xs text-foreground font-medium">
+              {table.guestCount}/{table.capacity} guests
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">Seats {table.capacity}</span>
+          )}
+        </div>
+
+        {/* Occupancy bar (only for occupied with known guest count) */}
+        {normStatus === 'occupied' && Boolean(table.guestCount) && (
+          <div className="mb-3">
+            <div className="h-1 w-full rounded-full bg-primary/10 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-primary/60 transition-all"
+                style={{ width: `${Math.min(occupancyPct, 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Waiter & time */}
+        {table.waiter && (
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <div className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-[9px] font-bold text-primary">
+              {table.waiter.split(' ').map((w) => w[0]).join('')}
+            </div>
+            <span className="text-xs text-muted-foreground">{table.waiter}</span>
+          </div>
+        )}
+
+        {table.occupiedSince && (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1.5">
+            <Clock className="size-3" />
+            <span>Since {table.occupiedSince}</span>
+          </div>
+        )}
+
+        {/* Active reservation indicator */}
+        {table.activeReservation && normStatus === 'reserved' && (
+          <div className="flex items-center gap-1 text-xs text-warning/90 mt-1 mb-1.5">
+            <Calendar className="size-3" />
+            <span className="truncate">{table.activeReservation.guestName}</span>
+          </div>
+        )}
+
+        {/* Order indicator */}
+        {table.order && (
+          <>
+            <Separator className="my-2.5" />
+            <div className="flex items-center gap-1.5">
+              <ChefHat className="size-3.5 text-muted-foreground" />
+              <span className="text-xs font-medium">{table.order.id}</span>
+              <Badge
+                variant="outline"
+                className={cn(
+                  'ml-auto text-[9px] h-4 px-1 capitalize',
+                  (table.order.status === 'cooking' || table.order.status === 'preparing') && 'border-chart-4/50 text-chart-4',
+                  table.order.status === 'ready' && 'border-success/50 text-success',
+                  table.order.status === 'pending' && 'border-warning/50 text-warning',
+                  (table.order.status === 'accepted' || table.order.status === 'confirmed') && 'border-primary/50 text-primary',
+                  table.order.status === 'served' && 'border-primary/40 text-primary'
+                )}
+              >
+                {table.order.status}
+              </Badge>
+            </div>
+          </>
         )}
       </div>
 
-      {/* Occupancy bar (only for occupied) */}
-      {table.status === 'occupied' && (
-        <div className="mb-3">
-          <div className="h-1 w-full rounded-full bg-primary/10 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-primary/60 transition-all"
-              style={{ width: `${occupancyPct}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Waiter & time */}
-      {table.waiter && (
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <div className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-[9px] font-bold text-primary">
-            {table.waiter.split(' ').map((w) => w[0]).join('')}
-          </div>
-          <span className="text-xs text-muted-foreground">{table.waiter}</span>
-        </div>
-      )}
-
-      {table.occupiedSince && (
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Clock className="size-3" />
-          <span>Since {table.occupiedSince}</span>
-        </div>
-      )}
-
-      {/* Order indicator */}
-      {order && (
-        <>
-          <Separator className="my-2.5" />
-          <div className="flex items-center gap-1.5">
-            <ChefHat className="size-3.5 text-muted-foreground" />
-            <span className="text-xs font-medium">{order.id}</span>
-            <Badge variant="outline" className={cn(
-              'ml-auto text-[9px] h-4 px-1',
-              order.status === 'cooking' && 'border-chart-4/50 text-chart-4',
-              order.status === 'ready' && 'border-success/50 text-success',
-              order.status === 'pending' && 'border-warning/50 text-warning',
-              order.status === 'accepted' && 'border-primary/50 text-primary',
-            )}>
-              {order.status}
-            </Badge>
-          </div>
-        </>
-      )}
-
       {/* Available CTA */}
-      {table.status === 'available' && (
+      {normStatus === 'available' && (
         <Button
           variant="ghost"
           size="sm"
+          onClick={() => onUpdateStatus?.(table.id, 'occupied')}
           className="w-full mt-2 h-7 text-xs text-success hover:bg-success/10 hover:text-success"
         >
           Seat Guests
@@ -191,18 +301,147 @@ function TableCard({ table }: { table: DiningTable }) {
   )
 }
 
-const statsItems = [
-  { key: 'available' as TableStatus, label: 'Available' },
-  { key: 'occupied' as TableStatus, label: 'Occupied' },
-  { key: 'reserved' as TableStatus, label: 'Reserved' },
-  { key: 'cleaning' as TableStatus, label: 'Cleaning' },
+const statsItems: { key: TableStatus; label: string }[] = [
+  { key: 'available', label: 'Available' },
+  { key: 'occupied', label: 'Occupied' },
+  { key: 'reserved', label: 'Reserved' },
+  { key: 'cleaning', label: 'Cleaning' },
 ]
 
 export function TablesView() {
-  const [section, setSection] = useState<Section>('all')
+  const { auth } = useAuthContext()
+  const branchId = auth?.branchId
+  const restaurantName = auth?.restaurantName || 'Spice Garden Restaurant'
 
-  const filtered = section === 'all' ? tables : tables.filter((t) => t.section === section)
+  const [tables, setTables] = useState<TableData[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [section, setSection] = useState<string>('all')
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<TableStatus | 'all'>('all')
 
+  const [qrOpen, setQrOpen] = useState(false)
+  const [qrTable, setQrTable] = useState<string | number>('1')
+
+  // Add Table Modal state
+  const [isAddOpen, setIsAddOpen] = useState(false)
+  const [newTableNum, setNewTableNum] = useState('')
+  const [newCapacity, setNewCapacity] = useState('4')
+  const [newSection, setNewSection] = useState('Indoor')
+  const [addLoading, setAddLoading] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+
+  // Fetch real tables from dynamic database API
+  const fetchTables = useCallback(async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const url = branchId ? `/api/tables?branchId=${encodeURIComponent(branchId)}` : '/api/tables'
+      const res = await fetch(url)
+      const json = await res.json()
+
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to fetch tables')
+      }
+
+      setTables(json.data || [])
+    } catch (err: any) {
+      console.error('Failed to load tables:', err)
+      setError(err.message || 'Unable to load live tables')
+    } finally {
+      setLoading(false)
+    }
+  }, [branchId])
+
+  useEffect(() => {
+    fetchTables()
+  }, [fetchTables])
+
+  // Update table status in database
+  const handleUpdateStatus = async (tableId: string, newStatus: TableStatus) => {
+    try {
+      // Optimistic update
+      setTables((prev) =>
+        prev.map((t) => (t.id === tableId ? { ...t, status: newStatus } : t))
+      )
+
+      const res = await fetch('/api/tables', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tableId, status: newStatus }),
+      })
+
+      if (!res.ok) {
+        // Rollback on failure
+        fetchTables()
+      }
+    } catch (err) {
+      console.error('Error updating table:', err)
+      fetchTables()
+    }
+  }
+
+  // Handle Add Table form submit
+  const handleAddTable = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newTableNum.trim()) {
+      setAddError('Table number is required')
+      return
+    }
+
+    try {
+      setAddLoading(true)
+      setAddError(null)
+
+      const res = await fetch('/api/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tableNumber: newTableNum.trim(),
+          capacity: parseInt(newCapacity) || 4,
+          section: newSection,
+          branchId: branchId || undefined,
+        }),
+      })
+
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to create table')
+      }
+
+      setIsAddOpen(false)
+      setNewTableNum('')
+      setNewCapacity('4')
+      fetchTables()
+    } catch (err: any) {
+      setAddError(err.message || 'Failed to create table')
+    } finally {
+      setAddLoading(false)
+    }
+  }
+
+  const handleOpenQR = (tableNum: string | number) => {
+    setQrTable(tableNum)
+    setQrOpen(true)
+  }
+
+  // Collect distinct dynamic sections
+  const dynamicSections = Array.from(
+    new Set(tables.map((t) => t.section.toLowerCase()).filter(Boolean))
+  )
+
+  // Filter tables
+  const filtered = tables.filter((t) => {
+    const matchSection = section === 'all' || t.section.toLowerCase() === section.toLowerCase()
+    const matchStatus = statusFilter === 'all' || t.status === statusFilter
+    const matchSearch =
+      !search ||
+      String(t.tableNumber || t.number).toLowerCase().includes(search.toLowerCase()) ||
+      t.section.toLowerCase().includes(search.toLowerCase())
+    return matchSection && matchStatus && matchSearch
+  })
+
+  // Dynamic live counts from database
   const counts = {
     available: tables.filter((t) => t.status === 'available').length,
     occupied: tables.filter((t) => t.status === 'occupied').length,
@@ -212,57 +451,236 @@ export function TablesView() {
 
   return (
     <main className="flex flex-col gap-6 p-6">
-      {/* Stats row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {statsItems.map((s) => (
-          <Card key={s.key} className={cn(
-            'cursor-pointer transition-all',
-            s.key === 'occupied' && 'border-primary/30 bg-primary/5',
-          )}>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-muted-foreground">{s.label}</p>
-                  <p className="text-2xl font-bold mt-0.5">{counts[s.key as keyof typeof counts] ?? 0}</p>
-                </div>
-                <span className={cn(
-                  'size-3 rounded-full',
-                  statusConfig[s.key].dot
-                )} />
+      {/* QR Code Generator Modal */}
+      <TableQRGenerator
+        isOpen={qrOpen}
+        onClose={() => setQrOpen(false)}
+        initialTable={qrTable}
+        restaurantName={restaurantName}
+      />
+
+      {/* Add Table Dialog */}
+      <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add New Table</DialogTitle>
+            <DialogDescription>
+              Create a new dining table backed directly by the PostgreSQL database.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleAddTable} className="space-y-4 py-2">
+            {addError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                {addError}
               </div>
-            </CardContent>
-          </Card>
-        ))}
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="tableNumber">Table Number / Label</Label>
+              <Input
+                id="tableNumber"
+                placeholder="e.g. 11, 12, VIP-1"
+                value={newTableNum}
+                onChange={(e) => setNewTableNum(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="capacity">Seating Capacity</Label>
+              <Input
+                id="capacity"
+                type="number"
+                min="1"
+                max="50"
+                value={newCapacity}
+                onChange={(e) => setNewCapacity(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="section">Floor / Section</Label>
+              <Input
+                id="section"
+                placeholder="e.g. Indoor, Outdoor, VIP, Terrace"
+                value={newSection}
+                onChange={(e) => setNewSection(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setIsAddOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={addLoading}>
+                {addLoading && <Loader2 className="mr-1.5 size-4 animate-spin" />}
+                Create Table
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Stats row (interactive filters) */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {statsItems.map((s) => {
+          const isSelected = statusFilter === s.key
+          return (
+            <Card
+              key={s.key}
+              onClick={() => setStatusFilter(isSelected ? 'all' : s.key)}
+              className={cn(
+                'cursor-pointer transition-all hover:scale-[1.01]',
+                isSelected
+                  ? 'ring-2 ring-primary border-primary bg-primary/10'
+                  : s.key === 'occupied'
+                  ? 'border-primary/30 bg-primary/5'
+                  : ''
+              )}
+            >
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-muted-foreground">{s.label}</p>
+                    <p className="text-2xl font-bold mt-0.5">
+                      {loading ? (
+                        <span className="inline-block size-6 animate-pulse bg-muted rounded" />
+                      ) : (
+                        counts[s.key as keyof typeof counts] ?? 0
+                      )}
+                    </p>
+                  </div>
+                  <span className={cn('size-3 rounded-full', statusConfig[s.key].dot)} />
+                </div>
+              </CardContent>
+            </Card>
+          )
+        })}
       </div>
 
       {/* Section tabs + actions */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <Tabs value={section} onValueChange={(v) => setSection(v as Section)}>
+        <Tabs value={section} onValueChange={(v) => setSection(v)}>
           <TabsList>
             <TabsTrigger value="all">All ({tables.length})</TabsTrigger>
-            <TabsTrigger value="indoor">Indoor</TabsTrigger>
-            <TabsTrigger value="outdoor">Outdoor</TabsTrigger>
-            <TabsTrigger value="vip">VIP</TabsTrigger>
+            {dynamicSections.map((sec) => (
+              <TabsTrigger key={sec} value={sec} className="capitalize">
+                {sec}
+              </TabsTrigger>
+            ))}
           </TabsList>
         </Tabs>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="h-8 gap-1.5">
-            <Filter className="size-3.5" />
-            Filter
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Quick Search */}
+          <div className="relative w-36 sm:w-48">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search table..."
+              className="pl-8 h-8 text-xs"
+            />
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleOpenQR(tables[0]?.tableNumber || 1)}
+            className="h-8 gap-1.5 border-primary/40 text-primary hover:bg-primary/10 shadow-sm"
+          >
+            <QrCode className="size-3.5" />
+            Table QR Codes
           </Button>
-          <Button size="sm" className="h-8 gap-1.5">
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchTables()}
+            disabled={loading}
+            className="h-8 gap-1.5"
+            title="Refresh tables"
+          >
+            <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+            Refresh
+          </Button>
+
+          <Button size="sm" onClick={() => setIsAddOpen(true)} className="h-8 gap-1.5">
             <Plus className="size-3.5" />
             Add Table
           </Button>
         </div>
       </div>
 
-      {/* Tables grid */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
-        {filtered.map((table) => (
-          <TableCard key={table.id} table={table} />
-        ))}
-      </div>
+      {/* Error state */}
+      {error && (
+        <div className="flex items-center justify-between rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="size-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => fetchTables()} className="h-7 text-xs">
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {/* Loading state skeleton */}
+      {loading && tables.length === 0 ? (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <div key={i} className="h-44 rounded-2xl border border-border bg-card/50 p-4 animate-pulse flex flex-col justify-between">
+              <div className="space-y-3">
+                <div className="flex justify-between">
+                  <div className="h-4 w-12 bg-muted rounded" />
+                  <div className="h-4 w-16 bg-muted rounded" />
+                </div>
+                <div className="h-3 w-20 bg-muted rounded" />
+              </div>
+              <div className="h-6 w-full bg-muted rounded" />
+            </div>
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed py-16 text-center">
+          <Users className="size-8 text-muted-foreground mb-2" />
+          <p className="text-base font-semibold">No tables found</p>
+          <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+            {search || section !== 'all' || statusFilter !== 'all'
+              ? 'Try resetting the section or status filters above.'
+              : 'Add your first table to start managing floor map occupancy.'}
+          </p>
+          {(search || section !== 'all' || statusFilter !== 'all') && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setSection('all')
+                setStatusFilter('all')
+                setSearch('')
+              }}
+              className="mt-4 text-xs h-8"
+            >
+              Reset Filters
+            </Button>
+          )}
+        </div>
+      ) : (
+        /* Tables grid */
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+          {filtered.map((table) => (
+            <TableCard
+              key={table.id}
+              table={table}
+              onGenerateQR={handleOpenQR}
+              onUpdateStatus={handleUpdateStatus}
+            />
+          ))}
+        </div>
+      )}
     </main>
   )
 }

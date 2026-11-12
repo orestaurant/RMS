@@ -10,7 +10,6 @@ import {
   CalendarDays,
   ChefHat,
   ShoppingCart,
-  BarChart3,
   Package,
   Settings,
   Zap,
@@ -83,7 +82,7 @@ export function AppSidebar() {
   // Dynamic user data
   const userName = auth?.name || (isCustomer ? 'Customer' : 'Rajesh')
   const userEmail = auth?.email || (isCustomer ? 'customer@example.com' : 'hexerve@gmail.com')
-  const userRole = auth?.role || (isCustomer ? 'CUSTOMER' : 'ADMIN')
+  const userRole = auth?.role || (isCustomer ? 'CUSTOMER' : 'SUPER_ADMIN')
   const initials =
     userName
       .split(' ')
@@ -93,7 +92,7 @@ export function AppSidebar() {
       .toUpperCase() || (isCustomer ? 'C' : 'R')
 
   // Dynamic navigation groups:
-  // For Customers: Settings and Analytics are EXCLUDED. All other options are included.
+  // For Customers: Settings is EXCLUDED. All other options are included.
   const navGroups = [
     {
       label: 'OPERATIONS',
@@ -138,7 +137,7 @@ export function AppSidebar() {
           icon: ChefHat,
           badge: counts?.kitchenLive ? 'Live' : undefined,
         },
-        { label: 'Menu Management', href: '/menu', icon: UtensilsCrossed },
+        { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
         {
           label: 'Inventory',
           href: '/inventory',
@@ -152,7 +151,6 @@ export function AppSidebar() {
           {
             label: 'BUSINESS',
             items: [
-              { label: 'Analytics', href: '/analytics', icon: BarChart3 },
               { label: 'Staff & Roles', href: '/staff', icon: UserCheck },
               { label: 'Settings', href: '/dashboard/settings', icon: Settings },
             ],
@@ -169,19 +167,19 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               size="lg"
-              tooltip="RMS"
-              render={<Link href={isCustomer ? '/customer' : '/dashboard'} />}
+              tooltip="Go to Home Page"
+              render={<Link href="/" />}
               className="hover:bg-sidebar-accent/50 w-full"
             >
               <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shrink-0 shadow-sm">
-                <Building2 className="size-4" />
+                <UtensilsCrossed className="size-4" />
               </div>
               <div className="flex flex-col gap-0.5 leading-none min-w-0 text-left">
                 <span className="font-bold text-sm tracking-tight">
-                  RMS
+                  Resto<span className="text-orange-500">Sphere</span>
                 </span>
                 <span className="text-xs text-muted-foreground truncate">
-                  {isCustomer ? 'Customer Portal' : 'Restaurant Management'}
+                  {isCustomer ? 'Customer Portal' : 'Restaurant OS'}
                 </span>
               </div>
             </SidebarMenuButton>
@@ -282,6 +280,8 @@ export function AppSidebar() {
                         "text-[10px] uppercase font-mono tracking-wider",
                         isCustomer
                           ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
+                          : userRole === 'SUPER_ADMIN' || userRole === 'super_admin'
+                          ? "border-indigo-500/30 text-indigo-400 bg-indigo-500/10"
                           : "border-primary/30 text-primary bg-primary/5"
                       )}
                     >

@@ -115,29 +115,6 @@ export function DashboardOverview() {
               : 'Connecting to live restaurant metrics...'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge
-            variant="outline"
-            className={cn(
-              'gap-1.5 px-3 py-1 font-medium',
-              isOpen
-                ? 'text-success border-success/30 bg-success/5'
-                : 'text-muted-foreground border-border bg-muted/20'
-            )}
-          >
-            <span
-              className={cn(
-                'size-1.5 rounded-full',
-                isOpen ? 'bg-success animate-pulse' : 'bg-muted-foreground'
-              )}
-            />
-            {isOpen ? 'Restaurant Open' : 'Restaurant Closed'}
-          </Badge>
-          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs">
-            <Clock className="size-3.5" />
-            <span>{isOpen ? `Close at ${closingTime}` : 'Opens at 11 AM'}</span>
-          </Button>
-        </div>
       </div>
 
       {/* ── Metric Summary Cards ──────────────────────────── */}
@@ -209,7 +186,7 @@ export function DashboardOverview() {
                   <CardDescription className="text-xs">By order count</CardDescription>
                 </div>
                 <Link
-                  href="/menu"
+                  href="/admin-menu"
                   className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
                 >
                   View all <ArrowRight className="size-3" />

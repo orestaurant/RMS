@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getCustomerSession } from '@/lib/customer-auth'
+import { registerActiveLiveOrder, getKitchenStation } from '@/lib/kds-utils'
 
 /**
  * GET /api/customer/orders
@@ -189,6 +190,26 @@ export async function POST(request: NextRequest) {
       },
     }).catch((err) => {
       console.warn('Failed to increment customer stats:', err)
+    })
+
+    // 5. Register directly in KDS live order queue
+    registerActiveLiveOrder({
+      id: order.orderNumber,
+      fullId: order.id,
+      tableNumber: 'Table 1',
+      source: 'qr_order',
+      waiter: 'Online',
+      customerName: (order.customer as any)?.name || 'Customer',
+      status: 'pending',
+      priority: 'normal',
+      createdAt: order.createdAt.toISOString(),
+      items: (order.items || []).map((i: any) => ({
+        id: i.id,
+        name: i.itemName,
+        quantity: i.quantity,
+        station: getKitchenStation(i.itemName),
+        completed: false,
+      })),
     })
 
     return NextResponse.json({

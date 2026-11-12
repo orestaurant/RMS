@@ -1,75 +1,134 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import {
-  Search, Plus, Minus, Trash2, ChevronRight, CreditCard,
-  Banknote, Smartphone, CheckCircle2, X, Tag,
+  Search,
+  Plus,
+  Minus,
+  ChevronRight,
+  CreditCard,
+  Banknote,
+  Smartphone,
+  CheckCircle2,
+  X,
+  Tag,
+  RefreshCw,
+  UtensilsCrossed,
+  Package,
+  QrCode,
 } from 'lucide-react'
+import { QRCodeSVG } from '@/lib/qr-code'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
 } from '@/components/ui/dialog'
-import { menuItems, menuCategories, tables, type MenuItem, type PaymentMethod } from '@/lib/mock-data'
 import { usePOSStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
+
+export type PaymentMethod = 'cash' | 'card' | 'upi'
+
+export interface POSMenuItem {
+  id: string
+  name: string
+  description?: string
+  category: string
+  categoryName?: string
+  categoryId?: string
+  price: number
+  image?: string
+  isVeg: boolean
+  isAvailable: boolean
+  prepTime: number
+  stock?: number | null
+  unit?: string | null
+  tags?: string[]
+  source?: 'menu' | 'inventory'
+}
+
+export interface POSTable {
+  id: string
+  number: string | number
+  status: string
+  capacity?: number
+}
 
 const paymentMethods: { id: PaymentMethod; label: string; icon: React.ElementType }[] = [
   { id: 'cash', label: 'Cash', icon: Banknote },
   { id: 'card', label: 'Card', icon: CreditCard },
-  { id: 'upi', label: 'UPI', icon: Smartphone },
-  { id: 'razorpay', label: 'Razorpay', icon: CreditCard },
-  { id: 'paytm', label: 'Paytm', icon: Smartphone },
+  { id: 'upi', label: 'UPI / QR', icon: QrCode },
 ]
 
-function MenuItemCard({ item }: { item: MenuItem }) {
+function MenuItemCard({ item }: { item: POSMenuItem }) {
   const { addItem } = usePOSStore()
+
+  const isOutOfStock = !item.isAvailable || (item.stock !== null && item.stock !== undefined && item.stock <= 0)
 
   return (
     <button
       className={cn(
         'group relative flex flex-col rounded-xl border border-border bg-card p-3 text-left',
         'touch-active transition-all duration-150 hover:border-primary/40 hover:bg-accent/50 hover:shadow-sm',
-        !item.isAvailable && 'opacity-40 pointer-events-none'
+        isOutOfStock && 'opacity-40 pointer-events-none'
       )}
-      onClick={() => addItem({
-        menuItemId: item.id,
-        name: item.name,
-        quantity: 1,
-        price: item.price,
-      })}
+      onClick={() =>
+        addItem({
+          menuItemId: item.id,
+          name: item.name,
+          quantity: 1,
+          price: item.price,
+        })
+      }
     >
       {/* Veg / Non-veg indicator */}
-      <div className={cn(
-        'absolute top-2.5 right-2.5 size-3 rounded-sm border-2',
-        item.isVeg ? 'border-success' : 'border-destructive'
-      )}>
-        <div className={cn(
-          'size-1.5 rounded-full m-[1px]',
-          item.isVeg ? 'bg-success' : 'bg-destructive'
-        )} />
+      <div
+        className={cn(
+          'absolute top-2.5 right-2.5 size-3 rounded-sm border-2',
+          item.isVeg ? 'border-success' : 'border-destructive'
+        )}
+      >
+        <div
+          className={cn(
+            'size-1.5 rounded-full m-[1px]',
+            item.isVeg ? 'bg-success' : 'bg-destructive'
+          )}
+        />
       </div>
 
       <div className="flex flex-col gap-1.5 pr-5">
-        <span className="text-xs font-semibold leading-tight">{item.name}</span>
+        <span className="text-xs font-semibold leading-tight line-clamp-1">{item.name}</span>
         <span className="text-lg font-bold text-primary">₹{item.price}</span>
         <div className="flex items-center gap-1 flex-wrap">
-          <span className="text-[10px] text-muted-foreground">{item.prepTime}m</span>
+          {item.prepTime ? (
+            <span className="text-[10px] text-muted-foreground">{item.prepTime}m</span>
+          ) : null}
           {item.tags?.slice(0, 1).map((tag) => (
             <Badge key={tag} variant="secondary" className="text-[9px] h-3.5 px-1 py-0">
               {tag}
             </Badge>
           ))}
+          {isOutOfStock && (
+            <Badge variant="destructive" className="text-[9px] h-3.5 px-1 py-0">
+              Out of stock
+            </Badge>
+          )}
         </div>
       </div>
 
       {/* Add button overlay */}
-      <div className="absolute bottom-2.5 right-2.5 flex size-6 items-center justify-center rounded-full bg-primary/10 text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-        <Plus className="size-3.5" />
-      </div>
+      {!isOutOfStock && (
+        <div className="absolute bottom-2.5 right-2.5 flex size-6 items-center justify-center rounded-full bg-primary/10 text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+          <Plus className="size-3.5" />
+        </div>
+      )}
     </button>
   )
 }
@@ -77,21 +136,77 @@ function MenuItemCard({ item }: { item: MenuItem }) {
 function PaymentDialog({
   open,
   onClose,
+  tables,
 }: {
   open: boolean
   onClose: () => void
+  tables: POSTable[]
 }) {
   const { cartItems, paymentMethod, setPaymentMethod, getTotal, clearCart, selectedTableId } = usePOSStore()
   const [paid, setPaid] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [upiMode, setUpiMode] = useState<'qr' | 'id'>('qr')
+  const [upiIdInput, setUpiIdInput] = useState('')
+  const [upiRequestSent, setUpiRequestSent] = useState(false)
   const total = getTotal()
 
-  const handleConfirm = () => {
-    setPaid(true)
-    setTimeout(() => {
-      clearCart()
-      setPaid(false)
-      onClose()
-    }, 2000)
+  const handleConfirm = async () => {
+    try {
+      setSubmitting(true)
+      const tableObj = tables.find((t) => t.id === selectedTableId)
+      const tableNum = tableObj ? String(tableObj.number) : 'Takeaway'
+
+      // 1. Submit real Order to backend
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tableNumber: tableNum,
+          tableId: tableObj?.id || null,
+          isDineIn: !!selectedTableId,
+          source: 'POS',
+          customerName: 'POS Guest',
+          requestedStatus: 'confirmed',
+          items: cartItems.map((item) => ({
+            menuItemId: item.menuItemId,
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price,
+          })),
+        }),
+      })
+
+      // Fallback KDS ticket forward if needed
+      if (!res.ok) {
+        await fetch('/api/kds/tickets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: `ORD-POS-${Date.now().toString().slice(-4)}`,
+            tableNumber: tableNum.startsWith('Table') ? tableNum : `Table ${tableNum}`,
+            source: 'dine_in',
+            waiter: 'POS Staff',
+            customerName: 'POS Guest',
+            status: 'accepted',
+            priority: 'normal',
+            items: cartItems.map((item) => ({
+              name: item.name,
+              quantity: item.quantity,
+            })),
+          }),
+        }).catch(() => null)
+      }
+    } catch (err) {
+      console.warn('POS order forwarding error:', err)
+    } finally {
+      setSubmitting(false)
+      setPaid(true)
+      setTimeout(() => {
+        clearCart()
+        setPaid(false)
+        onClose()
+      }, 1800)
+    }
   }
 
   return (
@@ -110,7 +225,8 @@ function PaymentDialog({
             </div>
             <div className="text-center">
               <p className="text-xl font-bold">₹{total.toLocaleString('en-IN')}</p>
-              <p className="text-sm text-muted-foreground mt-1">Payment received via {paymentMethod}</p>
+              <p className="text-sm text-muted-foreground mt-1">Payment received via {paymentMethod.toUpperCase()}</p>
+              <p className="text-xs text-primary font-medium mt-2">Order sent to Kitchen Display System</p>
             </div>
           </div>
         ) : (
@@ -118,22 +234,22 @@ function PaymentDialog({
             {/* Order summary */}
             <div className="rounded-xl bg-muted/50 p-4">
               <p className="text-xs font-medium text-muted-foreground mb-2">ORDER SUMMARY</p>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
                 {cartItems.map((item) => (
                   <div key={item.id} className="flex items-center justify-between text-sm">
-                    <span>{item.quantity}× {item.name}</span>
-                    <span className="font-medium">₹{(item.price * item.quantity).toLocaleString('en-IN')}</span>
+                    <span className="truncate pr-2">{item.quantity}× {item.name}</span>
+                    <span className="font-medium shrink-0">₹{(item.price * item.quantity).toLocaleString('en-IN')}</span>
                   </div>
                 ))}
               </div>
               <Separator className="my-2.5" />
               <div className="flex items-center justify-between font-bold">
-                <span>Total</span>
-                <span className="text-lg">₹{total.toLocaleString('en-IN')}</span>
+                <span>Total Amount</span>
+                <span className="text-lg text-primary">₹{total.toLocaleString('en-IN')}</span>
               </div>
             </div>
 
-            {/* Payment methods */}
+            {/* Payment methods: Cash, Card, UPI */}
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2.5">PAYMENT METHOD</p>
               <div className="grid grid-cols-3 gap-2">
@@ -156,9 +272,112 @@ function PaymentDialog({
               </div>
             </div>
 
-            <Button size="lg" className="w-full h-12 text-base font-semibold" onClick={handleConfirm}>
-              Confirm ₹{total.toLocaleString('en-IN')}
-              <ChevronRight className="size-4" />
+            {/* UPI QR Scanner & UPI ID section */}
+            {paymentMethod === 'upi' && (
+              <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 flex flex-col gap-3">
+                {/* Mode Selector */}
+                <div className="grid grid-cols-2 gap-1.5 p-1 bg-muted/60 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setUpiMode('qr')}
+                    className={cn(
+                      'flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-all',
+                      upiMode === 'qr'
+                        ? 'bg-background text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <QrCode className="size-3.5" />
+                    <span>Scan QR Code</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUpiMode('id')}
+                    className={cn(
+                      'flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-all',
+                      upiMode === 'id'
+                        ? 'bg-background text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <Smartphone className="size-3.5" />
+                    <span>Pay via UPI ID</span>
+                  </button>
+                </div>
+
+                {/* Tab 1: QR Code Scanner */}
+                {upiMode === 'qr' ? (
+                  <div className="flex flex-col items-center justify-center gap-2 py-1 text-center">
+                    <div className="p-3 bg-white rounded-xl shadow-sm border border-border">
+                      <QRCodeSVG
+                        value={`upi://pay?pa=restaurantos@upi&pn=RestaurantOS&am=${total}&cu=INR`}
+                        size={140}
+                        className="mx-auto"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">
+                        Scan with GPay, PhonePe, Paytm, or BHIM
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 font-mono">
+                        UPI: <span className="text-primary font-bold">restaurantos@upi</span> • ₹{total.toLocaleString('en-IN')}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  /* Tab 2: UPI ID */
+                  <div className="flex flex-col gap-2 py-1">
+                    <label className="text-xs font-medium text-muted-foreground">
+                      Customer UPI ID
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={upiIdInput}
+                        onChange={(e) => {
+                          setUpiIdInput(e.target.value)
+                          setUpiRequestSent(false)
+                        }}
+                        placeholder="e.g. 9876543210@upi or name@okhdfcbank"
+                        className="h-9 text-xs"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!upiIdInput.includes('@')}
+                        onClick={() => setUpiRequestSent(true)}
+                        className="h-9 text-xs shrink-0"
+                      >
+                        Request
+                      </Button>
+                    </div>
+                    {upiRequestSent ? (
+                      <div className="flex items-center gap-1.5 text-xs text-success bg-success/10 px-2.5 py-1.5 rounded-lg border border-success/30">
+                        <CheckCircle2 className="size-3.5 shrink-0" />
+                        <span>Payment collect request sent to {upiIdInput}</span>
+                      </div>
+                    ) : (
+                      <p className="text-[10px] text-muted-foreground">
+                        Customer will receive a collect request notification on their UPI app.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <Button
+              size="lg"
+              className="w-full h-12 text-base font-semibold"
+              onClick={handleConfirm}
+              disabled={submitting}
+            >
+              {submitting
+                ? 'Processing Order...'
+                : paymentMethod === 'upi'
+                ? `Confirm UPI Payment ₹${total.toLocaleString('en-IN')}`
+                : `Confirm ₹${total.toLocaleString('en-IN')}`}
+              <ChevronRight className="size-4 ml-1" />
             </Button>
           </div>
         )}
@@ -168,19 +387,81 @@ function PaymentDialog({
 }
 
 export function POSTerminal() {
+  const [menuItems, setMenuItems] = useState<POSMenuItem[]>([])
+  const [categories, setCategories] = useState<{ id: string; label: string }[]>([
+    { id: 'all', label: 'All Items' },
+  ])
+  const [tables, setTables] = useState<POSTable[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [activeCategory, setActiveCategory] = useState('all')
   const [search, setSearch] = useState('')
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [discountInput, setDiscountInput] = useState('')
 
   const {
-    cartItems, selectedTableId, setSelectedTable,
-    updateQuantity, removeItem, setDiscount, discount,
-    getSubtotal, getTax, getTotal,
+    cartItems,
+    selectedTableId,
+    setSelectedTable,
+    updateQuantity,
+    removeItem,
+    setDiscount,
+    discount,
+    getSubtotal,
+    getTax,
+    getTotal,
   } = usePOSStore()
 
+  // Fetch real items from Menu & Inventory APIs
+  const fetchPOSData = useCallback(async (isSilent = false) => {
+    try {
+      if (!isSilent) setLoading(true)
+      else setRefreshing(true)
+
+      const [menuRes, tablesRes] = await Promise.all([
+        fetch('/api/pos/menu'),
+        fetch('/api/tables'),
+      ])
+
+      const menuJson = await menuRes.json().catch(() => null)
+      const tablesJson = await tablesRes.json().catch(() => null)
+
+      if (menuJson && menuJson.success && menuJson.data) {
+        setMenuItems(menuJson.data.items || [])
+        if (menuJson.data.categories && menuJson.data.categories.length > 0) {
+          setCategories(menuJson.data.categories)
+        }
+      }
+
+      if (tablesJson && tablesJson.success && tablesJson.data) {
+        const rawTables = Array.isArray(tablesJson.data)
+          ? tablesJson.data
+          : tablesJson.data.tables || []
+        const mappedTables: POSTable[] = rawTables.map((t: any) => ({
+          id: t.id,
+          number: t.tableNumber || t.number || '1',
+          status: (t.status || 'available').toLowerCase(),
+          capacity: t.capacity,
+        }))
+        setTables(mappedTables)
+      }
+    } catch (err) {
+      console.error('Failed to load real POS data:', err)
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchPOSData()
+  }, [fetchPOSData])
+
   const filtered = menuItems.filter((item) => {
-    const matchCat = activeCategory === 'all' || item.category === activeCategory
+    const matchCat =
+      activeCategory === 'all' ||
+      item.category === activeCategory ||
+      item.categoryName === activeCategory
     const matchSearch = item.name.toLowerCase().includes(search.toLowerCase())
     return matchCat && matchSearch
   })
@@ -189,34 +470,51 @@ export function POSTerminal() {
   const tax = getTax()
   const total = getTotal()
 
+  const selectedTableObj = tables.find((t) => t.id === selectedTableId)
+
   return (
     <>
-      <PaymentDialog open={paymentOpen} onClose={() => setPaymentOpen(false)} />
+      <PaymentDialog
+        open={paymentOpen}
+        onClose={() => setPaymentOpen(false)}
+        tables={tables}
+      />
 
       <div className="flex h-[calc(100vh-56px)] overflow-hidden">
-        {/* ── Left: Menu browser ────────────────────────── */}
+        {/* ── Left: Menu / Inventory browser ────────────── */}
         <div className="flex flex-1 flex-col overflow-hidden border-r border-border">
-          {/* Table selector + search bar */}
+          {/* Table selector + search bar + refresh */}
           <div className="flex items-center gap-3 border-b border-border bg-background/80 backdrop-blur-sm p-4">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Table:</span>
+              <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+                Table:
+              </span>
               <div className="flex flex-wrap gap-1.5 max-w-xs">
-                {tables.filter((t) => t.status === 'available' || t.status === 'occupied').slice(0, 8).map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setSelectedTable(selectedTableId === t.id ? null : t.id)}
-                    className={cn(
-                      'flex h-8 min-w-[36px] items-center justify-center rounded-lg border px-2 text-xs font-semibold transition-all touch-active',
-                      selectedTableId === t.id
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : t.status === 'occupied'
-                        ? 'border-primary/30 bg-primary/10 text-primary'
-                        : 'border-border bg-card text-foreground hover:border-primary/40'
-                    )}
-                  >
-                    {t.number}
-                  </button>
-                ))}
+                {tables.length > 0 ? (
+                  tables
+                    .filter((t) => t.status === 'available' || t.status === 'occupied')
+                    .slice(0, 8)
+                    .map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => setSelectedTable(selectedTableId === t.id ? null : t.id)}
+                        className={cn(
+                          'flex h-8 min-w-[36px] items-center justify-center rounded-lg border px-2 text-xs font-semibold transition-all touch-active',
+                          selectedTableId === t.id
+                            ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                            : t.status === 'occupied'
+                            ? 'border-primary/30 bg-primary/10 text-primary'
+                            : 'border-border bg-card text-foreground hover:border-primary/40'
+                        )}
+                      >
+                        {t.number}
+                      </button>
+                    ))
+                ) : (
+                  <Badge variant="outline" className="text-xs py-1">
+                    Takeaway Mode
+                  </Badge>
+                )}
               </div>
             </div>
 
@@ -225,15 +523,26 @@ export function POSTerminal() {
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search menu..."
+                placeholder="Search real menu / inventory..."
                 className="pl-8 h-9 text-sm"
               />
             </div>
+
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={() => fetchPOSData(true)}
+              title="Refresh inventory & menu"
+              disabled={refreshing}
+            >
+              <RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />
+            </Button>
           </div>
 
           {/* Category tabs */}
           <div className="flex items-center gap-1.5 overflow-x-auto px-4 py-2.5 border-b border-border no-scrollbar shrink-0">
-            {menuCategories.map((cat) => (
+            {categories.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => setActiveCategory(cat.id)}
@@ -249,13 +558,51 @@ export function POSTerminal() {
             ))}
           </div>
 
-          {/* Menu grid */}
+          {/* Menu / Inventory grid */}
           <ScrollArea className="flex-1">
-            <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4">
-              {filtered.map((item) => (
-                <MenuItemCard key={item.id} item={item} />
-              ))}
-            </div>
+            {loading ? (
+              <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4">
+                {Array.from({ length: 8 }).map((_, idx) => (
+                  <div key={idx} className="h-28 rounded-xl border border-border bg-card/60 p-3 flex flex-col justify-between">
+                    <Skeleton className="h-4 w-3/4 rounded" />
+                    <Skeleton className="h-6 w-1/2 rounded" />
+                    <Skeleton className="h-3 w-1/3 rounded" />
+                  </div>
+                ))}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center p-12 text-center my-auto min-h-[350px]">
+                <div className="flex size-14 items-center justify-center rounded-2xl bg-muted mb-3">
+                  <UtensilsCrossed className="size-6 text-muted-foreground" />
+                </div>
+                <p className="text-base font-semibold">No Items in Menu or Inventory</p>
+                <p className="text-xs text-muted-foreground max-w-sm mt-1">
+                  {search
+                    ? `No matching items found for "${search}".`
+                    : 'Abhi tak koi items add nahi hue hain. Inventory ya Menu management se naye items add karein taaki yahan show ho sakein.'}
+                </p>
+                <div className="flex gap-2.5 mt-5">
+                  <Link href="/inventory">
+                    <Button size="sm" variant="default">
+                      <Package className="size-4 mr-1.5" />
+                      Add to Inventory
+                    </Button>
+                  </Link>
+                  <Link href="/admin-menu">
+                    <Button size="sm" variant="outline">
+                      <Plus className="size-4 mr-1.5" />
+                      Add Menu Item
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4">
+                {filtered.map((item) => (
+                  <MenuItemCard key={item.id} item={item} />
+                ))}
+              </div>
+            )}
           </ScrollArea>
         </div>
 
@@ -265,9 +612,13 @@ export function POSTerminal() {
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold">Cart</span>
-              {selectedTableId && (
+              {selectedTableObj ? (
                 <Badge variant="outline" className="text-xs border-primary/40 text-primary">
-                  T{tables.find((t) => t.id === selectedTableId)?.number}
+                  T{selectedTableObj.number}
+                </Badge>
+              ) : (
+                <Badge variant="secondary" className="text-xs">
+                  Takeaway
                 </Badge>
               )}
             </div>
@@ -286,7 +637,7 @@ export function POSTerminal() {
                 <div>
                   <p className="text-sm font-medium">Cart is empty</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Tap menu items to add them
+                    Tap dishes to add them to current order
                   </p>
                 </div>
               </div>

@@ -158,7 +158,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       : 0
 
     // ─── 7. Outlet Details & Status ──────────────────────────
-    const restaurantName = restaurant?.name || 'Spice Garden'
+    const restaurantName = restaurant?.name || 'RestoSphere'
     const branchName = branch?.name || 'Mumbai Central'
     const fullName = `${restaurantName} — ${branchName}`
 

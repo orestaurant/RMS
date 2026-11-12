@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "eslint .",
     "seed": "prisma db seed"
@@ -16,6 +17,7 @@
     "@base-ui/react": "^1.5.0",
     "@prisma/client": "6.4.1",
     "@types/bcryptjs": "^2.4.6",
+    "@types/qrcode": "^1.5.6",
     "@vercel/analytics": "1.6.1",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
@@ -27,6 +29,7 @@
     "lucide-react": "^1.16.0",
     "next": "16.2.6",
     "prisma": "6.4.1",
+    "qrcode": "^1.5.4",
     "react": "^19",
     "react-dom": "^19",
     "recharts": "3.8.0",

@@ -10,6 +10,7 @@ const ALLOWED_ROLES = [
   'INVENTORY_MANAGER',
   'VENDOR',
   'ADMIN',
+  'SUPER_ADMIN',
   'CUSTOMER',
 ] as const
 
@@ -75,10 +76,47 @@ export async function PATCH(
       )
     }
 
-    // RBAC Safety Rule: Prevent self-demotion or lockout of active Admin
+    // RBAC Safety Rule: Prevent self-demotion or lockout of active Admin / Super Admin
     const isSelf = auth.userId === id
     const cleanRole = role ? String(role).toUpperCase() : undefined
     const cleanStatus = status ? String(status).toLowerCase() : undefined
+
+    const targetRoleUpper = String(targetUser.role).toUpperCase()
+    const isTargetSuperAdmin = targetRoleUpper === 'SUPER_ADMIN' || targetRoleUpper === 'SUPERADMIN' || targetUser.role === 'super_admin'
+    const isTargetAdmin = targetRoleUpper === 'ADMIN'
+
+    // Hierarchy Guard: Non-superadmin cannot modify a Super Admin
+    if (isTargetSuperAdmin && !auth.isSuperAdmin) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Forbidden: Only Super Admin can modify a Super Admin account.',
+        },
+        { status: 403 }
+      )
+    }
+
+    // Hierarchy Guard: Regular Admin cannot modify or reassign another Admin
+    if (isTargetAdmin && !auth.isSuperAdmin && !isSelf) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Forbidden: Only Super Admin can modify or reassign Admin accounts.',
+        },
+        { status: 403 }
+      )
+    }
+
+    // Hierarchy Guard: Only Super Admin can assign ADMIN or SUPER_ADMIN role
+    if ((cleanRole === 'ADMIN' || cleanRole === 'SUPER_ADMIN') && !auth.isSuperAdmin) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Forbidden: Only Super Admin can assign the Admin role. Operational Admins can assign staff roles.',
+        },
+        { status: 403 }
+      )
+    }
 
     if (isSelf) {
       if (cleanRole && cleanRole !== 'ADMIN' && cleanRole !== 'SUPER_ADMIN') {

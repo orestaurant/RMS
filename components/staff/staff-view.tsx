@@ -24,6 +24,7 @@ import {
   Phone,
   Mail,
   Calendar,
+  Crown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -68,27 +69,59 @@ export interface UserStats {
   active: number
   inactive: number
   roles: {
+    SUPER_ADMIN: number
+    ADMIN: number
     WAITER: number
     COUNTER_MANAGER: number
     CHEF: number
     INVENTORY_MANAGER: number
     VENDOR: number
-    ADMIN: number
     CUSTOMER: number
   }
 }
 
 const SUPPORTED_ROLES = [
-  { value: 'WAITER', label: 'Waiter', icon: UserCheck, color: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' },
-  { value: 'COUNTER_MANAGER', label: 'Counter Manager', icon: ShoppingBag, color: 'bg-blue-500/10 text-blue-500 border-blue-500/20' },
-  { value: 'CHEF', label: 'Chef', icon: ChefHat, color: 'bg-amber-500/10 text-amber-500 border-amber-500/20' },
-  { value: 'INVENTORY_MANAGER', label: 'Inventory Manager', icon: Boxes, color: 'bg-purple-500/10 text-purple-500 border-purple-500/20' },
-  { value: 'VENDOR', label: 'Vendor', icon: Truck, color: 'bg-orange-500/10 text-orange-500 border-orange-500/20' },
-  { value: 'ADMIN', label: 'Administrator', icon: Shield, color: 'bg-rose-500/10 text-rose-500 border-rose-500/20' },
+  { value: 'SUPER_ADMIN', label: 'Super Admin', icon: Crown, color: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' },
+  { value: 'ADMIN', label: 'Admin', icon: Shield, color: 'bg-rose-500/10 text-rose-400 border-rose-500/30' },
+  { value: 'WAITER', label: 'Waiter', icon: UserCheck, color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
+  { value: 'COUNTER_MANAGER', label: 'Counter Manager', icon: ShoppingBag, color: 'bg-blue-500/10 text-blue-400 border-blue-500/30' },
+  { value: 'CHEF', label: 'Chef', icon: ChefHat, color: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  { value: 'INVENTORY_MANAGER', label: 'Inventory Manager', icon: Boxes, color: 'bg-purple-500/10 text-purple-400 border-purple-500/30' },
+  { value: 'VENDOR', label: 'Vendor', icon: Truck, color: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
 ] as const
 
 export function StaffView() {
   const { auth } = useAuthContext()
+
+  // Role permissions: Super Admin vs Admin
+  const currentRoleUpper = String(auth?.role || '').toUpperCase()
+  const isSuperAdmin =
+    currentRoleUpper === 'SUPER_ADMIN' ||
+    currentRoleUpper === 'SUPERADMIN' ||
+    currentRoleUpper === 'super_admin' ||
+    auth?.email === 'hexerve@gmail.com'
+
+  // Roles available for assignment:
+  // - Super Admin can assign ADMIN, SUPER_ADMIN, and all operational staff roles
+  // - Operational Admin can assign all operational roles (WAITER, COUNTER_MANAGER, CHEF, INVENTORY_MANAGER, VENDOR)
+  const assignableRoles = isSuperAdmin
+    ? [
+        { value: 'ADMIN', label: 'Admin' },
+        { value: 'WAITER', label: 'Waiter' },
+        { value: 'COUNTER_MANAGER', label: 'Counter Manager' },
+        { value: 'CHEF', label: 'Chef' },
+        { value: 'INVENTORY_MANAGER', label: 'Inventory Manager' },
+        { value: 'VENDOR', label: 'Vendor' },
+        { value: 'SUPER_ADMIN', label: 'Super Admin' },
+      ]
+    : [
+        { value: 'WAITER', label: 'Waiter' },
+        { value: 'COUNTER_MANAGER', label: 'Counter Manager' },
+        { value: 'CHEF', label: 'Chef' },
+        { value: 'INVENTORY_MANAGER', label: 'Inventory Manager' },
+        { value: 'VENDOR', label: 'Vendor' },
+      ]
+
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [stats, setStats] = useState<UserStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -118,9 +151,16 @@ export function StaffView() {
     email: '',
     phone: '',
     password: '',
-    role: 'WAITER',
+    role: isSuperAdmin ? 'ADMIN' : 'WAITER',
     status: 'active' as 'active' | 'inactive',
   })
+
+  // Update default creation role whenever isSuperAdmin resolves
+  useEffect(() => {
+    if (isSuperAdmin) {
+      setCreateForm((prev) => ({ ...prev, role: prev.role === 'WAITER' ? 'ADMIN' : prev.role }))
+    }
+  }, [isSuperAdmin])
 
   // Show auto-dismissing feedback banner
   const triggerFeedback = (type: 'success' | 'error', message: string) => {
@@ -172,8 +212,23 @@ export function StaffView() {
     setPage(1)
   }
 
+  // Check if current user can modify target user
+  // Super Admin can modify anyone. Regular Admin can only modify operational staff (cannot modify Super Admin or Admin).
+  const canModifyUser = (user: ManagedUser) => {
+    const targetRole = String(user.role).toUpperCase()
+    if (isSuperAdmin) return true
+    if (targetRole === 'SUPER_ADMIN' || targetRole === 'SUPERADMIN' || targetRole === 'ADMIN') {
+      return false
+    }
+    return true
+  }
+
   // Open Edit Role modal
   const handleOpenEdit = (user: ManagedUser) => {
+    if (!canModifyUser(user)) {
+      triggerFeedback('error', 'Permission Denied: Only Super Admin can edit or reassign Admin accounts.')
+      return
+    }
     setEditUser(user)
     // Standardize role to uppercase matching target roles
     const normalizedRole = user.role.toUpperCase()
@@ -217,7 +272,12 @@ export function StaffView() {
   // Quick Status Toggle on table
   const handleQuickStatusToggle = async (user: ManagedUser) => {
     if (auth?.id === user.id && user.status === 'active') {
-      triggerFeedback('error', 'Cannot deactivate your own active Admin account (lockout prevention).')
+      triggerFeedback('error', 'Cannot deactivate your own active account (lockout prevention).')
+      return
+    }
+
+    if (!canModifyUser(user)) {
+      triggerFeedback('error', 'Permission Denied: Only Super Admin can change status of Admin accounts.')
       return
     }
 
@@ -360,9 +420,22 @@ export function StaffView() {
       {/* Header and Quick Action */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Staff & Role Management</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Manage operational roles (Waiter, Counter Manager, Chef, Inventory, Vendor) backed directly by PostgreSQL.
+          <div className="flex items-center gap-2.5">
+            <h2 className="text-2xl font-bold tracking-tight">Staff & Role Management</h2>
+            {isSuperAdmin ? (
+              <Badge className="bg-indigo-500/15 text-indigo-400 border-indigo-500/30 text-xs font-semibold gap-1.5 px-2.5 py-0.5">
+                <Crown className="size-3.5 text-indigo-400" /> Super Admin Console
+              </Badge>
+            ) : (
+              <Badge className="bg-rose-500/15 text-rose-400 border-rose-500/30 text-xs font-semibold gap-1.5 px-2.5 py-0.5">
+                <Shield className="size-3.5 text-rose-400" /> Admin Console
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            {isSuperAdmin
+              ? 'Super Admin Mode: Assign Admins, manage roles, and control all operational staff accounts.'
+              : 'Admin Mode: Assign and manage operational roles (Waiter, Counter Manager, Chef, Inventory Manager, Vendor).'}
           </p>
         </div>
         <div className="flex items-center gap-2.5">
@@ -385,21 +458,35 @@ export function StaffView() {
             className="gap-2 bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
           >
             <Plus className="size-4" />
-            Create Staff User
+            {isSuperAdmin ? 'Add Staff / Admin' : 'Add Staff User'}
           </Button>
         </div>
       </div>
 
       {/* Live Stats Overview */}
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-4 lg:grid-cols-6">
+      <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7">
         <Card className="p-4 border-border/60 bg-card/60 backdrop-blur-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium text-muted-foreground">Total Staff</p>
+              <p className="text-xs font-medium text-muted-foreground">Total Users</p>
               <p className="text-2xl font-bold mt-1">{stats ? stats.total : totalCount}</p>
             </div>
             <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
               <Users className="size-5" />
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-4 border-rose-500/30 bg-rose-500/5 backdrop-blur-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">Admins</p>
+              <p className="text-2xl font-bold text-rose-400 mt-1">
+                {(stats?.roles?.ADMIN ?? 0) + (stats?.roles?.SUPER_ADMIN ?? 0)}
+              </p>
+            </div>
+            <div className="p-2.5 rounded-lg bg-rose-500/10 text-rose-400">
+              <Shield className="size-5" />
             </div>
           </div>
         </Card>
@@ -449,7 +536,7 @@ export function StaffView() {
         <Card className="p-4 border-purple-500/30 bg-purple-500/5 backdrop-blur-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium text-muted-foreground">Inventory Mgrs</p>
+              <p className="text-xs font-medium text-muted-foreground">Inventory</p>
               <p className="text-2xl font-bold text-purple-400 mt-1">
                 {stats?.roles?.INVENTORY_MANAGER ?? 0}
               </p>
@@ -504,12 +591,13 @@ export function StaffView() {
               className="h-9 px-3 rounded-md bg-background/80 border border-input/60 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="ALL">All Roles</option>
+              <option value="SUPER_ADMIN">Super Admin</option>
+              <option value="ADMIN">Admin</option>
               <option value="WAITER">Waiter</option>
               <option value="COUNTER_MANAGER">Counter Manager</option>
               <option value="CHEF">Chef</option>
               <option value="INVENTORY_MANAGER">Inventory Manager</option>
               <option value="VENDOR">Vendor</option>
-              <option value="ADMIN">Administrator</option>
             </select>
 
             {/* Status Filter Dropdown */}
@@ -641,13 +729,20 @@ export function StaffView() {
                       <TableCell>
                         <button
                           onClick={() => handleQuickStatusToggle(user)}
-                          title={isSelf ? 'Cannot deactivate logged-in account' : 'Click to toggle status'}
+                          disabled={isSelf || !canModifyUser(user)}
+                          title={
+                            isSelf
+                              ? 'Cannot deactivate logged-in account'
+                              : !canModifyUser(user)
+                              ? 'Only Super Admin can change status of Admin accounts'
+                              : 'Click to toggle status'
+                          }
                           className={cn(
                             'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
                             user.status === 'active'
                               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
                               : 'bg-muted text-muted-foreground border-border hover:bg-muted/80',
-                            isSelf && 'cursor-not-allowed opacity-80'
+                            (isSelf || !canModifyUser(user)) && 'cursor-not-allowed opacity-60'
                           )}
                         >
                           <span
@@ -678,9 +773,20 @@ export function StaffView() {
                           variant="outline"
                           size="sm"
                           onClick={() => handleOpenEdit(user)}
-                          className="gap-1.5 text-xs h-8 border-border hover:bg-primary hover:text-primary-foreground transition-all"
+                          disabled={!canModifyUser(user)}
+                          title={
+                            !canModifyUser(user)
+                              ? 'Only Super Admin can modify Admin accounts'
+                              : 'Edit role & status'
+                          }
+                          className={cn(
+                            'gap-1.5 text-xs h-8 border-border transition-all',
+                            canModifyUser(user)
+                              ? 'hover:bg-primary hover:text-primary-foreground'
+                              : 'opacity-40 cursor-not-allowed'
+                          )}
                         >
-                          <Edit3 className="size-3.5" />
+                          {!canModifyUser(user) ? <Lock className="size-3.5" /> : <Edit3 className="size-3.5" />}
                           Edit Role
                         </Button>
                       </TableCell>
@@ -761,7 +867,7 @@ export function StaffView() {
                 <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs flex items-start gap-2">
                   <Lock className="size-4 shrink-0 mt-0.5" />
                   <div>
-                    <span className="font-semibold block">Active Administrator Account</span>
+                    <span className="font-semibold block">Active Admin Account</span>
                     Self-demotion or deactivation is prevented to preserve system accessibility and prevent admin lockout.
                   </div>
                 </div>
@@ -775,24 +881,36 @@ export function StaffView() {
 
               {/* Role Dropdown */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-foreground">Operational Role</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-foreground">Operational Role</label>
+                  {isSuperAdmin && (
+                    <Badge variant="outline" className="text-[10px] text-indigo-400 border-indigo-500/30 bg-indigo-500/10 gap-1">
+                      <Crown className="size-2.5" /> Super Admin Access
+                    </Badge>
+                  )}
+                </div>
                 <select
                   value={editRole}
                   onChange={(e) => setEditRole(e.target.value)}
                   disabled={isCurrentAdmin(editUser.id)}
                   className="w-full h-10 px-3 rounded-md bg-background border border-input text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
                 >
-                  {SUPPORTED_ROLES.map((role) => (
+                  {assignableRoles.map((role) => (
                     <option key={role.value} value={role.value}>
-                      {role.label} ({role.value})
+                      {role.label}
                     </option>
                   ))}
                   {editUser.role.toUpperCase() === 'CUSTOMER' && (
-                    <option value="CUSTOMER">Customer (CUSTOMER)</option>
+                    <option value="CUSTOMER">Customer</option>
+                  )}
+                  {!assignableRoles.some((r) => r.value === editRole) && (
+                    <option value={editRole}>{editRole}</option>
                   )}
                 </select>
                 <p className="text-[11px] text-muted-foreground">
-                  Allowed operational roles: Waiter, Counter Manager, Chef, Inventory Manager, Vendor, and Admin.
+                  {isSuperAdmin
+                    ? 'Super Admin Privileges: You can assign Admin and all operational roles.'
+                    : 'Admin Privileges: You can assign all operational staff roles (Waiter, Counter Manager, Chef, Inventory, Vendor).'}
                 </p>
               </div>
 
@@ -864,10 +982,12 @@ export function StaffView() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg">
               <Plus className="size-5 text-primary" />
-              Create Staff User
+              {isSuperAdmin ? 'Create Staff or Admin User' : 'Create Staff User'}
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
-              Add a new staff member with an assigned role. Data is persisted directly to PostgreSQL with securely hashed credentials.
+              {isSuperAdmin
+                ? 'Super Admin Mode: Add a new staff member or assign an Admin. Data is persisted directly to PostgreSQL.'
+                : 'Admin Mode: Add a new staff member with an assigned operational role (Waiter, Counter Manager, Chef, Inventory, Vendor).'}
             </DialogDescription>
           </DialogHeader>
 
@@ -940,20 +1060,32 @@ export function StaffView() {
 
             {/* Role Selection */}
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-foreground">
-                Assigned Operational Role <span className="text-destructive">*</span>
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-foreground">
+                  Assigned Operational Role <span className="text-destructive">*</span>
+                </label>
+                {isSuperAdmin && (
+                  <Badge variant="outline" className="text-[10px] text-indigo-400 border-indigo-500/30 bg-indigo-500/10 gap-1">
+                    <Crown className="size-2.5" /> Super Admin Privileges
+                  </Badge>
+                )}
+              </div>
               <select
                 value={createForm.role}
                 onChange={(e) => setCreateForm({ ...createForm, role: e.target.value })}
                 className="w-full h-10 px-3 rounded-md bg-background border border-input text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               >
-                {SUPPORTED_ROLES.map((role) => (
+                {assignableRoles.map((role) => (
                   <option key={role.value} value={role.value}>
-                    {role.label} ({role.value})
+                    {role.label}
                   </option>
                 ))}
               </select>
+              {createForm.role === 'ADMIN' && (
+                <p className="text-[11px] text-indigo-400 font-medium">
+                  ★ Creating an Admin: User will have access to the admin dashboard and can assign operational staff roles.
+                </p>
+              )}
             </div>
 
             {/* Initial Status */}

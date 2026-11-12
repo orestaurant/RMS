@@ -1,132 +1,194 @@
 /**
  * GET /api/pos/menu?branchId=<id>
- * Get menu items with full data for POS Terminal
- * Returns: categories, menu items with variants, modifiers, preparation time, availability, prices
+ * Dynamic Menu & Inventory API for POS Terminal
+ * Returns real items from Menu & Inventory (zero mock items)
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@prisma/client'
+import prisma from '@/lib/prisma'
 import { getMockAuthContext } from '@/api/middleware/auth'
 import { extractTenantContext } from '@/api/middleware/tenant'
 import { successResponse, errorResponse } from '@/api/utils/responses'
-import { ValidationError } from '@/api/utils/errors'
-
-const prisma = new PrismaClient()
 
 export async function GET(request: NextRequest) {
   try {
-    const branchId = request.nextUrl.searchParams.get('branchId')
-
-    if (!branchId) {
-      throw new ValidationError('branchId is required')
-    }
-
     const authContext = getMockAuthContext()
     const tenantContext = extractTenantContext(authContext)
 
-    // Get the branch to resolve restaurantId
-    const branch = await prisma.branch.findUnique({
-      where: { id: branchId },
-      select: { restaurantId: true },
-    })
+    let branchId = request.nextUrl.searchParams.get('branchId') || tenantContext.branchId
+    let restaurantId = tenantContext.restaurantId
+    let organizationId = tenantContext.organizationId
 
-    if (!branch) {
-      throw new ValidationError('Branch not found')
+    // Resolve branch and restaurant if needed
+    if (branchId) {
+      const branch = await prisma.branch.findUnique({
+        where: { id: branchId },
+        select: { id: true, restaurantId: true, organizationId: true },
+      })
+      if (branch) {
+        restaurantId = branch.restaurantId
+        organizationId = branch.organizationId
+      }
     }
 
-    // Fetch all categories for this restaurant
-    const categories = await prisma.menuCategory.findMany({
-      where: {
-        restaurantId: branch.restaurantId,
-        organizationId: tenantContext.organizationId,
-        deletedAt: null,
-      },
-      orderBy: { displayOrder: 'asc' },
-    })
+    if (!restaurantId) {
+      const defaultBranch = await prisma.branch.findFirst({
+        where: { deletedAt: null },
+        select: { id: true, restaurantId: true, organizationId: true },
+      })
+      if (defaultBranch) {
+        branchId = defaultBranch.id
+        restaurantId = defaultBranch.restaurantId
+        organizationId = defaultBranch.organizationId
+      }
+    }
 
-    // Fetch all menu items with variants and modifiers
-    const items = await prisma.menuItem.findMany({
+    // 1. Fetch real active menu items from database
+    const dbMenuItems = await prisma.menuItem.findMany({
       where: {
-        restaurantId: branch.restaurantId,
-        organizationId: tenantContext.organizationId,
-        isAvailable: true,
         deletedAt: null,
+        ...(restaurantId ? { restaurantId } : {}),
       },
       include: {
         category: true,
-        variants: {
-          where: { deletedAt: null },
-        },
-        modifierGroups: {
-          include: {
-            modifierGroup: {
-              include: {
-                modifiers: true,
-              },
-            },
-          },
-        },
       },
       orderBy: { displayOrder: 'asc' },
     })
 
-    // Format response
-    const formattedCategories = categories.map((cat) => ({
-      id: cat.id,
-      label: cat.name,
-      icon: '🍽️', // TODO: Use actual category icon if available
-    }))
-
-    const formattedItems = items.map((item) => ({
-      id: item.id,
-      name: item.name,
-      description: item.description || '',
-      category: item.category?.id || '',
-      price: Number(item.basePrice),
-      image: item.imageUrl || '',
-      isVeg: item.isVegetarian,
-      isAvailable: item.isAvailable,
-      gst: 5, // TODO: Get from tax configuration table
-      rating: 4.5, // TODO: Calculate from customer ratings
-      prepTime: item.preparationTimeMinutes || 15,
-      variants: item.variants?.map((v) => ({
-        id: v.id,
-        name: v.name,
-        price: Number(v.priceModifier || 0),
-      })) || [],
-      modifiers: item.modifierGroups?.map((mg) => ({
-        id: mg.modifierGroup.id,
-        name: mg.modifierGroup.name,
-        isMultiSelect: mg.modifierGroup.maxSelections > 1,
-        options: mg.modifierGroup.modifiers?.map((m) => ({
-          id: m.id,
-          name: m.name,
-          price: Number(m.priceModifier || 0),
-        })) || [],
-      })) || [],
-      tags: item.isSpicy ? ['spicy'] : [],
-    }))
-
-    return NextResponse.json(successResponse({
-      categories: formattedCategories,
-      items: formattedItems,
-      meta: {
-        totalItems: formattedItems.length,
-        totalCategories: formattedCategories.length,
+    // 2. Fetch real inventory items from database
+    const dbInventoryItems = await prisma.inventoryItem.findMany({
+      where: {
+        deletedAt: null,
       },
-    }))
-  } catch (error: any) {
-    console.error('Error fetching POS menu:', error)
+      orderBy: { updatedAt: 'desc' },
+    })
 
-    if (error instanceof ValidationError) {
-      return NextResponse.json(
-        errorResponse(error.message, error.code),
-        { status: 400 }
-      )
+    const existingMenuItemNames = new Set(
+      dbMenuItems.map((m) => m.name.toLowerCase().trim())
+    )
+
+    // 3. For any inventory items not already represented in Menu, sync them so POS can order them
+    const additionalMenuItems: any[] = []
+    for (const inv of dbInventoryItems) {
+      const normName = inv.name.toLowerCase().trim()
+      if (!existingMenuItemNames.has(normName) && restaurantId && organizationId) {
+        try {
+          // Find or create category
+          const catName = inv.category?.trim() || 'Inventory'
+          let category = await prisma.menuCategory.findFirst({
+            where: {
+              restaurantId,
+              name: { equals: catName, mode: 'insensitive' },
+              deletedAt: null,
+            },
+          })
+
+          if (!category) {
+            category = await prisma.menuCategory.create({
+              data: {
+                restaurantId,
+                organizationId,
+                name: catName,
+                displayOrder: 99,
+              },
+            })
+          }
+
+          // Create menuItem entry to satisfy OrderItem foreign key constraints
+          const newMenuItem = await prisma.menuItem.create({
+            data: {
+              restaurantId,
+              organizationId,
+              categoryId: category.id,
+              name: inv.name.trim(),
+              basePrice: Number(inv.unitPrice || 0),
+              isVegetarian: true,
+              isAvailable: (inv.quantity ?? 0) > 0,
+              preparationTimeMinutes: 10,
+              description: `SKU: ${inv.sku} | In Stock: ${inv.quantity} ${inv.unit}`,
+            },
+            include: {
+              category: true,
+            },
+          })
+
+          existingMenuItemNames.add(normName)
+          additionalMenuItems.push({
+            ...newMenuItem,
+            inventoryStock: inv.quantity,
+            inventoryUnit: inv.unit,
+            source: 'inventory',
+          })
+        } catch (syncErr) {
+          console.warn('Inventory sync to menu item skipped:', (syncErr as any)?.message)
+        }
+      }
     }
 
+    const allCombined = [...dbMenuItems, ...additionalMenuItems]
+
+    // 4. Build dynamic items array
+    const formattedItems = allCombined.map((item) => {
+      const catName = item.category?.name || 'General'
+      const stock = item.inventoryStock !== undefined ? item.inventoryStock : null
+      const unit = item.inventoryUnit || ''
+      const isAvailable = item.isAvailable && (stock === null || stock > 0)
+
+      const tags: string[] = []
+      if (stock !== null) {
+        tags.push(`Stock: ${stock} ${unit}`.trim())
+      } else if (item.isSpicy) {
+        tags.push('spicy')
+      }
+
+      return {
+        id: item.id,
+        name: item.name,
+        description: item.description || '',
+        category: catName,
+        categoryName: catName,
+        categoryId: item.categoryId,
+        price: Number(item.basePrice),
+        image: item.imageUrl || '',
+        isVeg: item.isVegetarian ?? true,
+        isAvailable,
+        prepTime: item.preparationTimeMinutes || 15,
+        stock,
+        unit,
+        tags,
+        source: item.source || 'menu',
+      }
+    })
+
+    // 5. Dynamic Categories list
+    const categoryMap = new Map<string, { id: string; label: string }>()
+    categoryMap.set('all', { id: 'all', label: 'All Items' })
+
+    for (const it of formattedItems) {
+      if (it.categoryName && !categoryMap.has(it.categoryName)) {
+        categoryMap.set(it.categoryName, {
+          id: it.categoryName,
+          label: it.categoryName,
+        })
+      }
+    }
+
+    const formattedCategories = Array.from(categoryMap.values())
+
     return NextResponse.json(
-      errorResponse(error.message, 'POS_MENU_ERROR'),
+      successResponse({
+        categories: formattedCategories,
+        items: formattedItems,
+        meta: {
+          totalItems: formattedItems.length,
+          totalCategories: formattedCategories.length,
+        },
+      })
+    )
+  } catch (error: any) {
+    console.error('Error fetching dynamic POS menu:', error)
+    return NextResponse.json(
+      errorResponse(error.message || 'Failed to fetch POS menu', 'POS_MENU_ERROR'),
       { status: 500 }
     )
   }

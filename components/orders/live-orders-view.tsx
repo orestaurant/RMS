@@ -17,6 +17,7 @@ import {
   RefreshCw,
   ChefHat,
   ShoppingBag,
+  Trash2,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -28,7 +29,16 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
@@ -105,11 +115,43 @@ const priorityConfig = {
   urgent: { dot: 'bg-destructive animate-pulse', label: 'Urgent' },
 }
 
-function OrderRow({ order }: { order: LiveOrder }) {
+function OrderRow({
+  order,
+  onOrderDeleted,
+}: {
+  order: LiveOrder
+  onOrderDeleted?: (id: string) => void
+}) {
   const [expanded, setExpanded] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
   const cfg = statusConfig[order.status] || statusConfig.pending
   const pri = priorityConfig[order.priority] || priorityConfig.normal
   const StatusIcon = cfg.icon
+
+  const handleDelete = async () => {
+    try {
+      setDeleting(true)
+      const orderKey = order.fullId || order.id
+      const res = await fetch(`/api/orders/${orderKey}`, {
+        method: 'DELETE',
+      })
+      const json = await res.json().catch(() => null)
+      if (res.ok && json?.success) {
+        onOrderDeleted?.(order.id)
+        setDeleteConfirmOpen(false)
+        setDetailsOpen(false)
+      } else {
+        alert(json?.message || 'Failed to delete order')
+      }
+    } catch (err: any) {
+      alert('Network error while deleting order: ' + err.message)
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
     <div
@@ -184,14 +226,25 @@ function OrderRow({ order }: { order: LiveOrder }) {
               <MoreHorizontal className="size-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem className="gap-2">
+              <DropdownMenuItem
+                className="gap-2 cursor-pointer"
+                onClick={() => setDetailsOpen(true)}
+              >
                 <Eye className="size-3.5" /> View Details
               </DropdownMenuItem>
-              <DropdownMenuItem className="gap-2">
+              <DropdownMenuItem className="gap-2 cursor-pointer">
                 <Printer className="size-3.5" /> Print KOT
               </DropdownMenuItem>
-              <DropdownMenuItem className="gap-2">
+              <DropdownMenuItem className="gap-2 cursor-pointer">
                 <Receipt className="size-3.5" /> Print Bill
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                className="gap-2 cursor-pointer text-destructive focus:text-destructive"
+                onClick={() => setDeleteConfirmOpen(true)}
+              >
+                <Trash2 className="size-3.5 text-destructive" /> Delete Order
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -283,6 +336,30 @@ function OrderRow({ order }: { order: LiveOrder }) {
                 </Badge>
               )}
               <div className="ml-auto flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setDeleteConfirmOpen(true)
+                  }}
+                >
+                  <Trash2 className="size-3" />
+                  Delete
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1.5"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setDetailsOpen(true)
+                  }}
+                >
+                  <Eye className="size-3" />
+                  Details
+                </Button>
                 <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5">
                   <Printer className="size-3" />
                   KOT
@@ -296,6 +373,175 @@ function OrderRow({ order }: { order: LiveOrder }) {
           </div>
         </div>
       )}
+
+      {/* Order Details Modal Dialog */}
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="flex items-center justify-between gap-2 pr-6">
+              <DialogTitle className="text-base font-bold font-mono">
+                {order.id}
+              </DialogTitle>
+              <Badge variant="outline" className={cn('text-xs h-6 px-2 gap-1.5', cfg.badge)}>
+                <StatusIcon className="size-3" />
+                {cfg.label}
+              </Badge>
+            </div>
+            <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+              Order placed {order.ticketTime}m ago • Table {order.tableNumber} • Waiter: {order.waiter}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-3 py-1 text-xs">
+            {/* Meta attributes */}
+            <div className="grid grid-cols-2 gap-2 bg-muted/40 p-2.5 rounded-lg border border-border">
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase tracking-wider">Table</span>
+                <span className="font-semibold text-foreground">
+                  {typeof order.tableNumber === 'number' || !isNaN(Number(order.tableNumber))
+                    ? `Table ${order.tableNumber}`
+                    : order.tableNumber}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase tracking-wider">Server</span>
+                <span className="font-semibold text-foreground">{order.waiter}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase tracking-wider">Priority</span>
+                <span className="font-semibold capitalize text-foreground">{order.priority}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase tracking-wider">Status</span>
+                <span className="font-semibold capitalize text-foreground">{order.status}</span>
+              </div>
+            </div>
+
+            {/* Items list */}
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Ordered Items ({order.items.reduce((s, i) => s + i.quantity, 0)})
+              </p>
+              <div className="rounded-lg border border-border divide-y divide-border overflow-hidden max-h-48 overflow-y-auto">
+                {order.items.map((item) => (
+                  <div key={item.id} className="flex items-center justify-between p-2">
+                    <div className="flex items-start gap-2">
+                      <span className="size-5 rounded bg-muted flex items-center justify-center font-bold text-[11px] shrink-0">
+                        {item.quantity}×
+                      </span>
+                      <div>
+                        <p className="font-medium text-foreground">{item.name}</p>
+                        {item.notes && (
+                          <p className="text-[10px] text-warning mt-0.5">Note: {item.notes}</p>
+                        )}
+                      </div>
+                    </div>
+                    <span className="font-semibold text-foreground shrink-0">
+                      ₹{(item.price * item.quantity).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Bill calculation */}
+            <div className="bg-muted/30 p-2.5 rounded-lg border border-border flex flex-col gap-1">
+              <div className="flex justify-between text-muted-foreground">
+                <span>Subtotal</span>
+                <span>₹{order.subtotal.toLocaleString('en-IN')}</span>
+              </div>
+              {order.discount > 0 && (
+                <div className="flex justify-between text-success">
+                  <span>Discount</span>
+                  <span>-₹{order.discount.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-muted-foreground">
+                <span>GST (5%)</span>
+                <span>₹{order.tax.toLocaleString('en-IN')}</span>
+              </div>
+              <Separator className="my-1" />
+              <div className="flex justify-between font-bold text-sm text-foreground">
+                <span>Total Amount</span>
+                <span className="text-primary text-base">₹{order.total.toLocaleString('en-IN')}</span>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="flex items-center justify-between sm:justify-between gap-2 border-t pt-3">
+            <Button
+              variant="destructive"
+              size="sm"
+              className="gap-1.5 text-xs h-8"
+              onClick={() => {
+                setDetailsOpen(false)
+                setDeleteConfirmOpen(true)
+              }}
+            >
+              <Trash2 className="size-3.5" />
+              Delete Order
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs h-8"
+                onClick={() => window.print()}
+              >
+                <Printer className="size-3.5" />
+                Print Bill
+              </Button>
+              <Button size="sm" className="text-xs h-8" onClick={() => setDetailsOpen(false)}>
+                Close
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2 text-destructive">
+              <Trash2 className="size-4" /> Delete Order?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground mt-1">
+              Are you sure you want to delete order <strong className="text-foreground">{order.id}</strong>?
+              This will remove it from active live orders and cancel it in the database.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2 mt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteConfirmOpen(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="gap-1.5"
+            >
+              {deleting ? (
+                <>
+                  <RefreshCw className="size-3.5 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="size-3.5" />
+                  Delete Order
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -353,6 +599,25 @@ export function LiveOrdersView() {
     const timer = setInterval(fetchLiveOrders, 15000)
     return () => clearInterval(timer)
   }, [fetchLiveOrders])
+
+  const handleOrderDeleted = (orderId: string) => {
+    setOrders((prev) => {
+      const updated = prev.filter((o) => o.id !== orderId)
+      setCounts({
+        all: updated.length,
+        pending: updated.filter((o) => o.status === 'pending').length,
+        accepted: updated.filter((o) => o.status === 'accepted').length,
+        cooking: updated.filter((o) => o.status === 'cooking').length,
+        ready: updated.filter((o) => o.status === 'ready').length,
+        served: updated.filter((o) => o.status === 'served').length,
+      })
+      setStats((prevStats) => ({
+        ...prevStats,
+        activeCount: Math.max(0, prevStats.activeCount - 1),
+      }))
+      return updated
+    })
+  }
 
   return (
     <main className="flex flex-col gap-6 p-6">
@@ -540,7 +805,11 @@ export function LiveOrdersView() {
           ) : (
             <div>
               {orders.map((order) => (
-                <OrderRow key={order.id} order={order} />
+                <OrderRow
+                  key={order.id}
+                  order={order}
+                  onOrderDeleted={handleOrderDeleted}
+                />
               ))}
             </div>
           )}

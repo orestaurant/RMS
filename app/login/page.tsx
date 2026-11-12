@@ -67,12 +67,6 @@ export default function LoginPage() {
     }
   }
 
-  const fillDemoCredentials = () => {
-    setEmail('hexerve@gmail.com')
-    setPassword('12345')
-    setError(null)
-  }
-
   return (
     <div className="relative min-h-screen flex items-center justify-center p-4 bg-background overflow-hidden selection:bg-primary/20 selection:text-primary">
       {/* Background glow effects */}
@@ -80,23 +74,29 @@ export default function LoginPage() {
       <div className="absolute bottom-10 left-10 w-[300px] h-[300px] bg-chart-1/5 rounded-full blur-[100px] pointer-events-none" />
 
       <div className="w-full max-w-md relative z-10 flex flex-col gap-6">
-        {/* Brand Header */}
-        <div className="flex flex-col items-center text-center gap-2">
-          <div className="flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-primary/25 ring-1 ring-white/20">
-            <Building2 className="size-6" />
+        {/* Brand Header — Clicking redirects to Home Page */}
+        <Link
+          href="/"
+          className="flex flex-col items-center text-center gap-2 group cursor-pointer transition-transform hover:scale-105"
+          title="Go to Home Page"
+        >
+          <div className="flex size-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-orange-600 via-amber-500 to-rose-500 text-white shadow-lg shadow-orange-500/25 ring-1 ring-white/20 group-hover:shadow-orange-500/40 transition-all">
+            <UtensilsCrossed className="size-6" />
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-foreground flex items-center justify-center gap-2">
-              Spice Garden
+              Resto<span className="text-orange-500">Sphere</span>
               <Badge variant="outline" className="text-[10px] uppercase font-semibold text-primary border-primary/30 py-0 h-4">
-                Admin
+                Staff Admin
               </Badge>
             </h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Restaurant Operating System • Mumbai Central
+            <p className="text-xs text-muted-foreground mt-0.5 flex items-center justify-center gap-1">
+              <span>Restaurant Operating System</span>
+              <span className="text-muted-foreground/60">•</span>
+              <span className="text-primary hover:underline text-[11px]">← Back to Home</span>
             </p>
           </div>
-        </div>
+        </Link>
 
         {/* Sign In Card */}
         <Card className="border-border/60 bg-card/95 backdrop-blur-xl shadow-2xl">
@@ -134,7 +134,7 @@ export default function LoginPage() {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="hexerve@gmail.com"
+                    placeholder="admin@restaurant.com"
                     autoComplete="email"
                     required
                     disabled={loading}
@@ -198,18 +198,6 @@ export default function LoginPage() {
 
           <CardFooter className="flex flex-col gap-3 pt-0 border-t border-border/40 mt-2">
             <div className="flex items-center justify-between w-full text-xs pt-3">
-              <span className="text-muted-foreground">Demo Credentials:</span>
-              <button
-                type="button"
-                onClick={fillDemoCredentials}
-                className="text-xs font-medium text-primary hover:underline flex items-center gap-1 cursor-pointer"
-              >
-                <CheckCircle2 className="size-3" />
-                Autofill hexerve@gmail.com
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between w-full text-xs pt-1 border-t border-border/30">
               <span className="text-muted-foreground">Are you a customer?</span>
               <Link
                 href="/customer/login"

@@ -60,7 +60,7 @@ async function main() {
   })
   console.log(`✓ Branch ready: ${branch.name} (${branch.id})`)
 
-  // 4. Seed user hexerve@gmail.com as specified in prompt
+  // 4. Seed user hexerve@gmail.com as SUPER_ADMIN
   const adminEmail = 'hexerve@gmail.com'
   const existingUser = await prisma.user.findUnique({
     where: { email: adminEmail },
@@ -77,7 +77,7 @@ async function main() {
         passwordHash: hashedPassword,
         firstName: 'Rajesh',
         lastName: '',
-        role: 'ADMIN' as any,
+        role: 'SUPER_ADMIN' as any,
         status: 'active',
         isEmailVerified: true,
         organizationId: org.id,
@@ -93,11 +93,11 @@ async function main() {
         name: 'Rajesh',
         password: hashedPassword,
         passwordHash: hashedPassword,
-        role: 'ADMIN' as any,
+        role: 'SUPER_ADMIN' as any,
         organizationId: org.id,
       },
     })
-    console.log(`✓ User already exists and updated: ${user.email} (${user.id})`)
+    console.log(`✓ User already exists and updated: ${user.email} (${user.id}) [Role: ${user.role}]`)
   }
 
   // Ensure Staff Profile exists for User

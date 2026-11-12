@@ -25,8 +25,8 @@ interface SettingsState {
 export function SettingsView() {
   const router = useRouter()
   const [settings, setSettings] = useState<SettingsState>({
-    restaurantName: 'Spice Garden',
-    restaurantEmail: 'info@spicegarden.com',
+    restaurantName: 'RestoSphere',
+    restaurantEmail: 'info@restosphere.com',
     restaurantPhone: '+91-22-1234-5678',
     timezone: 'Asia/Kolkata',
     currency: 'INR',

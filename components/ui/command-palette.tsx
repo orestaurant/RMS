@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   LayoutDashboard, ShoppingCart, TableProperties, CalendarDays,
-  ChefHat, UtensilsCrossed, BarChart3, Package, Users, Zap,
+  ChefHat, UtensilsCrossed, Package, Users, Zap,
 } from 'lucide-react'
 import {
   CommandDialog, CommandEmpty, CommandGroup, CommandInput,
@@ -18,8 +18,8 @@ const pages = [
   { label: 'Reservations', href: '/reservations', icon: CalendarDays },
   { label: 'Live Orders', href: '/orders', icon: Zap },
   { label: 'Kitchen Display', href: '/kitchen', icon: ChefHat, shortcut: 'K' },
-  { label: 'Menu Management', href: '/menu', icon: UtensilsCrossed },
-  { label: 'Analytics', href: '/analytics', icon: BarChart3 },
+  { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
+  { label: 'Customer Menu (QR Preview)', href: '/menu?table=1', icon: UtensilsCrossed },
   { label: 'Inventory', href: '/inventory', icon: Package },
   { label: 'Staff', href: '/staff', icon: Users },
 ]

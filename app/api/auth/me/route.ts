@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
 
           const restaurantId = firstRestaurant?.id || '089c77df-cd5e-4233-b6f1-b35f17631e5b'
           const branchId = firstBranch?.id || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
-          const restaurantName = firstRestaurant?.name || 'Spice Garden'
+          const restaurantName = firstRestaurant?.name || 'RestoSphere'
           const branchName = firstBranch?.name || 'Mumbai Central'
           const orgId = user.organizationId || user.organization?.id || ''
 
@@ -103,7 +103,7 @@ export async function GET(request: NextRequest) {
 
           const restaurantId = firstRestaurant?.id || '089c77df-cd5e-4233-b6f1-b35f17631e5b'
           const branchId = firstBranch?.id || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
-          const restaurantName = firstRestaurant?.name || 'Spice Garden'
+          const restaurantName = firstRestaurant?.name || 'RestoSphere'
           const branchName = firstBranch?.name || 'Mumbai Central'
           const orgId = customer.organizationId || customer.organization?.id || ''
 

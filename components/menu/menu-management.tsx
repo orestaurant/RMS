@@ -15,7 +15,10 @@ import {
   FolderPlus,
   Flame,
   CheckCircle2,
+  QrCode,
+  ExternalLink,
 } from 'lucide-react'
+import { TableQRGenerator } from '@/components/tables/table-qr-generator'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -85,6 +88,7 @@ export function MenuManagement() {
   const [isSpicy, setIsSpicy] = useState(false)
   const [prepTime, setPrepTime] = useState('15')
   const [isAvailable, setIsAvailable] = useState(true)
+  const [qrGeneratorOpen, setQrGeneratorOpen] = useState(false)
 
   // Add Category form state
   const [catName, setCatName] = useState('')
@@ -347,6 +351,12 @@ export function MenuManagement() {
 
   return (
     <main className="flex flex-col gap-6 p-6">
+      {/* Table QR Generator Modal */}
+      <TableQRGenerator
+        isOpen={qrGeneratorOpen}
+        onClose={() => setQrGeneratorOpen(false)}
+        restaurantName="Spice Garden Restaurant"
+      />
       {/* Toast Feedback Alert */}
       {feedback && (
         <div
@@ -393,6 +403,29 @@ export function MenuManagement() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Table QR Generator Button */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setQrGeneratorOpen(true)}
+            className="gap-1.5 h-9 text-xs font-semibold border-primary/40 text-primary hover:bg-primary/10 shadow-sm"
+          >
+            <QrCode className="size-4" />
+            Table QR Codes
+          </Button>
+
+          {/* Customer Menu Link */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => window.open('/menu?table=1', '_blank')}
+            className="gap-1.5 h-9 text-xs font-medium border border-border"
+            title="Open Customer QR Menu in new tab"
+          >
+            <ExternalLink className="size-3.5" />
+            Customer View
+          </Button>
+
           {/* Add Category Button */}
           <Button
             variant="outline"

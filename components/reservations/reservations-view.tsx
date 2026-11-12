@@ -1,34 +1,89 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  Calendar, Clock, Users, Phone, Mail, Plus,
-  CheckCircle2, XCircle, AlertCircle, ChevronRight,
-  MoreVertical, Search, Filter,
+  Calendar,
+  Clock,
+  Users,
+  Phone,
+  Mail,
+  Plus,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  ChevronRight,
+  MoreVertical,
+  Search,
+  Filter,
+  RefreshCw,
+  Loader2,
+  UtensilsCrossed,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuTrigger, DropdownMenuSeparator,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import { reservations, tables, type Reservation } from '@/lib/mock-data'
 import { cn } from '@/lib/utils'
+import { useAuthContext } from '@/hooks/useAuthContext'
 
-type StatusFilter = 'all' | 'confirmed' | 'pending' | 'cancelled' | 'seated'
+export type ReservationStatus = 'confirmed' | 'pending' | 'cancelled' | 'no_show' | 'seated'
 
-const statusConfig: Record<Reservation['status'], {
-  label: string
-  icon: React.ElementType
-  card: string
-  badge: string
-}> = {
+export interface ReservationItem {
+  id: string
+  guestName: string
+  guestPhone: string
+  guestEmail?: string
+  tableId?: string | null
+  tableNumber?: number | string | null
+  tableName?: string
+  tableSection?: string | null
+  date: string
+  time: string
+  guestCount: number
+  status: ReservationStatus
+  notes?: string
+  prepayment?: number
+  createdAt?: string
+}
+
+export interface SimpleTable {
+  id: string
+  tableNumber: string
+  capacity: number
+  section: string
+  status: string
+}
+
+type StatusFilter = 'all' | 'confirmed' | 'pending' | 'seated' | 'cancelled'
+
+const statusConfig: Record<
+  ReservationStatus,
+  {
+    label: string
+    icon: React.ElementType
+    card: string
+    badge: string
+  }
+> = {
   confirmed: {
     label: 'Confirmed',
     icon: CheckCircle2,
@@ -61,23 +116,43 @@ const statusConfig: Record<Reservation['status'], {
   },
 }
 
-// Upcoming time slots for the visual timeline
 const timeSlots = [
-  '18:00', '18:30', '19:00', '19:30', '20:00',
-  '20:30', '21:00', '21:30', '22:00',
+  '12:00', '13:00', '14:00', '18:00', '18:30', '19:00', '19:30',
+  '20:00', '20:30', '21:00', '21:30', '22:00',
 ]
 
-function ReservationCard({ reservation }: { reservation: Reservation }) {
-  const cfg = statusConfig[reservation.status]
+function ReservationCard({
+  reservation,
+  onUpdateStatus,
+}: {
+  reservation: ReservationItem
+  onUpdateStatus: (id: string, status: ReservationStatus) => Promise<void>
+}) {
+  const normStatus: ReservationStatus = statusConfig[reservation.status]
+    ? reservation.status
+    : 'confirmed'
+  const cfg = statusConfig[normStatus]
   const StatusIcon = cfg.icon
-  const table = tables.find((t) => t.id === reservation.tableId)
-  const initials = reservation.guestName.split(' ').map((n) => n[0]).join('').slice(0, 2)
+
+  const initials = reservation.guestName
+    ? reservation.guestName
+        .split(' ')
+        .map((n) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : 'G'
+
+  const todayStr = new Date().toISOString().split('T')[0]
+  const isToday = reservation.date === todayStr
 
   return (
-    <div className={cn(
-      'group rounded-2xl border p-4 transition-all duration-200 hover:shadow-sm cursor-pointer',
-      cfg.card
-    )}>
+    <div
+      className={cn(
+        'group rounded-2xl border p-4 transition-all duration-200 hover:shadow-sm cursor-pointer',
+        cfg.card
+      )}
+    >
       <div className="flex items-start gap-3">
         <Avatar className="size-10 shrink-0">
           <AvatarFallback className="bg-primary/15 text-primary text-xs font-semibold">
@@ -97,19 +172,37 @@ function ReservationCard({ reservation }: { reservation: Reservation }) {
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
-                    <Button variant="ghost" size="icon" className="size-6 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                    />
                   }
                 >
                   <MoreVertical className="size-3" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {reservation.status === 'confirmed' && (
-                    <DropdownMenuItem>Seat Guests</DropdownMenuItem>
+                  {normStatus === 'confirmed' && (
+                    <DropdownMenuItem onClick={() => onUpdateStatus(reservation.id, 'seated')}>
+                      Seat Guests
+                    </DropdownMenuItem>
                   )}
-                  <DropdownMenuItem>Edit Reservation</DropdownMenuItem>
-                  <DropdownMenuItem>Send Reminder</DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem className="text-destructive">Cancel</DropdownMenuItem>
+                  {normStatus === 'pending' && (
+                    <DropdownMenuItem onClick={() => onUpdateStatus(reservation.id, 'confirmed')}>
+                      Confirm Booking
+                    </DropdownMenuItem>
+                  )}
+                  {normStatus !== 'cancelled' && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => onUpdateStatus(reservation.id, 'cancelled')}
+                        className="text-destructive"
+                      >
+                        Cancel Reservation
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -119,7 +212,7 @@ function ReservationCard({ reservation }: { reservation: Reservation }) {
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
               <Calendar className="size-3" />
-              {reservation.date === '2024-01-15' ? 'Today' : 'Tomorrow'}
+              {isToday ? 'Today' : reservation.date}
             </span>
             <span className="flex items-center gap-1">
               <Clock className="size-3" />
@@ -129,11 +222,13 @@ function ReservationCard({ reservation }: { reservation: Reservation }) {
               <Users className="size-3" />
               {reservation.guestCount} guests
             </span>
-            {table && (
+            {reservation.tableNumber && (
               <span className="flex items-center gap-1 text-foreground font-medium">
-                Table {table.number}
-                {table.section === 'vip' && (
-                  <Badge variant="secondary" className="text-[9px] h-3.5 px-1">VIP</Badge>
+                Table {reservation.tableNumber}
+                {reservation.tableSection?.toLowerCase().includes('vip') && (
+                  <Badge variant="secondary" className="text-[9px] h-3.5 px-1">
+                    VIP
+                  </Badge>
                 )}
               </span>
             )}
@@ -145,6 +240,12 @@ function ReservationCard({ reservation }: { reservation: Reservation }) {
               <Phone className="size-3" />
               {reservation.guestPhone}
             </span>
+            {reservation.guestEmail && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground hidden sm:inline-flex">
+                <Mail className="size-3" />
+                {reservation.guestEmail}
+              </span>
+            )}
           </div>
 
           {/* Notes */}
@@ -155,20 +256,24 @@ function ReservationCard({ reservation }: { reservation: Reservation }) {
           )}
 
           {/* Prepayment */}
-          {reservation.prepayment && (
+          {reservation.prepayment ? (
             <div className="mt-2 flex items-center gap-1.5 text-xs text-success">
               <CheckCircle2 className="size-3.5" />
               <span>Prepaid ₹{reservation.prepayment.toLocaleString('en-IN')}</span>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
 
       {/* CTA for confirmed */}
-      {reservation.status === 'confirmed' && (
+      {normStatus === 'confirmed' && (
         <>
           <Separator className="my-3" />
-          <Button size="sm" className="w-full h-8 text-xs gap-1.5">
+          <Button
+            size="sm"
+            onClick={() => onUpdateStatus(reservation.id, 'seated')}
+            className="w-full h-8 text-xs gap-1.5"
+          >
             Seat Guests
             <ChevronRight className="size-3.5" />
           </Button>
@@ -178,44 +283,357 @@ function ReservationCard({ reservation }: { reservation: Reservation }) {
   )
 }
 
-// Summary stats
-const summaryStats = [
-  { label: "Today's Bookings", value: 3, sub: '2 tonight' },
-  { label: 'Expected Covers', value: 15, sub: 'guests tonight' },
-  { label: 'Pending Confirmation', value: 1, sub: 'needs action' },
-  { label: 'Avg Party Size', value: '4.6', sub: 'per table' },
-]
-
 export function ReservationsView() {
+  const { auth } = useAuthContext()
+  const branchId = auth?.branchId
+
+  const [reservations, setReservations] = useState<ReservationItem[]>([])
+  const [tables, setTables] = useState<SimpleTable[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [search, setSearch] = useState('')
 
-  const filtered = reservations.filter((r) => {
-    const matchStatus = statusFilter === 'all' || r.status === statusFilter
-    const matchSearch = r.guestName.toLowerCase().includes(search.toLowerCase()) ||
-      r.guestPhone.includes(search)
-    return matchStatus && matchSearch
-  })
+  // New Reservation modal state
+  const [isNewOpen, setIsNewOpen] = useState(false)
+  const [guestName, setGuestName] = useState('')
+  const [guestPhone, setGuestPhone] = useState('')
+  const [guestEmail, setGuestEmail] = useState('')
+  const [resDate, setResDate] = useState(new Date().toISOString().split('T')[0])
+  const [resTime, setResTime] = useState('19:30')
+  const [guestCount, setGuestCount] = useState('2')
+  const [selectedTableId, setSelectedTableId] = useState('')
+  const [notes, setNotes] = useState('')
+  const [createLoading, setCreateLoading] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
-  const todayCount = reservations.filter((r) => r.date === '2024-01-15').length
-  const tonightCount = reservations.filter(
-    (r) => r.date === '2024-01-15' && r.status === 'confirmed'
-  ).length
+  // Fetch reservations from real DB API
+  const fetchReservations = useCallback(async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const resQuery = branchId ? `/api/reservations?branchId=${encodeURIComponent(branchId)}` : '/api/reservations'
+      const tableQuery = branchId ? `/api/tables?branchId=${encodeURIComponent(branchId)}` : '/api/tables'
+
+      const [resRes, tableRes] = await Promise.all([
+        fetch(resQuery),
+        fetch(tableQuery),
+      ])
+
+      const resData = await resRes.json()
+      const tableData = await tableRes.json()
+
+      if (!resRes.ok || !resData.success) {
+        throw new Error(resData.message || 'Failed to fetch reservations')
+      }
+
+      setReservations(resData.data || [])
+      if (tableData.success && Array.isArray(tableData.data)) {
+        setTables(tableData.data)
+      }
+    } catch (err: any) {
+      console.error('Failed to load reservations:', err)
+      setError(err.message || 'Failed to load reservations')
+    } finally {
+      setLoading(false)
+    }
+  }, [branchId])
+
+  useEffect(() => {
+    fetchReservations()
+  }, [fetchReservations])
+
+  // Update reservation status in database
+  const handleUpdateStatus = async (id: string, newStatus: ReservationStatus) => {
+    try {
+      // Optimistic update
+      setReservations((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, status: newStatus } : r))
+      )
+
+      const res = await fetch('/api/reservations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status: newStatus }),
+      })
+
+      if (!res.ok) {
+        fetchReservations()
+      }
+    } catch (err) {
+      console.error('Error updating reservation:', err)
+      fetchReservations()
+    }
+  }
+
+  // Handle Create Reservation
+  const handleCreateReservation = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!guestName.trim() || !guestPhone.trim()) {
+      setCreateError('Guest name and phone number are required')
+      return
+    }
+
+    try {
+      setCreateLoading(true)
+      setCreateError(null)
+
+      const payload = {
+        guestName: guestName.trim(),
+        guestPhone: guestPhone.trim(),
+        guestEmail: guestEmail.trim() || undefined,
+        reservationDate: resDate,
+        reservationTime: resTime,
+        numberOfGuests: parseInt(guestCount) || 2,
+        tableId: selectedTableId || undefined,
+        branchId: branchId || undefined,
+        notes: notes.trim() || undefined,
+        status: 'confirmed',
+      }
+
+      const res = await fetch('/api/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to create reservation')
+      }
+
+      setIsNewOpen(false)
+      setGuestName('')
+      setGuestPhone('')
+      setGuestEmail('')
+      setSelectedTableId('')
+      setNotes('')
+      fetchReservations()
+    } catch (err: any) {
+      setCreateError(err.message || 'Failed to create reservation')
+    } finally {
+      setCreateLoading(false)
+    }
+  }
+
+  // Filter reservations
+  const filtered = useMemo(() => {
+    return reservations.filter((r) => {
+      const matchStatus = statusFilter === 'all' || r.status === statusFilter
+      const q = search.toLowerCase()
+      const matchSearch =
+        !search ||
+        r.guestName.toLowerCase().includes(q) ||
+        r.guestPhone.includes(q) ||
+        (r.tableNumber && String(r.tableNumber).includes(q))
+      return matchStatus && matchSearch
+    })
+  }, [reservations, statusFilter, search])
+
+  // Dynamic calculations from live database records
+  const totalCovers = useMemo(() => {
+    return reservations
+      .filter((r) => r.status === 'confirmed' || r.status === 'seated')
+      .reduce((sum, r) => sum + (r.guestCount || 0), 0)
+  }, [reservations])
+
+  const pendingCount = useMemo(() => {
+    return reservations.filter((r) => r.status === 'pending').length
+  }, [reservations])
+
+  const confirmedCount = useMemo(() => {
+    return reservations.filter((r) => r.status === 'confirmed').length
+  }, [reservations])
+
+  const seatedCount = useMemo(() => {
+    return reservations.filter((r) => r.status === 'seated').length
+  }, [reservations])
+
+  const avgPartySize = useMemo(() => {
+    if (reservations.length === 0) return '0.0'
+    const total = reservations.reduce((sum, r) => sum + (r.guestCount || 0), 0)
+    return (total / reservations.length).toFixed(1)
+  }, [reservations])
+
+  const summaryStats = [
+    {
+      label: 'Total Bookings',
+      value: reservations.length,
+      sub: reservations.length === 0 ? '0 confirmed' : `${confirmedCount} confirmed`,
+    },
+    {
+      label: 'Expected Covers',
+      value: totalCovers,
+      sub: totalCovers === 0 ? '0 guests expected' : `${totalCovers} guests expected`,
+    },
+    {
+      label: 'Pending Action',
+      value: pendingCount,
+      sub: pendingCount === 0 ? '0 needs confirmation' : `${pendingCount} needs confirmation`,
+    },
+    {
+      label: 'Avg Party Size',
+      value: avgPartySize,
+      sub: 'guests per table',
+    },
+  ]
 
   return (
     <main className="flex flex-col gap-6 p-6">
+      {/* New Reservation Dialog */}
+      <Dialog open={isNewOpen} onOpenChange={setIsNewOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>New Reservation</DialogTitle>
+            <DialogDescription>
+              Book a table for a guest. Saved directly to PostgreSQL.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleCreateReservation} className="space-y-3.5 py-2">
+            {createError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                {createError}
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <Label htmlFor="guestName">Guest Full Name</Label>
+              <Input
+                id="guestName"
+                placeholder="e.g. Rahul Sharma"
+                value={guestName}
+                onChange={(e) => setGuestName(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="guestPhone">Phone Number</Label>
+                <Input
+                  id="guestPhone"
+                  placeholder="+91 98765 43210"
+                  value={guestPhone}
+                  onChange={(e) => setGuestPhone(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="guestEmail">Email (optional)</Label>
+                <Input
+                  id="guestEmail"
+                  type="email"
+                  placeholder="guest@mail.com"
+                  value={guestEmail}
+                  onChange={(e) => setGuestEmail(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="resDate">Date</Label>
+                <Input
+                  id="resDate"
+                  type="date"
+                  value={resDate}
+                  onChange={(e) => setResDate(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="resTime">Time</Label>
+                <Input
+                  id="resTime"
+                  type="time"
+                  value={resTime}
+                  onChange={(e) => setResTime(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="guestCount">Guests</Label>
+                <Input
+                  id="guestCount"
+                  type="number"
+                  min="1"
+                  max="30"
+                  value={guestCount}
+                  onChange={(e) => setGuestCount(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="tableSelect">Assign Table (optional)</Label>
+              <select
+                id="tableSelect"
+                value={selectedTableId}
+                onChange={(e) => setSelectedTableId(e.target.value)}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="">Auto-assign or Unassigned</option>
+                {tables.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    Table {t.tableNumber} ({t.section || 'Indoor'}, Seats {t.capacity}) - {t.status}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="notes">Special Requests / Notes</Label>
+              <Input
+                id="notes"
+                placeholder="e.g. Birthday anniversary cake, window seat"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setIsNewOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={createLoading}>
+                {createLoading && <Loader2 className="mr-1.5 size-4 animate-spin" />}
+                Confirm Booking
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Summary stats */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {summaryStats.map((s) => (
           <Card key={s.label}>
             <CardContent className="p-4">
               <p className="text-xs text-muted-foreground">{s.label}</p>
-              <p className="text-2xl font-bold mt-0.5">{s.value}</p>
+              <p className="text-2xl font-bold mt-0.5">
+                {loading ? <span className="inline-block size-6 animate-pulse bg-muted rounded" /> : s.value}
+              </p>
               <p className="text-xs text-muted-foreground mt-0.5">{s.sub}</p>
             </CardContent>
           </Card>
         ))}
       </div>
+
+      {/* Error notification */}
+      {error && (
+        <div className="flex items-center justify-between rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="size-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => fetchReservations()} className="h-7 text-xs">
+            Retry
+          </Button>
+        </div>
+      )}
 
       {/* Main content: reservation list + timeline */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -228,15 +646,23 @@ export function ReservationsView() {
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search guest name or phone..."
-                className="pl-8 h-9"
+                placeholder="Search guest name, phone, or table..."
+                className="pl-8 h-9 text-xs"
               />
             </div>
-            <Button variant="outline" size="sm" className="h-9 gap-1.5">
-              <Filter className="size-3.5" />
-              Filter
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchReservations()}
+              disabled={loading}
+              className="h-9 gap-1.5"
+            >
+              <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+              Refresh
             </Button>
-            <Button size="sm" className="h-9 gap-1.5">
+
+            <Button size="sm" onClick={() => setIsNewOpen(true)} className="h-9 gap-1.5">
               <Plus className="size-3.5" />
               New Reservation
             </Button>
@@ -246,24 +672,56 @@ export function ReservationsView() {
           <Tabs value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
             <TabsList>
               <TabsTrigger value="all">All ({reservations.length})</TabsTrigger>
-              <TabsTrigger value="confirmed">
-                Confirmed ({reservations.filter((r) => r.status === 'confirmed').length})
-              </TabsTrigger>
-              <TabsTrigger value="pending">
-                Pending ({reservations.filter((r) => r.status === 'pending').length})
-              </TabsTrigger>
+              <TabsTrigger value="confirmed">Confirmed ({confirmedCount})</TabsTrigger>
+              <TabsTrigger value="pending">Pending ({pendingCount})</TabsTrigger>
+              <TabsTrigger value="seated">Seated ({seatedCount})</TabsTrigger>
             </TabsList>
           </Tabs>
 
           {/* Cards */}
           <ScrollArea className="max-h-[600px]">
             <div className="flex flex-col gap-3 pr-1">
-              {filtered.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-                  <p className="text-sm text-muted-foreground">No reservations found</p>
+              {loading && reservations.length === 0 ? (
+                <div className="flex flex-col gap-3">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="h-28 rounded-2xl border border-border bg-card/40 p-4 animate-pulse flex items-start gap-3"
+                    >
+                      <div className="size-10 rounded-full bg-muted" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 w-32 bg-muted rounded" />
+                        <div className="h-3 w-48 bg-muted rounded" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-16 text-center border border-dashed rounded-2xl">
+                  <UtensilsCrossed className="size-8 text-muted-foreground" />
+                  <p className="text-sm font-semibold">No reservations found</p>
+                  <p className="text-xs text-muted-foreground">
+                    {search || statusFilter !== 'all'
+                      ? 'No reservations matched your filter criteria.'
+                      : 'No live bookings currently recorded in the database.'}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setIsNewOpen(true)}
+                    className="mt-2 text-xs"
+                  >
+                    Create First Reservation
+                  </Button>
                 </div>
               ) : (
-                filtered.map((r) => <ReservationCard key={r.id} reservation={r} />)
+                filtered.map((r) => (
+                  <ReservationCard
+                    key={r.id}
+                    reservation={r}
+                    onUpdateStatus={handleUpdateStatus}
+                  />
+                ))
               )}
             </div>
           </ScrollArea>
@@ -272,13 +730,19 @@ export function ReservationsView() {
         {/* Timeline sidebar */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold">Tonight&apos;s Timeline</CardTitle>
-            <CardDescription className="text-xs">Booking slots for today</CardDescription>
+            <CardTitle className="text-sm font-semibold">Today&apos;s Timeline</CardTitle>
+            <CardDescription className="text-xs">Live booking slots for today</CardDescription>
           </CardHeader>
           <CardContent className="pt-0">
             <div className="flex flex-col gap-1">
               {timeSlots.map((slot) => {
-                const slotRes = reservations.filter((r) => r.time === slot && r.date === '2024-01-15')
+                // Find reservations matching slot hour or nearby
+                const slotRes = reservations.filter((r) => {
+                  const hour = r.time?.slice(0, 2)
+                  const slotHour = slot.slice(0, 2)
+                  return hour === slotHour
+                })
+
                 return (
                   <div key={slot} className="flex gap-3">
                     {/* Time label */}
@@ -293,26 +757,26 @@ export function ReservationsView() {
                           <span className="text-xs text-muted-foreground/40">Available</span>
                         </div>
                       ) : (
-                        slotRes.map((r) => (
-                          <div
-                            key={r.id}
-                            className={cn(
-                              'rounded-lg px-2.5 py-1.5 mb-1 border text-xs',
-                              statusConfig[r.status].card
-                            )}
-                          >
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="font-medium truncate">{r.guestName}</span>
-                              <span className="text-muted-foreground shrink-0 flex items-center gap-1">
-                                <Users className="size-2.5" />
-                                {r.guestCount}
+                        slotRes.map((r) => {
+                          const c = statusConfig[r.status] || statusConfig.confirmed
+                          return (
+                            <div
+                              key={r.id}
+                              className={cn('rounded-lg px-2.5 py-1.5 mb-1 border text-xs', c.card)}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="font-medium truncate">{r.guestName}</span>
+                                <span className="text-muted-foreground shrink-0 flex items-center gap-1">
+                                  <Users className="size-2.5" />
+                                  {r.guestCount}
+                                </span>
+                              </div>
+                              <span className="text-muted-foreground">
+                                {r.tableNumber ? `Table ${r.tableNumber}` : 'Unassigned'}
                               </span>
                             </div>
-                            <span className="text-muted-foreground">
-                              T{tables.find((t) => t.id === r.tableId)?.number}
-                            </span>
-                          </div>
-                        ))
+                          )
+                        })
                       )}
                     </div>
                   </div>

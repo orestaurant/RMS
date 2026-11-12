@@ -4,7 +4,7 @@ import { TablesView } from '@/components/tables/tables-view'
 export default function TablesPage() {
   return (
     <>
-      <TopNavbar title="Table Management" subtitle="Live floor map · 15 tables" />
+      <TopNavbar title="Table Management" subtitle="Live floor map · Real-time occupancy" />
       <TablesView />
     </>
   )

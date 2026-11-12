@@ -110,8 +110,6 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/orders/') ||
     pathname === '/kitchen' ||
     pathname.startsWith('/kitchen/') ||
-    pathname === '/menu' ||
-    pathname.startsWith('/menu/') ||
     pathname === '/inventory' ||
     pathname.startsWith('/inventory/') ||
     pathname === '/billing' ||
@@ -145,8 +143,6 @@ export const config = {
     '/orders',
     '/kitchen/:path*',
     '/kitchen',
-    '/menu/:path*',
-    '/menu',
     '/inventory/:path*',
     '/inventory',
     '/analytics/:path*',

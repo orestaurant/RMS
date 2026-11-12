@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import {
   UtensilsCrossed,
   ShoppingBag,
@@ -174,20 +175,22 @@ export default function CustomerOrdersPage() {
       {/* ── Top Navigation Bar ────────────────────────────── */}
       <header className="sticky top-0 z-30 border-b border-border/60 bg-background/80 backdrop-blur-md">
         <div className="container mx-auto max-w-5xl px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/20">
+          <Link href="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity" title="Go to Home Page">
+            <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-tr from-rose-500 to-pink-500 text-white shadow-md shadow-rose-500/20">
               <UtensilsCrossed className="size-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-base tracking-tight text-foreground">Spice Garden</span>
+                <span className="font-bold text-base tracking-tight text-foreground">
+                  Resto<span className="text-rose-500">Sphere</span>
+                </span>
                 <Badge variant="outline" className="text-[10px] uppercase font-semibold text-primary border-primary/30 h-4 px-1.5 py-0">
                   Customer Portal
                 </Badge>
               </div>
-              <p className="text-[11px] text-muted-foreground">Mumbai Central • Live Order Tracking</p>
+              <p className="text-[11px] text-muted-foreground">Live Order Tracking • Back to Home</p>
             </div>
-          </div>
+          </Link>
 
           <div className="flex items-center gap-2">
             <Button
@@ -432,7 +435,7 @@ export default function CustomerOrdersPage() {
                   <CardFooter className="pt-2 pb-3 border-t border-border/40 flex items-center justify-between text-xs text-muted-foreground">
                     <div className="flex items-center gap-2">
                       <Receipt className="size-3.5 text-primary" />
-                      <span>Restaurant: {order.branchName || 'Spice Garden (Mumbai Central)'}</span>
+                      <span>Restaurant: {order.branchName || 'RestoSphere Flagship'}</span>
                     </div>
                     <span className="text-[11px] text-success font-medium">
                       Status: Active in Kitchen Pipeline

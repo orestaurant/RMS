@@ -11,6 +11,7 @@ const ALLOWED_ROLES = [
   'INVENTORY_MANAGER',
   'VENDOR',
   'ADMIN',
+  'SUPER_ADMIN',
   'CUSTOMER',
 ] as const
 
@@ -118,12 +119,13 @@ export async function GET(request: NextRequest) {
       active: allUsersForStats.filter((u) => u.status === 'active').length,
       inactive: allUsersForStats.filter((u) => u.status !== 'active').length,
       roles: {
+        SUPER_ADMIN: allUsersForStats.filter((u) => u.role === 'SUPER_ADMIN' || u.role === 'super_admin').length,
+        ADMIN: allUsersForStats.filter((u) => u.role === 'ADMIN').length,
         WAITER: allUsersForStats.filter((u) => u.role === 'WAITER' || u.role === 'waiter').length,
         COUNTER_MANAGER: allUsersForStats.filter((u) => u.role === 'COUNTER_MANAGER').length,
         CHEF: allUsersForStats.filter((u) => u.role === 'CHEF' || u.role === 'chef').length,
         INVENTORY_MANAGER: allUsersForStats.filter((u) => u.role === 'INVENTORY_MANAGER').length,
         VENDOR: allUsersForStats.filter((u) => u.role === 'VENDOR').length,
-        ADMIN: allUsersForStats.filter((u) => u.role === 'ADMIN' || u.role === 'super_admin' || u.role === 'SUPER_ADMIN').length,
         CUSTOMER: allUsersForStats.filter((u) => u.role === 'CUSTOMER' || u.role === 'customer').length,
       },
     }
@@ -192,9 +194,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (!cleanPassword || cleanPassword.length < 6) {
+    if (!cleanPassword || cleanPassword.length < 4) {
       return NextResponse.json(
-        { success: false, message: 'Password must be at least 6 characters long' },
+        { success: false, message: 'Password must be at least 4 characters long' },
         { status: 400 }
       )
     }
@@ -207,6 +209,19 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       )
+    }
+
+    // Role Hierarchy: Only Super Admin can assign or create an Admin (or Super Admin) account
+    if (cleanRole === 'ADMIN' || cleanRole === 'SUPER_ADMIN') {
+      if (!auth.isSuperAdmin) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Forbidden: Only Super Admin can assign or create Admin accounts. Operational Admin can only assign staff roles.',
+          },
+          { status: 403 }
+        )
+      }
     }
 
     // Check if user already exists
@@ -239,32 +254,7 @@ export async function POST(request: NextRequest) {
     const firstName = nameParts[0] || 'Staff'
     const lastName = nameParts.slice(1).join(' ') || ''
 
-    const staffProfileCreate =
-      orgId && firstRestaurant
-        ? {
-            create: {
-              organizationId: orgId,
-              restaurantId: firstRestaurant.id,
-              employeeId: `EMP-${Date.now().toString().slice(-6)}`,
-              designation: cleanRole.replace(/_/g, ' '),
-              status: status === 'inactive' ? 'inactive' : 'active',
-              ...(firstBranch
-                ? {
-                    branchAssignments: {
-                      create: {
-                        organizationId: orgId,
-                        restaurantId: firstRestaurant.id,
-                        branchId: firstBranch.id,
-                        isPrimary: true,
-                      },
-                    },
-                  }
-                : {}),
-            },
-          }
-        : undefined
-
-    // Create user in PostgreSQL via Prisma
+    // 1. Create user in PostgreSQL via Prisma
     const newUser = await prisma.user.create({
       data: {
         name: finalName,
@@ -277,7 +267,6 @@ export async function POST(request: NextRequest) {
         role: cleanRole as UserRoleEnum,
         status: status === 'inactive' ? 'inactive' : 'active',
         organizationId: orgId,
-        ...(staffProfileCreate ? { staffProfile: staffProfileCreate } : {}),
       },
       select: {
         id: true,
@@ -290,10 +279,42 @@ export async function POST(request: NextRequest) {
       },
     })
 
+    // 2. For operational staff roles, attach staff profile safely
+    const isStaffRole = ['WAITER', 'COUNTER_MANAGER', 'CHEF', 'INVENTORY_MANAGER', 'VENDOR'].includes(cleanRole)
+    if (isStaffRole && orgId && firstRestaurant) {
+      try {
+        const empSuffix = `${Date.now().toString().slice(-5)}${Math.floor(10 + Math.random() * 90)}`
+        await prisma.staffProfile.create({
+          data: {
+            userId: newUser.id,
+            organizationId: orgId,
+            restaurantId: firstRestaurant.id,
+            employeeId: `EMP-${empSuffix}`,
+            designation: cleanRole.replace(/_/g, ' '),
+            status: status === 'inactive' ? 'inactive' : 'active',
+            ...(firstBranch
+              ? {
+                  branchAssignments: {
+                    create: {
+                      organizationId: orgId,
+                      restaurantId: firstRestaurant.id,
+                      branchId: firstBranch.id,
+                      isActive: true,
+                    },
+                  },
+                }
+              : {}),
+          },
+        })
+      } catch (staffErr) {
+        console.warn('Optional staffProfile creation skipped:', (staffErr as any)?.message)
+      }
+    }
+
     return NextResponse.json(
       {
         success: true,
-        message: 'Staff user created successfully',
+        message: `${cleanRole === 'ADMIN' ? 'Admin' : 'Staff'} user created successfully`,
         user: newUser,
       },
       { status: 201 }
@@ -301,7 +322,7 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('POST /api/admin/users error:', error)
     return NextResponse.json(
-      { success: false, message: 'Failed to create user', error: error.message },
+      { success: false, message: error.message || 'Failed to create user', error: error.message },
       { status: 500 }
     )
   }

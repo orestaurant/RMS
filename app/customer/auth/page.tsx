@@ -128,12 +128,6 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
     }
   }
 
-  const fillDemoCustomer = () => {
-    setLoginEmail('guest@spicegarden.com')
-    setLoginPassword('12345')
-    setLoginError(null)
-  }
-
   return (
     <div className="relative min-h-screen flex items-center justify-center p-4 bg-background overflow-hidden selection:bg-primary/20 selection:text-primary">
       {/* Background ambient lighting */}
@@ -141,23 +135,29 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
       <div className="absolute bottom-10 right-10 w-[300px] h-[300px] bg-chart-1/10 rounded-full blur-[100px] pointer-events-none" />
 
       <div className="w-full max-w-md relative z-10 flex flex-col gap-6">
-        {/* Restaurant Header */}
-        <div className="flex flex-col items-center text-center gap-2">
-          <div className="flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-xl shadow-primary/25 ring-1 ring-white/20">
+        {/* Restaurant Header — Clicking redirects to Home Page */}
+        <Link
+          href="/"
+          className="flex flex-col items-center text-center gap-2 group cursor-pointer transition-transform hover:scale-105"
+          title="Go to Home Page"
+        >
+          <div className="flex size-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-rose-500 to-pink-500 text-white shadow-xl shadow-rose-500/25 ring-1 ring-white/20 group-hover:shadow-rose-500/40 transition-all">
             <UtensilsCrossed className="size-7" />
           </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center justify-center gap-2">
-              Spice Garden
+              Resto<span className="text-rose-500">Sphere</span>
               <Badge variant="outline" className="text-[10px] uppercase font-semibold text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10 py-0 h-4">
                 Customer Portal
               </Badge>
             </h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Access menus, live POS, orders, reservations & dining
+            <p className="text-xs text-muted-foreground mt-0.5 flex items-center justify-center gap-1">
+              <span>Access menus, reservations & dining</span>
+              <span className="text-muted-foreground/60">•</span>
+              <span className="text-primary hover:underline text-[11px]">← Back to Home</span>
             </p>
           </div>
-        </div>
+        </Link>
 
         {/* Tabbed Card Container */}
         <Card className="border-border/60 bg-card/95 backdrop-blur-xl shadow-2xl">
@@ -275,7 +275,7 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
                 <div className="space-y-1">
                   <CardTitle className="text-base font-semibold text-foreground">Create Customer Account</CardTitle>
                   <CardDescription className="text-xs text-muted-foreground">
-                    Register with Spice Garden to access menus, POS, reservations and orders
+                    Register to access menus, reservations, rewards and orders
                   </CardDescription>
                 </div>
 
@@ -396,23 +396,8 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
           </CardContent>
 
           <CardFooter className="flex flex-col gap-3 pt-0 border-t border-border/40 mt-1">
-            {/* Quick Demo Autofill if in signin tab */}
-            {activeTab === 'signin' && (
-              <div className="flex items-center justify-between w-full text-xs pt-3">
-                <span className="text-muted-foreground">Demo Customer:</span>
-                <button
-                  type="button"
-                  onClick={fillDemoCustomer}
-                  className="text-xs font-medium text-primary hover:underline flex items-center gap-1"
-                >
-                  <CheckCircle2 className="size-3" />
-                  Autofill guest@spicegarden.com
-                </button>
-              </div>
-            )}
-
             {/* Switch to Admin Login */}
-            <div className="flex items-center justify-between w-full text-xs pt-1">
+            <div className="flex items-center justify-between w-full text-xs pt-3">
               <span className="text-muted-foreground">Restaurant Staff / Admin?</span>
               <Link
                 href="/login"
