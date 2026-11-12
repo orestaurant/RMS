@@ -61,63 +61,8 @@ interface Bill {
   items: BillItem[]
 }
 
-interface KhataAccount {
-  id: string
-  customerName: string
-  phone: string
-  company?: string
-  balanceOutstanding: number
-  creditLimit: number
-  lastTransactionDate: string
-  status: 'active' | 'settled' | 'overdue'
-}
-
-// Initial customer credit accounts
-const initialKhataAccounts: KhataAccount[] = [
-  {
-    id: 'KHATA-01',
-    customerName: 'Vikram Malhotra',
-    phone: '+91 99887 76655',
-    company: 'Malhotra Associates',
-    balanceOutstanding: 4850,
-    creditLimit: 15000,
-    lastTransactionDate: '2026-11-10',
-    status: 'active',
-  },
-  {
-    id: 'KHATA-02',
-    customerName: 'Ananya Sen',
-    phone: '+91 91234 56789',
-    company: 'Zenith Tech Labs',
-    balanceOutstanding: 8200,
-    creditLimit: 20000,
-    lastTransactionDate: '2026-11-11',
-    status: 'active',
-  },
-  {
-    id: 'KHATA-03',
-    customerName: 'Sanjay Kapoor',
-    phone: '+91 97654 32109',
-    company: 'Kapoor Travels',
-    balanceOutstanding: 1420,
-    creditLimit: 10000,
-    lastTransactionDate: '2026-11-12',
-    status: 'active',
-  },
-  {
-    id: 'KHATA-04',
-    customerName: 'Ramesh Gupta',
-    phone: '+91 98111 22334',
-    company: 'Gupta Traders',
-    balanceOutstanding: 0,
-    creditLimit: 25000,
-    lastTransactionDate: '2026-11-08',
-    status: 'settled',
-  },
-]
-
 export function BillingView() {
-  const [activeTab, setActiveTab] = useState<'bills' | 'sales' | 'khata'>('bills')
+  const [activeTab, setActiveTab] = useState<'bills' | 'sales'>('bills')
 
   // Real Bills State
   const [bills, setBills] = useState<Bill[]>([])
@@ -147,12 +92,6 @@ export function BillingView() {
     discount: 0,
     itemsText: '',
   })
-
-  // Khata State
-  const [khataAccounts, setKhataAccounts] = useState<KhataAccount[]>(initialKhataAccounts)
-  const [settleModalAccount, setSettleModalAccount] = useState<KhataAccount | null>(null)
-  const [settleAmount, setSettleAmount] = useState<string>('')
-  const [settleMethod, setSettleMethod] = useState<'upi' | 'cash'>('upi')
 
   // Fetch Real Bills & Sales Ledger
   const fetchBills = async () => {
@@ -264,33 +203,6 @@ export function BillingView() {
     }
   }
 
-  // Handle Settle Khata balance
-  const handleSettleKhata = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!settleModalAccount) return
-
-    const amount = Number(settleAmount)
-    if (isNaN(amount) || amount <= 0) return
-
-    setKhataAccounts((prev) =>
-      prev.map((acc) => {
-        if (acc.id === settleModalAccount.id) {
-          const newBal = Math.max(0, acc.balanceOutstanding - amount)
-          return {
-            ...acc,
-            balanceOutstanding: newBal,
-            status: newBal === 0 ? 'settled' : 'active',
-            lastTransactionDate: new Date().toISOString().slice(0, 10),
-          }
-        }
-        return acc
-      })
-    )
-
-    setSettleModalAccount(null)
-    setSettleAmount('')
-  }
-
   return (
     <div className="flex-1 space-y-6 p-4 sm:p-6 pb-24">
       {/* ────────────────── TOP STATS & SALES LEDGER RECONCILIATION ────────────────── */}
@@ -339,7 +251,7 @@ export function BillingView() {
               <p className="text-2xl font-black text-amber-600 dark:text-amber-400">
                 ₹{salesSummary.pendingRevenue?.toLocaleString('en-IN') || '0'}
               </p>
-              <p className="text-[11px] text-muted-foreground">Unpaid tabs & Khata</p>
+              <p className="text-[11px] text-muted-foreground">Unpaid pending orders</p>
             </div>
             <div className="size-11 rounded-2xl bg-amber-500/15 text-amber-500 flex items-center justify-center">
               <AlertCircle className="size-5" />
@@ -396,20 +308,7 @@ export function BillingView() {
             )}
           >
             <TrendingUp className="size-4 text-emerald-500" />
-            <span>Sales Ledger (बिक्री खाता)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('khata')}
-            className={cn(
-              'flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all',
-              activeTab === 'khata'
-                ? 'bg-background text-foreground shadow-xs'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            <BookOpen className="size-4 text-amber-500" />
-            <span>Customer Khata (Credit)</span>
+            <span>Sales Ledger</span>
           </button>
         </div>
 
@@ -589,7 +488,7 @@ export function BillingView() {
         </div>
       )}
 
-      {/* ────────────────── TAB 2: SALES LEDGER (बिक्री खाता) ────────────────── */}
+      {/* ────────────────── TAB 2: SALES LEDGER ────────────────── */}
       {activeTab === 'sales' && (
         <div className="space-y-6">
           {/* Payment Method Breakdown Cards */}
@@ -662,246 +561,7 @@ export function BillingView() {
                 </Badge>
               </div>
             </Card>
-
-            {/* Credit / Khata */}
-            <Card className="p-4 rounded-2xl border-rose-500/30 bg-gradient-to-br from-rose-500/10 to-card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-rose-600 dark:text-rose-400">
-                    <BookOpen className="size-4" />
-                    <span>Customer Credit (Udhar)</span>
-                  </div>
-                  <p className="text-2xl font-black mt-2">
-                    ₹{salesSummary.paymentMethods?.credit?.toLocaleString('en-IN') || '0'}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Receivable from corporate & regulars</p>
-                </div>
-                <Badge className="bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30 text-[10px]">
-                  Khata
-                </Badge>
-              </div>
-            </Card>
           </div>
-
-          {/* Tax Audit Breakdown & Daily Sales Journal */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* GST Audit Card */}
-            <Card className="p-5 rounded-2xl border-border/80 bg-card space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-border/60">
-                <h3 className="text-sm font-bold flex items-center gap-2">
-                  <ShieldCheck className="size-4 text-primary" />
-                  Tax & GST Audit Ledger (5%)
-                </h3>
-                <span className="text-[11px] font-mono text-muted-foreground">GSTIN Registered</span>
-              </div>
-
-              <div className="space-y-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Total Taxable Turnover:</span>
-                  <span className="font-mono font-bold">
-                    ₹{Math.max(0, (salesSummary.totalRevenue || 0) - (salesSummary.totalTaxCollected || 0)).toFixed(2)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">CGST @ 2.5%:</span>
-                  <span className="font-mono font-bold text-blue-500">
-                    ₹{((salesSummary.totalTaxCollected || 0) / 2).toFixed(2)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">SGST @ 2.5%:</span>
-                  <span className="font-mono font-bold text-blue-500">
-                    ₹{((salesSummary.totalTaxCollected || 0) / 2).toFixed(2)}
-                  </span>
-                </div>
-                <div className="pt-2 border-t border-border/60 flex items-center justify-between font-bold text-sm">
-                  <span>Total Tax Liability:</span>
-                  <span className="font-mono text-primary">₹{(salesSummary.totalTaxCollected || 0).toFixed(2)}</span>
-                </div>
-              </div>
-
-              <div className="pt-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full text-xs font-semibold gap-2 rounded-xl h-9"
-                  onClick={() => alert('GST Ledger exported successfully for filing.')}
-                >
-                  <Download className="size-3.5" />
-                  Export GSTR-1 Sales Report
-                </Button>
-              </div>
-            </Card>
-
-            {/* Sales Summary & Z-Report Action */}
-            <Card className="lg:col-span-2 p-5 rounded-2xl border-border/80 bg-card space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-border/60">
-                <div>
-                  <h3 className="text-sm font-bold">Daily Cashier Reconciliation (Z-Report)</h3>
-                  <p className="text-xs text-muted-foreground">Shift Settlement & Audit Log</p>
-                </div>
-                <Button
-                  size="sm"
-                  className="gap-1.5 h-8 text-xs font-bold bg-primary text-primary-foreground rounded-lg"
-                  onClick={() => {
-                    const printWindow = window.open('', '_blank')
-                    if (printWindow) {
-                      printWindow.document.write(`
-                        <html>
-                          <head><title>Z-Report Daily Sales</title></head>
-                          <body style="font-family: monospace; padding: 20px;">
-                            <h2>RESTOSPHERE OS - DAILY SALES Z-REPORT</h2>
-                            <p>Date: ${new Date().toLocaleDateString()}</p>
-                            <hr/>
-                            <p>Total Revenue: ₹${salesSummary.totalRevenue}</p>
-                            <p>Paid Revenue: ₹${salesSummary.paidRevenue}</p>
-                            <p>Pending Revenue: ₹${salesSummary.pendingRevenue}</p>
-                            <p>CGST: ₹${((salesSummary.totalTaxCollected || 0) / 2).toFixed(2)}</p>
-                            <p>SGST: ₹${((salesSummary.totalTaxCollected || 0) / 2).toFixed(2)}</p>
-                            <hr/>
-                            <h3>Payment Methods:</h3>
-                            <p>UPI: ₹${salesSummary.paymentMethods?.upi || 0}</p>
-                            <p>Cash: ₹${salesSummary.paymentMethods?.cash || 0}</p>
-                            <p>Card: ₹${salesSummary.paymentMethods?.card || 0}</p>
-                            <p>Credit: ₹${salesSummary.paymentMethods?.credit || 0}</p>
-                          </body>
-                        </html>
-                      `)
-                      printWindow.document.close()
-                      printWindow.print()
-                    }
-                  }}
-                >
-                  <Printer className="size-3.5" />
-                  Print Z-Report
-                </Button>
-              </div>
-
-              {/* Transactions List */}
-              <div className="rounded-xl border border-border/60 overflow-hidden">
-                <Table>
-                  <TableHeader className="bg-muted/40">
-                    <TableRow>
-                      <TableHead>Time</TableHead>
-                      <TableHead>Bill ID</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Mode</TableHead>
-                      <TableHead className="text-right">Net Amount</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {bills.length > 0 ? (
-                      bills.slice(0, 5).map((b) => (
-                        <TableRow key={b.id}>
-                          <TableCell className="font-mono text-xs text-muted-foreground">
-                            {new Date(b.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs font-bold">{b.billNumber}</TableCell>
-                          <TableCell className="text-xs">{b.customerName}</TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className="uppercase text-[10px] font-mono">
-                              {b.paymentMethod}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right font-mono font-bold text-xs">
-                            ₹{b.totalAmount.toFixed(2)}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={5} className="h-20 text-center text-muted-foreground text-xs">
-                          No transactions recorded in sales ledger yet.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </Card>
-          </div>
-        </div>
-      )}
-
-      {/* ────────────────── TAB 3: CUSTOMER KHATA (CREDIT LEDGER) ────────────────── */}
-      {activeTab === 'khata' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-bold text-foreground">Customer Credit (उधार खाता) Accounts</h3>
-              <p className="text-xs text-muted-foreground">
-                Manage VIP and corporate diners with outstanding ledger balances and credit limits.
-              </p>
-            </div>
-            <div className="p-3 rounded-xl bg-card border border-border/80 flex items-center gap-4">
-              <div>
-                <p className="text-[10px] uppercase font-bold text-muted-foreground">Total Receivables</p>
-                <p className="text-lg font-black text-rose-600 dark:text-rose-400">
-                  ₹{khataAccounts.reduce((s, a) => s + a.balanceOutstanding, 0).toLocaleString('en-IN')}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <Card className="rounded-2xl overflow-hidden border-border/80 shadow-xs">
-            <Table>
-              <TableHeader className="bg-muted/40">
-                <TableRow>
-                  <TableHead>Account ID</TableHead>
-                  <TableHead>Customer / Company</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead className="text-right">Credit Limit</TableHead>
-                  <TableHead className="text-right">Balance Due</TableHead>
-                  <TableHead>Last Transaction</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {khataAccounts.map((acc) => (
-                  <TableRow key={acc.id} className="hover:bg-muted/40 transition-colors">
-                    <TableCell className="font-mono text-xs font-bold text-foreground">{acc.id}</TableCell>
-                    <TableCell>
-                      <p className="font-semibold text-xs text-foreground">{acc.customerName}</p>
-                      {acc.company && <p className="text-[10px] text-muted-foreground">{acc.company}</p>}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{acc.phone}</TableCell>
-                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                      ₹{acc.creditLimit.toLocaleString('en-IN')}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-sm font-extrabold text-rose-600 dark:text-rose-400">
-                      ₹{acc.balanceOutstanding.toLocaleString('en-IN')}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{acc.lastTransactionDate}</TableCell>
-                    <TableCell>
-                      {acc.balanceOutstanding === 0 ? (
-                        <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                          Settled
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="border-rose-500/40 text-rose-600 dark:text-rose-400">
-                          Active Tab
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        className="h-8 px-3 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg"
-                        disabled={acc.balanceOutstanding <= 0}
-                        onClick={() => {
-                          setSettleModalAccount(acc)
-                          setSettleAmount(String(acc.balanceOutstanding))
-                        }}
-                      >
-                        Settle Payment
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Card>
         </div>
       )}
 
@@ -1124,7 +784,7 @@ export function BillingView() {
                     <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
                     <option value="cash">Cash in Counter</option>
                     <option value="card">Card POS Machine</option>
-                    <option value="credit">Customer Khata (Credit)</option>
+                    <option value="credit">Pay Later / Tab</option>
                   </select>
                 </div>
               </div>
@@ -1197,79 +857,6 @@ export function BillingView() {
                   className="flex-1 rounded-xl text-xs h-10 font-bold bg-primary text-primary-foreground hover:bg-primary/90"
                 >
                   Generate & Print 80mm Bill
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ────────────────── KHATA SETTLEMENT MODAL ────────────────── */}
-      {settleModalAccount && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-sm bg-card border border-border shadow-2xl rounded-3xl p-6">
-            <h3 className="text-sm font-bold text-foreground mb-1">Settle Customer Khata Balance</h3>
-            <p className="text-xs text-muted-foreground mb-4">
-              Recording payment for {settleModalAccount.customerName} (Due: ₹{settleModalAccount.balanceOutstanding})
-            </p>
-
-            <form onSubmit={handleSettleKhata} className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground block mb-1">
-                  Settlement Amount (₹)
-                </label>
-                <Input
-                  type="number"
-                  value={settleAmount}
-                  onChange={(e) => setSettleAmount(e.target.value)}
-                  max={settleModalAccount.balanceOutstanding}
-                  required
-                  className="h-9 text-xs"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground block mb-1">
-                  Payment Mode
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSettleMethod('upi')}
-                    className={cn(
-                      'p-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5',
-                      settleMethod === 'upi' ? 'border-primary bg-primary/10 text-primary' : 'border-border'
-                    )}
-                  >
-                    <QrCode className="size-3.5" /> UPI
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSettleMethod('cash')}
-                    className={cn(
-                      'p-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5',
-                      settleMethod === 'cash' ? 'border-primary bg-primary/10 text-primary' : 'border-border'
-                    )}
-                  >
-                    <Wallet className="size-3.5" /> Cash
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex gap-2 pt-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="flex-1 rounded-xl text-xs h-10 font-bold"
-                  onClick={() => setSettleModalAccount(null)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  className="flex-1 rounded-xl text-xs h-10 font-bold bg-primary text-primary-foreground"
-                >
-                  Confirm Settle
                 </Button>
               </div>
             </form>

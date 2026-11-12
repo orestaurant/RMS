@@ -104,6 +104,11 @@ export function AppSidebar() {
           icon: ShoppingCart,
           badge: counts?.posLive ? 'Live' : undefined,
         },
+        {
+          label: 'Billing & Invoices',
+          href: '/billing',
+          icon: Receipt,
+        },
         { label: 'Tables', href: '/tables', icon: TableProperties },
         {
           label: 'Reservations',
@@ -171,7 +176,7 @@ export function AppSidebar() {
               render={<Link href="/" />}
               className="hover:bg-sidebar-accent/50 w-full"
             >
-              <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shrink-0 shadow-sm">
+              <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-tr from-orange-500 to-amber-500 text-white shrink-0 shadow-sm shadow-orange-500/25">
                 <UtensilsCrossed className="size-4" />
               </div>
               <div className="flex flex-col gap-0.5 leading-none min-w-0 text-left">

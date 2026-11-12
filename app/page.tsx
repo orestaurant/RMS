@@ -9,6 +9,7 @@ import {
   ChefHat,
   LayoutDashboard,
   Receipt,
+  ShoppingCart,
   CreditCard,
   Users,
   Sparkles,
@@ -162,7 +163,7 @@ export default function HomePage() {
             </div>
           </Link>
 
-          {/* Desktop Nav Links (Pure Marketing) */}
+          {/* Desktop Nav Links */}
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
             <a href="#capabilities" className="hover:text-orange-400 transition-colors">
               Capabilities
@@ -378,33 +379,42 @@ export default function HomePage() {
         </p>
 
         {/* Hero CTAs */}
-        <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4 max-w-lg mx-auto">
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-3 sm:gap-4 max-w-2xl mx-auto">
           {/* Primary Capabilities Explorer Button */}
           <a
             href="#capabilities"
-            className="gsap-hero-btn w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:from-orange-600 hover:to-rose-600 text-white font-bold text-sm shadow-xl shadow-orange-500/25 hover:shadow-orange-500/40 hover:-translate-y-0.5 active:translate-y-0 transition-all flex items-center justify-center gap-2 group cursor-pointer"
+            className="gsap-hero-btn w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:from-orange-600 hover:to-rose-600 text-white font-bold text-sm shadow-xl shadow-orange-500/25 hover:shadow-orange-500/40 hover:-translate-y-0.5 active:translate-y-0 transition-all flex items-center justify-center gap-2 group cursor-pointer"
           >
             <Sparkles className="w-4 h-4 text-amber-200" />
             <span>Explore Capabilities</span>
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </a>
 
+          {/* Direct Billing & Invoices Link */}
+          <Link
+            href="/billing"
+            className="gsap-hero-btn w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-slate-900/95 hover:bg-slate-800 text-amber-400 hover:text-white font-semibold text-sm border border-amber-500/40 hover:border-amber-500 transition-all flex items-center justify-center gap-2 shadow-lg"
+          >
+            <Receipt className="w-4 h-4 text-amber-400" />
+            <span>Billing & Invoices</span>
+          </Link>
+
           {/* Interactive Live Demo */}
           <Link
             href="/dashboard"
-            className="gsap-hero-btn w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 hover:text-white font-semibold text-sm border border-slate-700/80 hover:border-slate-600 transition-all flex items-center justify-center gap-2 shadow-lg"
+            className="gsap-hero-btn w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 hover:text-white font-semibold text-sm border border-slate-700/80 hover:border-slate-600 transition-all flex items-center justify-center gap-2 shadow-lg"
           >
             <LayoutDashboard className="w-4 h-4 text-orange-400" />
-            <span>View Live Demo</span>
+            <span>Live Demo</span>
           </Link>
 
           {/* Pricing Jump */}
           <a
             href="#pricing"
-            className="gsap-hero-btn w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-slate-950/80 hover:bg-slate-900 text-orange-400 hover:text-orange-300 font-semibold text-sm border border-orange-500/30 hover:border-orange-500/60 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            className="gsap-hero-btn w-full sm:w-auto px-5 py-3.5 rounded-2xl bg-slate-950/80 hover:bg-slate-900 text-orange-400 hover:text-orange-300 font-semibold text-sm border border-orange-500/30 hover:border-orange-500/60 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <Percent className="w-4 h-4" />
-            <span>Pricing Plans</span>
+            <span>Pricing</span>
           </a>
         </div>
 
@@ -483,13 +493,23 @@ export default function HomePage() {
               </div>
             </div>
 
-            <Link
-              href="/pos"
-              className="w-full py-3.5 px-6 rounded-2xl bg-slate-900 hover:bg-slate-850 text-orange-400 hover:text-white font-bold text-sm border border-orange-500/40 hover:border-orange-500 flex items-center justify-center gap-2 transition-all"
-            >
-              <span>Explore POS Terminal Experience</span>
-              <ArrowRight className="w-4 h-4" />
-            </Link>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Link
+                href="/billing"
+                className="flex-1 py-3.5 px-5 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:opacity-95 text-white font-bold text-sm shadow-lg shadow-orange-500/25 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
+              >
+                <Receipt className="w-4 h-4" />
+                <span>Billing & Invoices</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+              <Link
+                href="/pos"
+                className="py-3.5 px-5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-orange-400 hover:text-white font-bold text-sm border border-orange-500/40 hover:border-orange-500 flex items-center justify-center gap-2 transition-all"
+              >
+                <ShoppingCart className="w-4 h-4" />
+                <span>POS Terminal</span>
+              </Link>
+            </div>
           </div>
 
           {/* Kitchen & Back of House Card */}
@@ -538,6 +558,7 @@ export default function HomePage() {
             </Link>
           </div>
         </div>
+
 
         {/* 4 Impact Numbers */}
         <div className="gsap-stats-row mt-12 grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
