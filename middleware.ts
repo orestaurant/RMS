@@ -7,15 +7,15 @@ const CUSTOMER_SESSION_COOKIE = 'customer_session'
 const JWT_SECRET_STRING = process.env.JWT_SECRET || 'rms_super_secret_jwt_key_2026_restaurant_mgmt_auth'
 const JWT_SECRET = new TextEncoder().encode(JWT_SECRET_STRING)
 
-async function isAdminAuthenticated(request: NextRequest): Promise<boolean> {
+async function getAdminPayload(request: NextRequest): Promise<any> {
   const token = request.cookies.get(ADMIN_SESSION_COOKIE)?.value
-  if (!token) return false
+  if (!token) return null
 
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET)
-    return !!payload?.userId
+    return payload
   } catch (err) {
-    return false
+    return null
   }
 }
 
@@ -34,11 +34,16 @@ async function isCustomerAuthenticated(request: NextRequest): Promise<boolean> {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  const adminAuth = await isAdminAuthenticated(request)
+  const adminPayload = await getAdminPayload(request)
+  const adminAuth = !!adminPayload?.userId
+  const isWaiter = String(adminPayload?.role || '').toUpperCase() === 'WAITER'
   const customerAuth = await isCustomerAuthenticated(request)
   const isAuthenticated = adminAuth || customerAuth
 
-  // 1. Customer Auth Pages (/customer/login, /customer/register, /customer/auth)
+  // Default redirect path based on user role
+  const defaultAuthRedirect = isWaiter ? '/tables' : '/dashboard'
+
+  // 1. Customer Auth Pages (/customer/auth, /customer/login, /customer/register)
   const isCustomerAuthRoute =
     pathname === '/customer/auth' ||
     pathname === '/customer/login' ||
@@ -46,7 +51,7 @@ export async function middleware(request: NextRequest) {
 
   if (isCustomerAuthRoute) {
     if (isAuthenticated) {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+      return NextResponse.redirect(new URL(defaultAuthRedirect, request.url))
     }
     return NextResponse.next()
   }
@@ -54,9 +59,38 @@ export async function middleware(request: NextRequest) {
   // 2. Admin Login Page (/login)
   if (pathname === '/login') {
     if (isAuthenticated) {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+      return NextResponse.redirect(new URL(defaultAuthRedirect, request.url))
     }
     return NextResponse.next()
+  }
+
+  // 2b. Waiter Role Route Security:
+  // Waiter can only access Tables, Reservations, Live Orders, Kitchen Display, and Menu Management.
+  // Other administrative and operational routes redirect directly to /tables.
+  if (isWaiter) {
+    if (pathname === '/dashboard' || pathname === '/dashboard/') {
+      return NextResponse.redirect(new URL('/tables', request.url))
+    }
+
+    const isRestrictedForWaiter =
+      pathname === '/settings' ||
+      pathname.startsWith('/settings/') ||
+      pathname === '/dashboard/settings' ||
+      pathname.startsWith('/dashboard/settings/') ||
+      pathname === '/staff' ||
+      pathname.startsWith('/staff/') ||
+      pathname === '/pos' ||
+      pathname.startsWith('/pos/') ||
+      pathname === '/inventory' ||
+      pathname.startsWith('/inventory/') ||
+      pathname === '/analytics' ||
+      pathname.startsWith('/analytics/') ||
+      pathname === '/crm' ||
+      pathname.startsWith('/crm/')
+
+    if (isRestrictedForWaiter) {
+      return NextResponse.redirect(new URL('/tables', request.url))
+    }
   }
 
   // 3. Customer Dashboard Redirect

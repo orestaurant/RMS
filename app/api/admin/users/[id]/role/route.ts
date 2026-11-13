@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { authenticateAdmin } from '@/lib/admin-auth'
+import { authenticateAdmin, invalidateAdminAuthCache } from '@/lib/admin-auth'
 import { UserRoleEnum } from '@prisma/client'
+import { invalidateUserStatsCache } from '@/lib/admin-cache'
 
 const ALLOWED_ROLES = [
   'WAITER',
@@ -204,6 +205,10 @@ export async function PATCH(
         })
         .catch(() => {})
     }
+
+    // Invalidate caches so the updated role/status is reflected immediately across all screens
+    invalidateUserStatsCache()
+    invalidateAdminAuthCache(id)
 
     return NextResponse.json({
       success: true,

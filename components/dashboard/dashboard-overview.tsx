@@ -25,9 +25,19 @@ import { getTopDishes, getInventoryAlerts } from '@/lib/api/dashboard'
 import type { TopDish, InventoryAlert } from '@/types/dashboard'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 
 export function DashboardOverview() {
+  const router = useRouter()
   const { auth, loading: authLoading } = useAuthContext()
+
+  // Waiter Role Guard: automatically redirect to Tables view
+  useEffect(() => {
+    if (!authLoading && String(auth?.role || '').toUpperCase() === 'WAITER') {
+      router.replace('/tables')
+    }
+  }, [auth, authLoading, router])
+
   const activeBranchId = auth?.branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
 
   // Dynamic dashboard stats from PostgreSQL via Prisma

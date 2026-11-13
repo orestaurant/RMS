@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useTransition } from 'react'
+import { useState, useEffect, useCallback, useTransition, useRef } from 'react'
 import {
   Search,
   Plus,
@@ -19,6 +19,8 @@ import {
   Lock,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Filter,
   UserX,
   Phone,
@@ -91,6 +93,37 @@ const SUPPORTED_ROLES = [
   { value: 'VENDOR', label: 'Vendor', icon: Truck, color: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
 ] as const
 
+/**
+ * Generate standard pagination page number sequence with ellipsis
+ */
+function getPageNumbers(current: number, total: number): (number | 'ellipsis')[] {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1)
+  }
+
+  const pages: (number | 'ellipsis')[] = []
+
+  if (current <= 4) {
+    for (let i = 1; i <= 5; i++) pages.push(i)
+    pages.push('ellipsis')
+    pages.push(total)
+  } else if (current >= total - 3) {
+    pages.push(1)
+    pages.push('ellipsis')
+    for (let i = total - 4; i <= total; i++) pages.push(i)
+  } else {
+    pages.push(1)
+    pages.push('ellipsis')
+    pages.push(current - 1)
+    pages.push(current)
+    pages.push(current + 1)
+    pages.push('ellipsis')
+    pages.push(total)
+  }
+
+  return pages
+}
+
 export function StaffView() {
   const { auth } = useAuthContext()
 
@@ -126,12 +159,28 @@ export function StaffView() {
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [stats, setStats] = useState<UserStats | null>(null)
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
+  const [isBackgroundFetching, setIsBackgroundFetching] = useState(false)
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selectedRole, setSelectedRole] = useState('ALL')
   const [selectedStatus, setSelectedStatus] = useState('ALL')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [totalPages, setTotalPages] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
+
+  // In-memory client cache to make pagination and filter switching instantaneous
+  const clientCache = useRef<
+    Map<
+      string,
+      {
+        users: ManagedUser[]
+        totalPages: number
+        totalCount: number
+        stats?: UserStats
+      }
+    >
+  >(new Map())
 
   // Notification / Toast banner state
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
@@ -175,47 +224,93 @@ export function StaffView() {
     }, 5000)
   }
 
-  // Fetch users from PostgreSQL via Prisma API
-  const fetchUsers = useCallback(async () => {
-    try {
-      setLoading(true)
-      const params = new URLSearchParams()
-      params.set('page', String(page))
-      params.set('limit', '10')
-      if (search.trim()) params.set('search', search.trim())
-      if (selectedRole !== 'ALL') params.set('role', selectedRole)
-      if (selectedStatus !== 'ALL') params.set('status', selectedStatus)
+  // Debounce search input by 300ms so typing doesn't bombard the API on every single keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchInput.trim())
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
 
-      const res = await fetch(`/api/admin/users?${params.toString()}`)
-      const data = await res.json()
+  // When filters or page size change, always reset to page 1
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedSearch, selectedRole, selectedStatus, pageSize])
 
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to fetch users from database')
+  // Invalidate client cache helper
+  const invalidateClientCache = useCallback(() => {
+    clientCache.current.clear()
+  }, [])
+
+  // Fetch users from PostgreSQL via Prisma API with client cache and silent background revalidation
+  const fetchUsers = useCallback(
+    async (silent = false, refreshStats = false) => {
+      const cacheKey = `${page}_${pageSize}_${debouncedSearch}_${selectedRole}_${selectedStatus}`
+      const cached = clientCache.current.get(cacheKey)
+
+      if (cached && !refreshStats) {
+        // Fast-path: display cached page instantly in 0ms!
+        setUsers(cached.users)
+        setTotalPages(cached.totalPages)
+        setTotalCount(cached.totalCount)
+        if (cached.stats) setStats(cached.stats)
+        if (!silent) {
+          setLoading(false)
+          setIsBackgroundFetching(true)
+        }
+      } else if (!silent) {
+        setLoading(true)
       }
 
-      setUsers(data.users || [])
-      setTotalPages(data.pagination?.totalPages || 1)
-      setTotalCount(data.pagination?.total || 0)
-      if (data.stats) {
-        setStats(data.stats)
+      try {
+        const params = new URLSearchParams()
+        params.set('page', String(page))
+        params.set('limit', String(pageSize))
+        if (debouncedSearch) params.set('search', debouncedSearch)
+        if (selectedRole !== 'ALL') params.set('role', selectedRole)
+        if (selectedStatus !== 'ALL') params.set('status', selectedStatus)
+        if (refreshStats) params.set('refreshStats', 'true')
+
+        const res = await fetch(`/api/admin/users?${params.toString()}`)
+        const data = await res.json()
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.message || 'Failed to fetch users from database')
+        }
+
+        const fetchedUsers = data.users || []
+        const fetchedTotalPages = data.pagination?.totalPages || 1
+        const fetchedTotal = data.pagination?.total || 0
+
+        setUsers(fetchedUsers)
+        setTotalPages(fetchedTotalPages)
+        setTotalCount(fetchedTotal)
+        if (data.stats) {
+          setStats(data.stats)
+        }
+
+        clientCache.current.set(cacheKey, {
+          users: fetchedUsers,
+          totalPages: fetchedTotalPages,
+          totalCount: fetchedTotal,
+          stats: data.stats || undefined,
+        })
+      } catch (err: any) {
+        console.error('Fetch users error:', err)
+        if (!silent) {
+          triggerFeedback('error', err.message || 'Error communicating with PostgreSQL server')
+        }
+      } finally {
+        setLoading(false)
+        setIsBackgroundFetching(false)
       }
-    } catch (err: any) {
-      console.error('Fetch users error:', err)
-      triggerFeedback('error', err.message || 'Error communicating with PostgreSQL server')
-    } finally {
-      setLoading(false)
-    }
-  }, [page, search, selectedRole, selectedStatus])
+    },
+    [page, pageSize, debouncedSearch, selectedRole, selectedStatus]
+  )
 
   useEffect(() => {
     fetchUsers()
   }, [fetchUsers])
-
-  // Handle Search Input Change (reset to page 1)
-  const handleSearchChange = (value: string) => {
-    setSearch(value)
-    setPage(1)
-  }
 
   // Check if current user can modify target user
   // Super Admin can modify anyone. Regular Admin can only modify operational staff (cannot modify Super Admin or Admin).
@@ -245,9 +340,16 @@ export function StaffView() {
   // Submit Role Assignment & Status update
   const handleSaveRole = async () => {
     if (!editUser) return
+    const prevUsers = [...users]
     try {
       setIsUpdating(true)
       setEditError(null)
+
+      // Optimistic update for immediate UI response
+      setUsers((prev) =>
+        prev.map((u) => (u.id === editUser.id ? { ...u, role: editRole, status: editStatus } : u))
+      )
+      invalidateClientCache()
 
       const res = await fetch(`/api/admin/users/${editUser.id}/role`, {
         method: 'PATCH',
@@ -261,12 +363,14 @@ export function StaffView() {
       const data = await res.json()
 
       if (!res.ok || !data.success) {
+        // Revert on error
+        setUsers(prevUsers)
         throw new Error(data.message || 'Failed to update user role/status')
       }
 
       triggerFeedback('success', data.message || `Successfully updated role for ${editUser.name}`)
       setEditUser(null)
-      fetchUsers()
+      fetchUsers(true, true)
     } catch (err: any) {
       setEditError(err.message || 'Failed to update user role')
     } finally {
@@ -289,14 +393,23 @@ export function StaffView() {
       return
     }
 
+    const prevUsers = [...users]
     try {
       setIsDeleting(true)
+
+      // Optimistic removal for instant reaction
+      setUsers((prev) => prev.filter((u) => u.id !== deleteConfirmUser.id))
+      setTotalCount((c) => Math.max(0, c - 1))
+      invalidateClientCache()
+
       const res = await fetch(`/api/admin/users/${deleteConfirmUser.id}`, {
         method: 'DELETE',
       })
 
       const data = await res.json()
       if (!res.ok || !data.success) {
+        setUsers(prevUsers)
+        setTotalCount((c) => c + 1)
         throw new Error(data.message || 'Failed to delete user')
       }
 
@@ -305,7 +418,7 @@ export function StaffView() {
       if (editUser?.id === deleteConfirmUser.id) {
         setEditUser(null)
       }
-      fetchUsers()
+      fetchUsers(true, true)
     } catch (err: any) {
       triggerFeedback('error', err.message || 'Error deleting user')
     } finally {
@@ -326,7 +439,15 @@ export function StaffView() {
     }
 
     const nextStatus = user.status === 'active' ? 'inactive' : 'active'
+    const prevUsers = [...users]
+
     try {
+      // Optimistic update
+      setUsers((prev) =>
+        prev.map((u) => (u.id === user.id ? { ...u, status: nextStatus } : u))
+      )
+      invalidateClientCache()
+
       const res = await fetch(`/api/admin/users/${user.id}/role`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -334,10 +455,11 @@ export function StaffView() {
       })
       const data = await res.json()
       if (!res.ok || !data.success) {
+        setUsers(prevUsers)
         throw new Error(data.message || 'Failed to change status')
       }
       triggerFeedback('success', `Status updated to ${nextStatus} for ${user.name}`)
-      fetchUsers()
+      fetchUsers(true, true)
     } catch (err: any) {
       triggerFeedback('error', err.message || 'Failed to update status')
     }
@@ -373,10 +495,11 @@ export function StaffView() {
         email: '',
         phone: '',
         password: '',
-        role: 'WAITER',
+        role: isSuperAdmin ? 'ADMIN' : 'WAITER',
         status: 'active',
       })
-      fetchUsers()
+      invalidateClientCache()
+      fetchUsers(false, true)
     } catch (err: any) {
       setCreateError(err.message || 'Failed to create staff user')
     } finally {
@@ -486,11 +609,12 @@ export function StaffView() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => fetchUsers()}
+            onClick={() => fetchUsers(false, true)}
             disabled={loading}
             className="gap-2 border-border/80 hover:bg-muted/60"
+            title="Refresh user list & stats from database"
           >
-            <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
+            <RefreshCw className={cn('size-4', (loading || isBackgroundFetching) && 'animate-spin')} />
             Refresh
           </Button>
           <Button
@@ -609,15 +733,28 @@ export function StaffView() {
       {/* Filter and Search Bar */}
       <Card className="p-4 border-border/60 bg-card/60 backdrop-blur-sm">
         <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
-          {/* Live Search */}
+          {/* Live Search with instant 300ms debounce */}
           <div className="relative flex-1 min-w-[240px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
             <Input
               placeholder="Search staff by full name, email, or mobile..."
-              value={search}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              className="pl-9 bg-background/50 border-input/60 focus-visible:ring-1"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="pl-9 pr-8 bg-background/50 border-input/60 focus-visible:ring-1"
             />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchInput('')
+                  setDebouncedSearch('')
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs p-1 rounded hover:bg-muted"
+                title="Clear search"
+              >
+                ✕
+              </button>
+            )}
           </div>
 
           {/* Role Filter Dropdown */}
@@ -628,10 +765,7 @@ export function StaffView() {
             </div>
             <select
               value={selectedRole}
-              onChange={(e) => {
-                setSelectedRole(e.target.value)
-                setPage(1)
-              }}
+              onChange={(e) => setSelectedRole(e.target.value)}
               className="h-9 px-3 rounded-md bg-background/80 border border-input/60 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="ALL">All Roles</option>
@@ -647,10 +781,7 @@ export function StaffView() {
             {/* Status Filter Dropdown */}
             <select
               value={selectedStatus}
-              onChange={(e) => {
-                setSelectedStatus(e.target.value)
-                setPage(1)
-              }}
+              onChange={(e) => setSelectedStatus(e.target.value)}
               className="h-9 px-3 rounded-md bg-background/80 border border-input/60 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="ALL">All Status</option>
@@ -658,19 +789,19 @@ export function StaffView() {
               <option value="inactive">Inactive Only</option>
             </select>
 
-            {(search || selectedRole !== 'ALL' || selectedStatus !== 'ALL') && (
+            {(searchInput || selectedRole !== 'ALL' || selectedStatus !== 'ALL') && (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  setSearch('')
+                  setSearchInput('')
+                  setDebouncedSearch('')
                   setSelectedRole('ALL')
                   setSelectedStatus('ALL')
-                  setPage(1)
                 }}
                 className="text-xs h-9 text-muted-foreground hover:text-foreground"
               >
-                Clear
+                Clear Filters
               </Button>
             )}
           </div>
@@ -678,9 +809,16 @@ export function StaffView() {
       </Card>
 
       {/* Users Table */}
-      <Card className="border-border/60 bg-card/60 backdrop-blur-sm overflow-hidden">
+      <Card className="border-border/60 bg-card/60 backdrop-blur-sm overflow-hidden relative">
+        {/* Subtle top progress bar during background revalidation or page transitions */}
+        {(loading || isBackgroundFetching) && users.length > 0 && (
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary/20 overflow-hidden z-10">
+            <div className="h-full bg-primary animate-pulse w-full" />
+          </div>
+        )}
+
         <div className="overflow-x-auto">
-          <Table>
+          <Table className={cn('transition-opacity duration-150', loading && users.length === 0 && 'opacity-60')}>
             <TableHeader className="bg-muted/40">
               <TableRow className="border-border/60 hover:bg-transparent">
                 <TableHead className="w-[280px]">Staff / User</TableHead>
@@ -692,18 +830,18 @@ export function StaffView() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading ? (
+              {loading && users.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-36 text-center">
+                  <TableCell colSpan={6} className="h-44 text-center">
                     <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
                       <RefreshCw className="size-6 animate-spin text-primary" />
-                      <span className="text-sm">Querying PostgreSQL database...</span>
+                      <span className="text-sm font-medium">Loading staff members...</span>
                     </div>
                   </TableCell>
                 </TableRow>
               ) : users.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-36 text-center">
+                  <TableCell colSpan={6} className="h-44 text-center">
                     <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
                       <UserX className="size-8 stroke-[1.5]" />
                       <p className="text-sm font-medium">No users found matching current filters</p>
@@ -865,35 +1003,112 @@ export function StaffView() {
           </Table>
         </div>
 
-        {/* Pagination Bar */}
-        <div className="flex flex-col sm:flex-row items-center justify-between p-4 border-t border-border/60 gap-3 text-xs text-muted-foreground bg-muted/20">
-          <div>
-            Showing <span className="font-medium text-foreground">{users.length}</span> of{' '}
-            <span className="font-medium text-foreground">{totalCount}</span> registered users
+        {/* Modern Full Pagination Controls */}
+        <div className="flex flex-col lg:flex-row items-center justify-between p-4 border-t border-border/60 gap-4 text-xs text-muted-foreground bg-muted/20">
+          {/* Left: Range info and Rows per page selector */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div>
+              Showing{' '}
+              <span className="font-semibold text-foreground">
+                {totalCount === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalCount)}
+              </span>{' '}
+              of <span className="font-semibold text-foreground">{totalCount}</span> staff members
+            </div>
+
+            <div className="h-4 w-px bg-border/70 hidden sm:block" />
+
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">Rows per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="h-8 px-2 rounded-md bg-background/80 border border-input/60 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          {/* Right: Page Navigation with Numbers, First/Prev/Next/Last buttons */}
+          <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap justify-center">
+            {/* First Page */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(1)}
+              disabled={page <= 1 || loading}
+              className="h-8 w-8 p-0 border-border/80"
+              title="First Page"
+            >
+              <ChevronsLeft className="size-3.5" />
+            </Button>
+
+            {/* Previous Page */}
             <Button
               variant="outline"
               size="sm"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page <= 1 || loading}
-              className="h-8 gap-1 border-border/80"
+              className="h-8 px-2.5 gap-1 border-border/80 text-xs"
+              title="Previous Page"
             >
               <ChevronLeft className="size-3.5" />
-              Previous
+              <span className="hidden sm:inline">Prev</span>
             </Button>
-            <span className="px-2 font-medium text-foreground">
-              Page {page} of {totalPages}
-            </span>
+
+            {/* Numeric Page Buttons */}
+            <div className="flex items-center gap-1">
+              {getPageNumbers(page, totalPages).map((p, idx) =>
+                p === 'ellipsis' ? (
+                  <span key={`ellipsis-${idx}`} className="px-1.5 text-muted-foreground select-none">
+                    …
+                  </span>
+                ) : (
+                  <Button
+                    key={`page-${p}`}
+                    variant={page === p ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setPage(p)}
+                    disabled={loading}
+                    className={cn(
+                      'h-8 min-w-[32px] px-2 text-xs font-medium transition-all',
+                      page === p
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'border-border/80 hover:bg-muted/60 text-foreground'
+                    )}
+                  >
+                    {p}
+                  </Button>
+                )
+              )}
+            </div>
+
+            {/* Next Page */}
             <Button
               variant="outline"
               size="sm"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages || loading}
-              className="h-8 gap-1 border-border/80"
+              className="h-8 px-2.5 gap-1 border-border/80 text-xs"
+              title="Next Page"
             >
-              Next
+              <span className="hidden sm:inline">Next</span>
               <ChevronRight className="size-3.5" />
+            </Button>
+
+            {/* Last Page */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(totalPages)}
+              disabled={page >= totalPages || loading}
+              className="h-8 w-8 p-0 border-border/80"
+              title="Last Page"
+            >
+              <ChevronsRight className="size-3.5" />
             </Button>
           </div>
         </div>

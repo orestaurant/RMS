@@ -54,7 +54,14 @@ export function AppSidebar() {
   // Real-time badge counts from PostgreSQL via Prisma
   const { data: counts } = useSidebarCounts(auth?.branchId || null)
 
-  const isCustomer = auth?.role?.toUpperCase() === 'CUSTOMER'
+  const userRole = auth?.role || 'SUPER_ADMIN'
+  const userRoleUpper = String(userRole).toUpperCase()
+  const isWaiter = userRoleUpper === 'WAITER'
+  const isCustomer = userRoleUpper === 'CUSTOMER'
+  const isSuperAdmin =
+    userRoleUpper === 'SUPER_ADMIN' ||
+    userRoleUpper === 'SUPERADMIN' ||
+    auth?.email === 'hexerve@gmail.com'
 
   const handleLogout = async () => {
     try {
@@ -80,84 +87,143 @@ export function AppSidebar() {
   }
 
   // Dynamic user data
-  const userName = auth?.name || (isCustomer ? 'Customer' : 'Rajesh')
+  const userName = auth?.name || (isCustomer ? 'Customer' : isWaiter ? 'Waiter' : 'Rajesh')
   const userEmail = auth?.email || (isCustomer ? 'customer@example.com' : 'hexerve@gmail.com')
-  const userRole = auth?.role || (isCustomer ? 'CUSTOMER' : 'SUPER_ADMIN')
   const initials =
     userName
       .split(' ')
       .map((n) => n[0])
       .join('')
       .substring(0, 2)
-      .toUpperCase() || (isCustomer ? 'C' : 'R')
+      .toUpperCase() || (isCustomer ? 'C' : isWaiter ? 'W' : 'R')
 
-  // Dynamic navigation groups:
-  // For Customers: Settings is EXCLUDED. All other options are included.
-  const navGroups = [
-    {
-      label: 'OPERATIONS',
-      items: [
-        { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  // Dynamic navigation groups with Role-Based Access Control (RBAC):
+  // 1. WAITER: Strictly limited to Tables, Reservations, Live Orders, Kitchen Display, and Menu Management
+  // 2. CUSTOMER: Customer operations and menu without internal settings
+  // 3. ADMIN/SUPER_ADMIN: Full system control across operations, kitchen, and business settings
+  const navGroups = (() => {
+    if (isWaiter) {
+      return [
         {
-          label: 'POS Terminal',
-          href: '/pos',
-          icon: ShoppingCart,
-          badge: counts?.posLive ? 'Live' : undefined,
+          label: 'OPERATIONS',
+          items: [
+            { label: 'Tables', href: '/tables', icon: TableProperties },
+            {
+              label: 'Reservations',
+              href: '/reservations',
+              icon: CalendarDays,
+              badge: counts?.reservations ? String(counts.reservations) : undefined,
+            },
+            {
+              label: 'Live Orders',
+              href: '/orders',
+              icon: Zap,
+              badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
+            },
+          ],
         },
-        { label: 'Tables', href: '/tables', icon: TableProperties },
         {
-          label: 'Reservations',
-          href: '/reservations',
-          icon: CalendarDays,
-          badge: counts?.reservations ? String(counts.reservations) : undefined,
+          label: 'KITCHEN',
+          items: [
+            {
+              label: 'Kitchen Display',
+              href: '/kitchen',
+              icon: ChefHat,
+              badge: counts?.kitchenLive ? 'Live' : undefined,
+            },
+            { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
+          ],
+        },
+      ]
+    }
+
+    if (isCustomer) {
+      return [
+        {
+          label: 'OPERATIONS',
+          items: [
+            { label: 'Tables', href: '/tables', icon: TableProperties },
+            {
+              label: 'Reservations',
+              href: '/reservations',
+              icon: CalendarDays,
+              badge: counts?.reservations ? String(counts.reservations) : undefined,
+            },
+            {
+              label: 'Live Orders',
+              href: '/orders',
+              icon: Zap,
+              badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
+            },
+            {
+              label: 'My Orders',
+              href: '/customer/orders',
+              icon: Receipt,
+            },
+          ],
         },
         {
-          label: 'Live Orders',
-          href: '/orders',
-          icon: Zap,
-          badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
+          label: 'KITCHEN',
+          items: [
+            { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
+          ],
         },
-        ...(isCustomer
-          ? [
-              {
-                label: 'My Orders',
-                href: '/customer/orders',
-                icon: Receipt,
-              },
-            ]
-          : []),
-      ],
-    },
-    {
-      label: 'KITCHEN',
-      items: [
-        {
-          label: 'Kitchen Display',
-          href: '/kitchen',
-          icon: ChefHat,
-          badge: counts?.kitchenLive ? 'Live' : undefined,
-        },
-        { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
-        {
-          label: 'Inventory',
-          href: '/inventory',
-          icon: Package,
-          badge: counts?.inventoryAlerts ? String(counts.inventoryAlerts) : undefined,
-        },
-      ],
-    },
-    ...(!isCustomer
-      ? [
+      ]
+    }
+
+    return [
+      {
+        label: 'OPERATIONS',
+        items: [
+          { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
           {
-            label: 'BUSINESS',
-            items: [
-              { label: 'Staff & Roles', href: '/staff', icon: UserCheck },
-              { label: 'Settings', href: '/dashboard/settings', icon: Settings },
-            ],
+            label: 'POS Terminal',
+            href: '/pos',
+            icon: ShoppingCart,
+            badge: counts?.posLive ? 'Live' : undefined,
           },
-        ]
-      : []),
-  ]
+          { label: 'Tables', href: '/tables', icon: TableProperties },
+          {
+            label: 'Reservations',
+            href: '/reservations',
+            icon: CalendarDays,
+            badge: counts?.reservations ? String(counts.reservations) : undefined,
+          },
+          {
+            label: 'Live Orders',
+            href: '/orders',
+            icon: Zap,
+            badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
+          },
+        ],
+      },
+      {
+        label: 'KITCHEN',
+        items: [
+          {
+            label: 'Kitchen Display',
+            href: '/kitchen',
+            icon: ChefHat,
+            badge: counts?.kitchenLive ? 'Live' : undefined,
+          },
+          { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
+          {
+            label: 'Inventory',
+            href: '/inventory',
+            icon: Package,
+            badge: counts?.inventoryAlerts ? String(counts.inventoryAlerts) : undefined,
+          },
+        ],
+      },
+      {
+        label: 'BUSINESS',
+        items: [
+          { label: 'Staff & Roles', href: '/staff', icon: UserCheck },
+          { label: 'Settings', href: '/dashboard/settings', icon: Settings },
+        ],
+      },
+    ]
+  })()
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border bg-sidebar">
@@ -167,8 +233,8 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               size="lg"
-              tooltip="Go to Home Page"
-              render={<Link href="/" />}
+              tooltip={isWaiter ? "Go to Tables" : "Go to Home Page"}
+              render={<Link href={isWaiter ? '/tables' : '/'} />}
               className="hover:bg-sidebar-accent/50 w-full"
             >
               <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-tr from-orange-500 to-amber-500 text-white shrink-0 shadow-sm shadow-orange-500/25">
@@ -179,7 +245,7 @@ export function AppSidebar() {
                   Resto<span className="text-orange-500">Sphere</span>
                 </span>
                 <span className="text-xs text-muted-foreground truncate">
-                  {isCustomer ? 'Customer Portal' : 'Restaurant OS'}
+                  {isCustomer ? 'Customer Portal' : isWaiter ? 'Waiter Console' : 'Restaurant OS'}
                 </span>
               </div>
             </SidebarMenuButton>
@@ -280,7 +346,9 @@ export function AppSidebar() {
                         "text-[10px] uppercase font-mono tracking-wider",
                         isCustomer
                           ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
-                          : userRole === 'SUPER_ADMIN' || userRole === 'super_admin'
+                          : isWaiter
+                          ? "border-amber-500/30 text-amber-500 dark:text-amber-400 bg-amber-500/10"
+                          : userRoleUpper === 'SUPER_ADMIN' || userRoleUpper === 'SUPERADMIN'
                           ? "border-indigo-500/30 text-indigo-400 bg-indigo-500/10"
                           : "border-primary/30 text-primary bg-primary/5"
                       )}
@@ -299,6 +367,14 @@ export function AppSidebar() {
                   >
                     <Receipt className="size-4 text-muted-foreground" />
                     <span>My Orders & History</span>
+                  </DropdownMenuItem>
+                ) : isWaiter ? (
+                  <DropdownMenuItem
+                    render={<Link href="/tables" />}
+                    className="cursor-pointer gap-2 py-2 px-2"
+                  >
+                    <TableProperties className="size-4 text-muted-foreground" />
+                    <span>Assigned Tables</span>
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem

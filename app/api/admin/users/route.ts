@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import prisma from '@/lib/prisma'
 import { authenticateAdmin } from '@/lib/admin-auth'
 import { UserRoleEnum } from '@prisma/client'
+import { getOrComputeUserStats, invalidateUserStatsCache, getCachedUserStats } from '@/lib/admin-cache'
 
 const ALLOWED_ROLES = [
   'WAITER',
@@ -17,7 +18,8 @@ const ALLOWED_ROLES = [
 
 /**
  * GET /api/admin/users
- * Fetch paginated, role-filtered users list with search support directly from PostgreSQL via Prisma
+ * Fetch paginated, role-filtered users list with search support directly from PostgreSQL via Prisma.
+ * Highly optimized with database-level aggregation, pagination, and fast in-memory caching.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -35,6 +37,7 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search')?.trim() || ''
     const roleFilter = searchParams.get('role')?.trim() || ''
     const statusFilter = searchParams.get('status')?.trim() || ''
+    const refreshStats = searchParams.get('refreshStats') === 'true'
 
     const where: any = {
       deletedAt: null,
@@ -63,7 +66,8 @@ export async function GET(request: NextRequest) {
 
     const skip = (page - 1) * limit
 
-    const [users, total, allUsersForStats] = await Promise.all([
+    // Execute paginated query, total count, and cached stats in parallel
+    const [users, total, stats] = await Promise.all([
       prisma.user.findMany({
         where,
         select: {
@@ -89,13 +93,7 @@ export async function GET(request: NextRequest) {
         take: limit,
       }),
       prisma.user.count({ where }),
-      prisma.user.findMany({
-        where: { deletedAt: null },
-        select: {
-          role: true,
-          status: true,
-        },
-      }),
+      getOrComputeUserStats(refreshStats),
     ])
 
     // Format users for client consumption
@@ -115,23 +113,6 @@ export async function GET(request: NextRequest) {
         designation: u.staffProfile?.designation || null,
       }
     })
-
-    // Compute dynamic aggregate stats from live database
-    const stats = {
-      total: allUsersForStats.length,
-      active: allUsersForStats.filter((u) => u.status === 'active').length,
-      inactive: allUsersForStats.filter((u) => u.status !== 'active').length,
-      roles: {
-        SUPER_ADMIN: allUsersForStats.filter((u) => u.role === 'SUPER_ADMIN' || u.role === 'super_admin').length,
-        ADMIN: allUsersForStats.filter((u) => u.role === 'ADMIN').length,
-        WAITER: allUsersForStats.filter((u) => u.role === 'WAITER' || u.role === 'waiter').length,
-        COUNTER_MANAGER: allUsersForStats.filter((u) => u.role === 'COUNTER_MANAGER').length,
-        CHEF: allUsersForStats.filter((u) => u.role === 'CHEF' || u.role === 'chef').length,
-        INVENTORY_MANAGER: allUsersForStats.filter((u) => u.role === 'INVENTORY_MANAGER').length,
-        VENDOR: allUsersForStats.filter((u) => u.role === 'VENDOR').length,
-        CUSTOMER: allUsersForStats.filter((u) => u.role === 'CUSTOMER' || u.role === 'customer').length,
-      },
-    }
 
     return NextResponse.json({
       success: true,
@@ -339,6 +320,9 @@ export async function POST(request: NextRequest) {
         console.warn('Optional staffProfile creation skipped:', (staffErr as any)?.message)
       }
     }
+
+    // Invalidate user stats cache so next query reflects the newly created user
+    invalidateUserStatsCache()
 
     return NextResponse.json(
       {

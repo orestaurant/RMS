@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { authenticateAdmin } from '@/lib/admin-auth'
+import { authenticateAdmin, invalidateAdminAuthCache } from '@/lib/admin-auth'
+import { invalidateUserStatsCache } from '@/lib/admin-cache'
 
 /**
  * GET /api/admin/users/[id]
@@ -97,6 +98,10 @@ export async function DELETE(
         { status: 403 }
       )
     }
+
+    // Invalidate caches upon deletion/deactivation
+    invalidateUserStatsCache()
+    invalidateAdminAuthCache(id)
 
     // Try permanent hard delete first (e.g. if newly created or no cascade-blocking foreign keys)
     try {

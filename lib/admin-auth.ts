@@ -11,6 +11,23 @@ export interface AdminAuthContext {
   organizationId?: string | null
 }
 
+// In-memory cache for validated admin sessions (30s TTL)
+// Drastically speeds up admin API endpoints by eliminating repeated DB roundtrips for session lookups
+interface CachedAdminAuth {
+  auth: AdminAuthContext
+  expiresAt: number
+}
+
+const adminAuthCache = new Map<string, CachedAdminAuth>()
+
+export function invalidateAdminAuthCache(userId?: string): void {
+  if (userId) {
+    adminAuthCache.delete(userId)
+  } else {
+    adminAuthCache.clear()
+  }
+}
+
 export async function authenticateAdmin(
   request: NextRequest
 ): Promise<{ auth: AdminAuthContext | null; errorResponse?: { message: string; status: number } }> {
@@ -35,6 +52,12 @@ export async function authenticateAdmin(
       }
     }
 
+    // Fast-path: Return cached authenticated admin context if still valid
+    const cached = adminAuthCache.get(payload.userId)
+    if (cached && Date.now() < cached.expiresAt) {
+      return { auth: cached.auth }
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
       select: {
@@ -51,6 +74,7 @@ export async function authenticateAdmin(
     })
 
     if (!user || user.deletedAt) {
+      adminAuthCache.delete(payload.userId)
       return {
         auth: null,
         errorResponse: { message: 'Unauthorized: Admin account not found or has been deactivated', status: 401 },
@@ -66,6 +90,7 @@ export async function authenticateAdmin(
     const isAdmin = roleUpper === 'ADMIN' || isSuperAdmin
 
     if (!isAdmin) {
+      adminAuthCache.delete(payload.userId)
       return {
         auth: null,
         errorResponse: { message: 'Forbidden: Only administrators can access this resource', status: 403 },
@@ -73,22 +98,29 @@ export async function authenticateAdmin(
     }
 
     if (user.status !== 'active') {
+      adminAuthCache.delete(payload.userId)
       return {
         auth: null,
         errorResponse: { message: 'Forbidden: Your admin account is currently inactive', status: 403 },
       }
     }
 
-    return {
-      auth: {
-        userId: user.id,
-        email: user.email,
-        name: user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || (isSuperAdmin ? 'Super Admin' : 'Admin'),
-        role: user.role,
-        isSuperAdmin,
-        organizationId: user.organizationId,
-      },
+    const authContext: AdminAuthContext = {
+      userId: user.id,
+      email: user.email,
+      name: user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || (isSuperAdmin ? 'Super Admin' : 'Admin'),
+      role: user.role,
+      isSuperAdmin,
+      organizationId: user.organizationId,
     }
+
+    // Store in cache for 30 seconds
+    adminAuthCache.set(user.id, {
+      auth: authContext,
+      expiresAt: Date.now() + 30_000,
+    })
+
+    return { auth: authContext }
   } catch (error: any) {
     console.error('authenticateAdmin error:', error)
     return {

@@ -62,9 +62,13 @@ export async function POST(request: NextRequest) {
       role: user.role,
     })
 
+    const roleUpper = String(user.role || '').toUpperCase()
+    const isWaiter = roleUpper === 'WAITER'
+    const redirectUrl = isWaiter ? '/tables' : '/dashboard'
+
     const response = NextResponse.json({
       success: true,
-      redirect: '/dashboard',
+      redirect: redirectUrl,
       user: {
         name: user.name || 'Admin',
         email: user.email,
