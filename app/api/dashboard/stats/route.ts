@@ -1,31 +1,56 @@
 /**
  * GET /api/dashboard/stats
- * Real-time dashboard statistics fetched strictly from PostgreSQL via Prisma
+ * Real-time dashboard statistics - Ultra-fast aggregated and cached
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { Prisma } from '@prisma/client'
 import { startOfDay, endOfDay, subDays } from 'date-fns'
 import type { DashboardStats } from '@/types/dashboard'
 import { successResponse, errorResponse, ApiResponse } from '@/api/utils/responses'
+import {
+  getCachedStats,
+  setCachedStats,
+  getCachedBranchMeta,
+  setCachedBranchMeta,
+} from '@/lib/dashboard-cache'
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<DashboardStats>>> {
   try {
     const url = new URL(request.url)
     const branchIdParam = url.searchParams.get('branchId')
+    const cacheKey = branchIdParam || 'default'
 
-    // Find default branch if not passed
-    let branch = branchIdParam
-      ? await prisma.branch.findUnique({
-          where: { id: branchIdParam },
-          include: { restaurant: true },
-        })
-      : null
+    // 1. Fast Cache Hit (< 2ms)
+    const cached = getCachedStats(cacheKey)
+    if (cached) {
+      return NextResponse.json(
+        successResponse(cached, 'Dashboard statistics retrieved from cache'),
+        {
+          headers: {
+            'X-Cache': 'HIT',
+            'Cache-Control': 'private, max-age=5, stale-while-revalidate=10',
+          },
+        }
+      )
+    }
 
+    // 2. Resolve branch (with in-memory fallback cache)
+    let branch = getCachedBranchMeta(branchIdParam)
     if (!branch) {
-      branch = await prisma.branch.findFirst({
-        include: { restaurant: true },
-      })
+      branch = branchIdParam
+        ? await prisma.branch.findUnique({
+            where: { id: branchIdParam },
+            include: { restaurant: true },
+          })
+        : await prisma.branch.findFirst({
+            include: { restaurant: true },
+          })
+
+      if (branch && !branchIdParam) {
+        setCachedBranchMeta(branch)
+      }
     }
 
     const branchId = branch?.id
@@ -34,49 +59,81 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     // Date boundaries
     const now = new Date()
     const todayStart = startOfDay(now)
-    const todayEnd = endOfDay(now)
     const yesterdayStart = startOfDay(subDays(now, 1))
     const yesterdayEnd = endOfDay(subDays(now, 1))
 
-    // ─── 1. Today's Revenue ──────────────────────────────────
-    // Real sum of `total` for completed orders created today (createdAt >= startOfDay)
-    const completedOrdersAggregate = await prisma.order.aggregate({
-      where: {
-        createdAt: { gte: todayStart },
-        OR: [
-          { status: { in: ['completed', 'COMPLETED', 'served', 'SERVED'] } },
-          { paymentStatus: 'completed' },
-        ],
-        deletedAt: null,
-        ...(branchId ? { branchId } : {}),
-      },
-      _sum: {
-        total: true,
-        totalAmount: true,
-      },
-    })
+    // 3. Ultra-fast parallel execution: Order, Table, Guest & Report metrics concurrently
+    const orderBranchFilter = branchId ? Prisma.sql`AND "branchId" = ${branchId}::uuid` : Prisma.empty
+    const tableBranchFilter = branchId ? Prisma.sql`AND "branchId" = ${branchId}::uuid` : Prisma.empty
 
-    const rawTodayRevenue = Number(completedOrdersAggregate._sum.total ?? completedOrdersAggregate._sum.totalAmount ?? 0)
-    const todayRevenue = isNaN(rawTodayRevenue) ? 0 : rawTodayRevenue
+    const [orderMetricsResult, tableMetricsResult, guestMetricsResult, latestReport] = await Promise.all([
+      // A. All revenue and order metrics in ONE single database query
+      prisma.$queryRaw<any[]>`
+        SELECT
+          COUNT(CASE WHEN "createdAt" >= ${todayStart} THEN 1 END)::int AS today_orders,
+          COALESCE(SUM(CASE 
+            WHEN "createdAt" >= ${todayStart}
+              AND ("status"::text ILIKE 'completed' OR "status"::text ILIKE 'served' OR "paymentStatus"::text = 'completed')
+            THEN COALESCE("total", "totalAmount", 0) 
+            ELSE 0 
+          END), 0)::float AS today_revenue,
+          COUNT(CASE WHEN "createdAt" >= ${yesterdayStart} AND "createdAt" <= ${yesterdayEnd} THEN 1 END)::int AS yest_orders,
+          COALESCE(SUM(CASE 
+            WHEN "createdAt" >= ${yesterdayStart} AND "createdAt" <= ${yesterdayEnd}
+              AND ("status"::text ILIKE 'completed' OR "status"::text ILIKE 'served' OR "paymentStatus"::text = 'completed')
+            THEN COALESCE("total", "totalAmount", 0) 
+            ELSE 0 
+          END), 0)::float AS yest_revenue
+        FROM "Order"
+        WHERE "deletedAt" IS NULL 
+          AND "createdAt" >= ${yesterdayStart}
+          ${orderBranchFilter}
+      `.catch((err) => {
+        console.warn('Raw query order metrics fallback:', err)
+        return []
+      }),
 
-    // Yesterday's Revenue for live comparison
-    const yestCompletedOrders = await prisma.order.aggregate({
-      where: {
-        createdAt: { gte: yesterdayStart, lte: yesterdayEnd },
-        OR: [
-          { status: { in: ['completed', 'COMPLETED', 'served', 'SERVED'] } },
-          { paymentStatus: 'completed' },
-        ],
-        deletedAt: null,
-        ...(branchId ? { branchId } : {}),
-      },
-      _sum: {
-        total: true,
-        totalAmount: true,
-      },
-    })
-    const yesterdayRevenue = Number(yestCompletedOrders._sum.total ?? yestCompletedOrders._sum.totalAmount ?? 0)
+      // B. All table occupancy metrics in ONE single database query
+      prisma.$queryRaw<any[]>`
+        SELECT
+          COUNT(*)::int AS total_tables,
+          COUNT(CASE WHEN "status"::text = 'occupied' THEN 1 END)::int AS occupied_tables
+        FROM "RestaurantTable"
+        WHERE "deletedAt" IS NULL
+          ${tableBranchFilter}
+      `.catch((err) => {
+        console.warn('Raw query table metrics fallback:', err)
+        return []
+      }),
 
+      // C. All new guests metrics in ONE single database query
+      prisma.$queryRaw<any[]>`
+        SELECT
+          COUNT(CASE WHEN "createdAt" >= ${todayStart} THEN 1 END)::int AS today_guests,
+          COUNT(CASE WHEN "createdAt" >= ${yesterdayStart} AND "createdAt" <= ${yesterdayEnd} THEN 1 END)::int AS yest_guests
+        FROM "Customer"
+        WHERE "deletedAt" IS NULL
+          AND "createdAt" >= ${yesterdayStart}
+      `.catch((err) => {
+        console.warn('Raw query guest metrics fallback:', err)
+        return []
+      }),
+
+      // D. Performance score
+      prisma.branchPerformanceReport.findFirst({
+        where: branchId ? { branchId } : {},
+        orderBy: { createdAt: 'desc' },
+        select: { customerSatisfactionScore: true },
+      }).catch(() => null),
+    ])
+
+    const orders = orderMetricsResult[0] || {}
+    const tables = tableMetricsResult[0] || {}
+    const guests = guestMetricsResult[0] || {}
+
+    // Revenue calculations
+    const todayRevenue = orders.today_revenue || 0
+    const yesterdayRevenue = orders.yest_revenue || 0
     const todayRevenueChangePercent =
       yesterdayRevenue > 0
         ? Number((((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100).toFixed(1))
@@ -84,90 +141,40 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
         ? 100
         : 0
 
-    // ─── 2. Total Orders Today ───────────────────────────────
-    // Real count of orders created today
-    const totalOrders = await prisma.order.count({
-      where: {
-        createdAt: { gte: todayStart },
-        deletedAt: null,
-        ...(branchId ? { branchId } : {}),
-      },
-    })
-
-    const yesterdayOrders = await prisma.order.count({
-      where: {
-        createdAt: { gte: yesterdayStart, lte: yesterdayEnd },
-        deletedAt: null,
-        ...(branchId ? { branchId } : {}),
-      },
-    })
+    // Order counts
+    const totalOrders = orders.today_orders || 0
+    const yesterdayOrders = orders.yest_orders || 0
     const totalOrdersChange = yesterdayOrders > 0 ? totalOrders - yesterdayOrders : totalOrders
 
-    // ─── 3. Average Ticket ───────────────────────────────────
-    // Computed strictly as todayRevenue / totalOrders (or 0 if 0 orders)
+    // Ticket average
     const avgTicket = totalOrders > 0 ? Math.round(todayRevenue / totalOrders) : 0
     const yesterdayAvgTicket = yesterdayOrders > 0 ? Math.round(yesterdayRevenue / yesterdayOrders) : 0
     const avgTicketChange = yesterdayAvgTicket > 0 ? avgTicket - yesterdayAvgTicket : 0
 
-    // ─── 4. Table Occupancy ──────────────────────────────────
-    // Actual database records
-    const totalTables = await prisma.restaurantTable.count({
-      where: {
-        deletedAt: null,
-        ...(branchId ? { branchId } : {}),
-      },
-    })
-
-    const occupiedTables = await prisma.restaurantTable.count({
-      where: {
-        status: 'occupied',
-        deletedAt: null,
-        ...(branchId ? { branchId } : {}),
-      },
-    })
-
+    // Tables & Occupancy
+    const totalTables = tables.total_tables || 0
+    const occupiedTables = tables.occupied_tables || 0
     const tableOccupancy = totalTables > 0 ? Math.round((occupiedTables / totalTables) * 100) : 0
 
-    // ─── 5. New Guests ───────────────────────────────────────
-    // Real count of new Customer records created today
-    const newGuests = await prisma.customer.count({
-      where: {
-        createdAt: { gte: todayStart },
-        deletedAt: null,
-      },
-    })
-
-    const yesterdayGuests = await prisma.customer.count({
-      where: {
-        createdAt: { gte: yesterdayStart, lte: yesterdayEnd },
-        deletedAt: null,
-      },
-    })
+    // Guests
+    const newGuests = guests.today_guests || 0
+    const yesterdayGuests = guests.yest_guests || 0
     const newGuestsChange = yesterdayGuests > 0 ? newGuests - yesterdayGuests : newGuests
 
-    // ─── 6. Satisfaction Rating ──────────────────────────────
-    // Pull actual database records or computed metrics
-    const latestReport = await prisma.branchPerformanceReport.findFirst({
-      where: branchId ? { branchId } : {},
-      orderBy: { createdAt: 'desc' },
-      select: { customerSatisfactionScore: true },
-    })
-
+    // Satisfaction
     const satisfaction = latestReport?.customerSatisfactionScore
       ? Number(latestReport.customerSatisfactionScore)
       : 0
 
-    // ─── 7. Outlet Details & Status ──────────────────────────
+    // Outlet Details & Status
     const restaurantName = restaurant?.name || 'RestoSphere'
     const branchName = branch?.name || 'Mumbai Central'
     const fullName = `${restaurantName} — ${branchName}`
 
-    // Parse operating hours
     const opHoursObj = restaurant?.operatingHours as { open?: string; close?: string; closingTime?: string } | null
     const closingTime = opHoursObj?.close || opHoursObj?.closingTime || '11:00 PM'
     const operatingHours = `${opHoursObj?.open || '11:00 AM'} - ${closingTime}`
 
-    // Check if open currently
     const currentHour = now.getHours()
     const isOpen = currentHour >= 11 && currentHour < 23
 
@@ -197,7 +204,18 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       },
     }
 
-    return NextResponse.json(successResponse(statsData, 'Dashboard statistics retrieved successfully'))
+    // Save to server-side cache
+    setCachedStats(cacheKey, statsData)
+
+    return NextResponse.json(
+      successResponse(statsData, 'Dashboard statistics retrieved successfully'),
+      {
+        headers: {
+          'X-Cache': 'MISS',
+          'Cache-Control': 'private, max-age=5, stale-while-revalidate=10',
+        },
+      }
+    )
   } catch (error: any) {
     console.error('Error fetching dashboard stats:', error)
     return NextResponse.json(

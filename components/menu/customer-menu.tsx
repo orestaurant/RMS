@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import {
   UtensilsCrossed,
   ShoppingBag,
@@ -15,6 +15,8 @@ import {
   Clock,
   ChefHat,
   ArrowRight,
+  ArrowLeft,
+  ChevronLeft,
   Flame,
   Leaf,
   X,
@@ -70,6 +72,7 @@ interface OrderConfirmationData {
 
 export function CustomerMenu() {
   const searchParams = useSearchParams()
+  const router = useRouter()
 
   // 1. Table Number State & Persistence
   const [tableNumber, setTableNumber] = useState<string>('')
@@ -87,10 +90,12 @@ export function CustomerMenu() {
   const [tableOrders, setTableOrders] = useState<any[]>([])
   const [showOrdersModal, setShowOrdersModal] = useState<boolean>(false)
 
-  // 4. Filters
+  // 4. Filters & Pagination State
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [vegOnly, setVegOnly] = useState<boolean>(false)
+  const [currentPage, setCurrentPage] = useState<number>(1)
+  const [itemsPerPage, setItemsPerPage] = useState<number>(8)
 
   // 5. Cart & Drawer State
   const [cart, setCart] = useState<{ [id: string]: CartItem }>({})
@@ -319,16 +324,46 @@ export function CustomerMenu() {
     })
   }, [menuItems, selectedCategory, vegOnly, searchQuery])
 
-  // Group items by category for structured browsing
+  // Reset pagination to page 1 on filter/search change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [selectedCategory, searchQuery, vegOnly, itemsPerPage])
+
+  // Pagination Calculations
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / itemsPerPage))
+
+  // Paginated slice of filtered items for optimized DOM rendering
+  const paginatedItems = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage
+    return filteredItems.slice(startIndex, startIndex + itemsPerPage)
+  }, [filteredItems, currentPage, itemsPerPage])
+
+  // Group paginated items by category for structured browsing
   const itemsByCategory = useMemo(() => {
     const map = new Map<string, CustomerMenuItem[]>()
-    for (const item of filteredItems) {
+    for (const item of paginatedItems) {
       const cat = item.category || 'Specialties'
       if (!map.has(cat)) map.set(cat, [])
       map.get(cat)!.push(item)
     }
     return map
-  }, [filteredItems])
+  }, [paginatedItems])
+
+  const handlePageChange = (newPage: number) => {
+    const target = Math.max(1, Math.min(newPage, totalPages))
+    setCurrentPage(target)
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 160, behavior: 'smooth' })
+    }
+  }
+
+  const handleBack = useCallback(() => {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back()
+    } else {
+      router.push('/dashboard')
+    }
+  }, [router])
 
   // Place Order handler
   const handlePlaceOrder = async () => {
@@ -455,21 +490,33 @@ export function CustomerMenu() {
       {/* 1. TOP CUSTOMER HEADER */}
       <header className="sticky top-0 z-30 bg-background/90 backdrop-blur-xl border-b border-border/70 px-4 py-3 shadow-xs">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
-          {/* Brand */}
-          <div className="flex items-center gap-3">
-            <div className="size-10 rounded-2xl bg-gradient-to-tr from-primary to-indigo-600 text-primary-foreground flex items-center justify-center font-bold shadow-md shadow-primary/25">
+          {/* Back Button + Brand */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleBack}
+              className="h-9 px-2.5 sm:px-3 rounded-xl border-border/80 hover:bg-muted text-foreground font-semibold gap-1.5 cursor-pointer shadow-2xs transition-all active:scale-95 shrink-0"
+              title="Go Back"
+              aria-label="Go Back"
+            >
+              <ArrowLeft className="size-4" />
+              <span className="hidden sm:inline text-xs font-bold">Back</span>
+            </Button>
+
+            <div className="size-10 rounded-2xl bg-gradient-to-tr from-primary to-indigo-600 text-primary-foreground flex items-center justify-center font-bold shadow-md shadow-primary/25 shrink-0">
               <UtensilsCrossed className="size-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-base font-black tracking-tight leading-none text-foreground">
+                <h1 className="text-base font-black tracking-tight leading-none text-foreground truncate">
                   Spice Garden
                 </h1>
-                <span className="hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary border border-primary/20">
+                <span className="hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary border border-primary/20 shrink-0">
                   Dine-in
                 </span>
               </div>
-              <p className="text-[11px] text-muted-foreground font-medium mt-0.5">
+              <p className="text-[11px] text-muted-foreground font-medium mt-0.5 truncate">
                 Table Self-Ordering Menu
               </p>
             </div>
@@ -1195,6 +1242,102 @@ export function CustomerMenu() {
                 </div>
               </section>
             ))}
+          </div>
+        )}
+
+        {/* 4b. PAGINATION CONTROLS */}
+        {!loading && !fetchError && filteredItems.length > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 pb-2 border-t border-border/60">
+            {/* Range info and items per page selector */}
+            <div className="flex items-center gap-3 text-xs text-muted-foreground font-medium flex-wrap">
+              <span>
+                Showing{' '}
+                <strong className="text-foreground font-bold">
+                  {Math.min((currentPage - 1) * itemsPerPage + 1, filteredItems.length)}
+                </strong>
+                –
+                <strong className="text-foreground font-bold">
+                  {Math.min(currentPage * itemsPerPage, filteredItems.length)}
+                </strong>{' '}
+                of <strong className="text-foreground font-bold">{filteredItems.length}</strong> dishes
+              </span>
+
+              {/* Items per page selector */}
+              <div className="flex items-center gap-1 pl-2 border-l border-border/60">
+                <span className="text-[11px] text-muted-foreground hidden sm:inline">Per page:</span>
+                {[6, 8, 12, 24].map((size) => (
+                  <button
+                    key={size}
+                    onClick={() => setItemsPerPage(size)}
+                    className={cn(
+                      'px-2 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer',
+                      itemsPerPage === size
+                        ? 'bg-primary text-primary-foreground shadow-2xs'
+                        : 'hover:bg-muted text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Page navigation buttons */}
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="h-8 px-2.5 rounded-xl text-xs font-bold gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="size-3.5" />
+                  <span className="hidden sm:inline">Prev</span>
+                </Button>
+
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter((p) => {
+                      return p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1
+                    })
+                    .map((p, idx, arr) => {
+                      const prev = arr[idx - 1]
+                      const showEllipsis = prev && p - prev > 1
+
+                      return (
+                        <React.Fragment key={p}>
+                          {showEllipsis && (
+                            <span className="text-muted-foreground text-xs px-1 select-none">…</span>
+                          )}
+                          <button
+                            onClick={() => handlePageChange(p)}
+                            className={cn(
+                              'size-8 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center select-none',
+                              currentPage === p
+                                ? 'bg-primary text-primary-foreground shadow-xs scale-105'
+                                : 'border border-border/80 hover:bg-muted text-muted-foreground hover:text-foreground'
+                            )}
+                          >
+                            {p}
+                          </button>
+                        </React.Fragment>
+                      )
+                    })}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="h-8 px-2.5 rounded-xl text-xs font-bold gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <span className="hidden sm:inline">Next</span>
+                  <ChevronRight className="size-3.5" />
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </main>

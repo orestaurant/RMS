@@ -1,6 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
+// High-speed in-memory cache for menu items (sub-5ms response time)
+let menuItemsCache: {
+  data: any[]
+  timestamp: number
+} | null = null
+
+export function invalidateMenuItemsCache() {
+  menuItemsCache = null
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
@@ -8,9 +21,11 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search') || ''
     const branchId = searchParams.get('branchId')
     const explicitRestId = searchParams.get('restaurantId')
+    const pageParam = searchParams.get('page')
+    const limitParam = searchParams.get('limit')
     let restaurantId = explicitRestId
 
-    // If branchId is provided, resolve restaurantId
+    // 1. Resolve branch to restaurantId if branchId provided
     if (branchId) {
       const branch = await prisma.branch.findUnique({
         where: { id: branchId },
@@ -21,82 +36,141 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const where: any = {
-      deletedAt: null,
-    }
+    const now = Date.now()
+    const CACHE_TTL = 30_000 // 30 seconds memory cache
 
-    // Only strictly filter by restaurantId if client requested it explicitly,
-    // or if the default restaurant has items in the database
-    if (restaurantId) {
-      if (explicitRestId || branchId) {
-        where.restaurantId = restaurantId
-      } else {
-        const hasItems = await prisma.menuItem.count({
-          where: { restaurantId, deletedAt: null },
-        })
-        if (hasItems > 0) {
-          where.restaurantId = restaurantId
-        }
+    let allItems: any[] = []
+    let isHit = false
+
+    // 2. Check in-memory cache
+    if (menuItemsCache && now - menuItemsCache.timestamp < CACHE_TTL) {
+      allItems = menuItemsCache.data
+      isHit = true
+    } else {
+      // 3. Fetch from DB using ultra-lean select query
+      const dbItems = await prisma.menuItem.findMany({
+        where: { deletedAt: null },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          categoryId: true,
+          restaurantId: true,
+          basePrice: true,
+          costPrice: true,
+          imageUrl: true,
+          isVegetarian: true,
+          isVegan: true,
+          isSpicy: true,
+          spiceLevel: true,
+          isAvailable: true,
+          preparationTimeMinutes: true,
+          displayOrder: true,
+          category: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          variants: {
+            where: { deletedAt: null },
+            select: {
+              id: true,
+              name: true,
+              priceModifier: true,
+            },
+          },
+        },
+        orderBy: { displayOrder: 'asc' },
+      })
+
+      allItems = dbItems.map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description || '',
+        categoryId: item.categoryId,
+        restaurantId: item.restaurantId,
+        category: item.category?.name || 'Uncategorized',
+        price: Number(item.basePrice),
+        costPrice: item.costPrice ? Number(item.costPrice) : undefined,
+        image: item.imageUrl || '',
+        isVeg: item.isVegetarian,
+        isVegan: item.isVegan,
+        isSpicy: item.isSpicy,
+        spiceLevel: item.spiceLevel || 0,
+        isAvailable: item.isAvailable,
+        prepTime: item.preparationTimeMinutes || 15,
+        rating: 4.8,
+        tags: item.isSpicy ? ['spicy'] : [],
+        variants:
+          item.variants?.map((v) => ({
+            id: v.id,
+            name: v.name,
+            price: Number(v.priceModifier || 0),
+          })) || [],
+      }))
+
+      // Cache the full formatted dataset
+      menuItemsCache = {
+        data: allItems,
+        timestamp: now,
       }
     }
 
+    // 4. In-memory filtering (instantaneous sub-millisecond)
+    let filtered = allItems
+
+    if (restaurantId && (explicitRestId || branchId)) {
+      filtered = filtered.filter((i) => i.restaurantId === restaurantId)
+    }
+
     if (category && category !== 'all') {
-      where.categoryId = category
+      filtered = filtered.filter(
+        (i) =>
+          i.categoryId === category ||
+          (i.category || '').toLowerCase() === category.toLowerCase()
+      )
     }
 
     if (search.trim()) {
-      where.OR = [
-        { name: { contains: search.trim(), mode: 'insensitive' } },
-        { description: { contains: search.trim(), mode: 'insensitive' } },
-      ]
+      const q = search.trim().toLowerCase()
+      filtered = filtered.filter(
+        (i) =>
+          i.name.toLowerCase().includes(q) ||
+          i.description.toLowerCase().includes(q) ||
+          i.category.toLowerCase().includes(q)
+      )
     }
 
-    const items = await prisma.menuItem.findMany({
-      where,
-      include: {
-        category: true,
-        variants: {
-          where: { deletedAt: null },
-        },
-      },
-      orderBy: { displayOrder: 'asc' },
-    })
+    const total = filtered.length
 
-    const formatted = items.map((item) => ({
-      id: item.id,
-      name: item.name,
-      description: item.description || '',
-      categoryId: item.categoryId,
-      category: item.category?.name || 'Uncategorized',
-      price: Number(item.basePrice),
-      costPrice: item.costPrice ? Number(item.costPrice) : undefined,
-      image: item.imageUrl || '',
-      isVeg: item.isVegetarian,
-      isVegan: item.isVegan,
-      isSpicy: item.isSpicy,
-      spiceLevel: item.spiceLevel || 0,
-      isAvailable: item.isAvailable,
-      prepTime: item.preparationTimeMinutes || 15,
-      rating: 4.8,
-      tags: item.isSpicy ? ['spicy'] : [],
-      variants: item.variants?.map((v) => ({
-        id: v.id,
-        name: v.name,
-        price: Number(v.priceModifier || 0),
-      })) || [],
-    }))
+    // 5. Pagination support (if requested)
+    let responseData = filtered
+    let pageNum: number | undefined
+    let limitNum: number | undefined
+    let totalPages: number | undefined
+
+    if (pageParam || limitParam) {
+      pageNum = Math.max(1, parseInt(pageParam || '1', 10))
+      limitNum = Math.max(1, parseInt(limitParam || '10', 10))
+      totalPages = Math.max(1, Math.ceil(total / limitNum))
+      const startIndex = (pageNum - 1) * limitNum
+      responseData = filtered.slice(startIndex, startIndex + limitNum)
+    }
 
     return NextResponse.json(
       {
         success: true,
-        data: formatted,
+        data: responseData,
         meta: {
-          total: formatted.length,
+          total,
+          ...(pageNum ? { page: pageNum, limit: limitNum, totalPages } : {}),
         },
       },
       {
         headers: {
           'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'X-Menu-Cache': isHit ? 'HIT' : 'MISS',
         },
       }
     )
@@ -151,57 +225,51 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const finalPrice = parseFloat(price ?? basePrice)
-    if (isNaN(finalPrice) || finalPrice < 0) {
+    const itemPrice = price !== undefined ? price : basePrice
+    if (itemPrice === undefined || isNaN(Number(itemPrice)) || Number(itemPrice) < 0) {
       return NextResponse.json(
-        { success: false, message: 'A valid price is required' },
+        { success: false, message: 'Valid price is required' },
         { status: 400 }
       )
     }
 
-    // Verify category exists
-    const categoryRecord = await prisma.menuCategory.findUnique({
+    // Resolve restaurant and organization from category
+    const cat = await prisma.menuCategory.findUnique({
       where: { id: categoryId },
-      select: { id: true, restaurantId: true, organizationId: true },
+      select: { restaurantId: true, organizationId: true },
     })
 
-    if (!categoryRecord) {
+    if (!cat) {
       return NextResponse.json(
         { success: false, message: 'Selected category does not exist' },
         { status: 400 }
       )
     }
 
-    const restaurantId = categoryRecord.restaurantId
-    const organizationId = categoryRecord.organizationId
-
-    const count = await prisma.menuItem.count({
-      where: { restaurantId, deletedAt: null },
-    })
-
     const newItem = await prisma.menuItem.create({
       data: {
-        restaurantId,
-        organizationId,
-        categoryId,
         name: name.trim(),
+        categoryId,
+        restaurantId: cat.restaurantId,
+        organizationId: cat.organizationId,
+        basePrice: Number(itemPrice),
+        costPrice: costPrice !== undefined && costPrice !== null ? Number(costPrice) : null,
         description: description ? String(description).trim() : null,
-        basePrice: finalPrice,
-        costPrice: costPrice !== undefined && !isNaN(parseFloat(costPrice)) ? parseFloat(costPrice) : null,
-        isVegetarian: Boolean(isVegetarian ?? isVeg ?? false),
-        isVegan: Boolean(isVegan ?? false),
-        isSpicy: Boolean(isSpicy ?? false),
-        spiceLevel: parseInt(spiceLevel || '0') || 0,
-        preparationTimeMinutes: parseInt(prepTime || preparationTimeMinutes || '15') || 15,
+        isVegetarian: isVegetarian !== undefined ? Boolean(isVegetarian) : Boolean(isVeg),
+        isVegan: Boolean(isVegan),
+        isSpicy: Boolean(isSpicy),
+        spiceLevel: spiceLevel ? Number(spiceLevel) : 0,
+        preparationTimeMinutes: prepTime || preparationTimeMinutes ? Number(prepTime || preparationTimeMinutes) : 15,
         imageUrl: imageUrl ? String(imageUrl).trim() : null,
         isAvailable: isAvailable !== undefined ? Boolean(isAvailable) : true,
-        displayOrder: count + 1,
-        status: 'active',
       },
       include: {
         category: true,
       },
     })
+
+    // Invalidate fast cache immediately
+    invalidateMenuItemsCache()
 
     return NextResponse.json({
       success: true,

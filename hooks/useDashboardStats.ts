@@ -11,14 +11,23 @@ interface UseDashboardStatsReturn {
   refetch: () => Promise<void>
 }
 
+// Client-side in-memory cache for 0ms instant initial render (SWR pattern)
+const clientStatsCache: Record<string, { data: DashboardStats; timestamp: number }> = {}
+
 export function useDashboardStats(branchId?: string | null): UseDashboardStatsReturn {
-  const [data, setData] = useState<DashboardStats | null>(null)
-  const [loading, setLoading] = useState(true)
+  const cacheKey = branchId || 'default'
+  const cached = clientStatsCache[cacheKey]
+
+  // Initialize with cached data if available for instant paint
+  const [data, setData] = useState<DashboardStats | null>(cached ? cached.data : null)
+  const [loading, setLoading] = useState(!cached)
   const [error, setError] = useState<Error | null>(null)
 
   const fetchStats = useCallback(async () => {
     try {
-      setLoading(true)
+      if (!clientStatsCache[cacheKey]) {
+        setLoading(true)
+      }
       setError(null)
       const url = branchId
         ? `/api/dashboard/stats?branchId=${encodeURIComponent(branchId)}`
@@ -32,6 +41,10 @@ export function useDashboardStats(branchId?: string | null): UseDashboardStatsRe
         throw new Error(errorMsg)
       }
 
+      clientStatsCache[cacheKey] = {
+        data: json.data,
+        timestamp: Date.now(),
+      }
       setData(json.data)
     } catch (err: any) {
       console.error('Error in useDashboardStats:', err)
@@ -39,7 +52,7 @@ export function useDashboardStats(branchId?: string | null): UseDashboardStatsRe
     } finally {
       setLoading(false)
     }
-  }, [branchId])
+  }, [branchId, cacheKey])
 
   useEffect(() => {
     fetchStats()

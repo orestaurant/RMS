@@ -399,10 +399,10 @@ export function CustomerLocationLock({
         <div className="p-3.5 space-y-3.5 text-xs">
           {/* Lock / Unlock Banner notice */}
           {isLocked ? (
-            <div className="flex items-center justify-between rounded-lg bg-primary/10 border border-primary/20 px-3 py-2 text-primary">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between rounded-lg bg-primary/10 border border-primary/20 px-3 py-2 text-primary gap-2 flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-2 min-w-0">
                 <Lock className="size-3.5 shrink-0" />
-                <span className="font-medium text-[11px]">
+                <span className="font-medium text-[11px] truncate">
                   Location locked. Accidental edits are disabled.
                 </span>
               </div>
@@ -411,7 +411,7 @@ export function CustomerLocationLock({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-6 text-[11px] px-2 gap-1 border-primary/40 bg-background hover:bg-primary/10"
+                  className="h-6 text-[11px] px-2 gap-1 border-primary/40 bg-background hover:bg-primary/10 shrink-0"
                   onClick={handleLockToggle}
                   disabled={saving}
                 >
@@ -421,8 +421,8 @@ export function CustomerLocationLock({
               )}
             </div>
           ) : (
-            <div className="flex items-center justify-between rounded-lg bg-muted/60 border border-border px-3 py-1.5 text-muted-foreground">
-              <span className="text-[11px]">
+            <div className="flex items-center justify-between rounded-lg bg-muted/60 border border-border px-3 py-1.5 text-muted-foreground gap-2 flex-wrap sm:flex-nowrap">
+              <span className="text-[11px] min-w-0">
                 Enter vehicle & landmark, or capture GPS coordinates.
               </span>
               {(localData.vehicleNumber || localData.landmarkNote || hasCoords) && isEditable && (
@@ -430,7 +430,7 @@ export function CustomerLocationLock({
                   type="button"
                   variant="default"
                   size="sm"
-                  className="h-6 text-[11px] px-2 gap-1"
+                  className="h-6 text-[11px] px-2 gap-1 shrink-0"
                   onClick={handleLockToggle}
                 >
                   <Lock className="size-3" />
@@ -547,9 +547,9 @@ export function CustomerLocationLock({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-border/40">
-                  <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <CheckCircle2 className="size-3 text-success" />
+                <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-border/40 gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 text-muted-foreground flex-wrap">
+                    <CheckCircle2 className="size-3 text-success shrink-0" />
                     <span>
                       Accuracy: <strong className="text-foreground">±{localData.locationAccuracy || 5}m</strong>
                     </span>
@@ -559,7 +559,7 @@ export function CustomerLocationLock({
                   </div>
 
                   {canEdit && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 shrink-0">
                       <Button
                         type="button"
                         variant="ghost"

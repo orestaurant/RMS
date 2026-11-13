@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Clock,
   Zap,
@@ -51,6 +51,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { CustomerLocationLock, CustomerLocationData, isValidCoord } from '@/components/orders/CustomerLocationLock'
+import { useAuthContext } from '@/hooks/useAuthContext'
 
 export type OrderStatus = 'pending' | 'accepted' | 'cooking' | 'ready' | 'served'
 
@@ -121,8 +122,8 @@ const statusConfig: Record<
   served: {
     label: 'Served',
     icon: CheckCircle2,
-    badge: 'bg-muted text-muted-foreground border-border',
-    row: 'border-l-border',
+    badge: 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400 font-medium',
+    row: 'border-l-sky-500/80',
   },
 }
 
@@ -227,82 +228,6 @@ function OrderRow({
         expanded ? 'bg-accent/30' : 'hover:bg-muted/30'
       )}
     >
-      {/* Remote / Car Order Card Header / Badge */}
-      {hasLocation && (
-        <div
-          className="flex flex-wrap items-center justify-between gap-2 px-5 py-2.5 bg-gradient-to-r from-primary/10 via-background to-primary/5 border-b border-primary/20"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge className="bg-primary hover:bg-primary text-primary-foreground font-mono font-bold tracking-wider text-xs px-2.5 py-1 gap-1.5 shadow-sm">
-              <Car className="size-3.5" />
-              {order.vehicleNumber || 'CAR / REMOTE ORDER'}
-            </Badge>
-
-            {order.landmarkNote && (
-              <span className="text-xs font-medium text-foreground flex items-center gap-1.5 bg-muted/80 px-2.5 py-1 rounded-md border border-border">
-                <MapPin className="size-3.5 text-primary shrink-0" />
-                <span className="truncate max-w-[260px]">{order.landmarkNote}</span>
-              </span>
-            )}
-
-            {order.isLocationLocked ? (
-              <Badge
-                variant="outline"
-                className="text-[10px] h-5 px-1.5 gap-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
-              >
-                <Lock className="size-2.5" />
-                Locked
-              </Badge>
-            ) : (
-              <Badge
-                variant="outline"
-                className="text-[10px] h-5 px-1.5 gap-1 text-muted-foreground border-border"
-              >
-                <Unlock className="size-2.5" />
-                Unlocked
-              </Badge>
-            )}
-
-            {hasCoords && (
-              <span className="text-[11px] font-mono text-muted-foreground hidden sm:inline-flex items-center gap-1">
-                <Compass className="size-3 text-primary" />
-                ±{order.locationAccuracy || 5}m
-              </span>
-            )}
-          </div>
-
-          {/* Action button: Locate Customer */}
-          <div className="flex items-center gap-1.5 ml-auto">
-            <Button
-              variant="default"
-              size="sm"
-              className="h-7 px-3 text-xs font-semibold gap-1.5 shadow-sm bg-primary hover:bg-primary/90 text-primary-foreground"
-              onClick={() => {
-                if (hasCoords) {
-                  window.open(mapsUrl!, '_blank')
-                } else {
-                  setLocateModalOpen(true)
-                }
-              }}
-            >
-              <Navigation className="size-3.5" />
-              Locate Customer
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs gap-1 border-primary/30 text-primary hover:bg-primary/10"
-              onClick={() => setLocateModalOpen(true)}
-              title="View & Edit Location Details"
-            >
-              <Eye className="size-3" />
-              Spot Info
-            </Button>
-          </div>
-        </div>
-      )}
-
       {/* Main row */}
       <div
         className="flex items-center gap-4 px-5 py-3.5 cursor-pointer"
@@ -550,8 +475,8 @@ function OrderRow({
 
       {/* Order Details Modal Dialog */}
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-xl max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="p-5 pb-3 border-b border-border shrink-0">
             <div className="flex items-center justify-between gap-2 pr-6">
               <DialogTitle className="text-base font-bold font-mono">
                 {order.id}
@@ -566,7 +491,7 @@ function OrderRow({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-3.5 py-1 text-xs">
+          <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3.5 text-xs">
             {/* Meta attributes */}
             <div className="grid grid-cols-2 gap-2 bg-muted/40 p-2.5 rounded-lg border border-border">
               <div>
@@ -630,7 +555,7 @@ function OrderRow({
               </p>
               <div className="rounded-lg border border-border divide-y divide-border overflow-hidden max-h-48 overflow-y-auto">
                 {order.items.map((item) => (
-                  <div key={item.id} className="flex items-center justify-between p-2">
+                  <div key={item.id} className="flex items-center justify-between p-2.5">
                     <div className="flex items-start gap-2">
                       <span className="size-5 rounded bg-muted flex items-center justify-center font-bold text-[11px] shrink-0">
                         {item.quantity}×
@@ -642,7 +567,7 @@ function OrderRow({
                         )}
                       </div>
                     </div>
-                    <span className="font-semibold text-foreground shrink-0">
+                    <span className="font-semibold text-foreground shrink-0 pl-2">
                       ₹{(item.price * item.quantity).toLocaleString('en-IN')}
                     </span>
                   </div>
@@ -651,7 +576,7 @@ function OrderRow({
             </div>
 
             {/* Bill calculation */}
-            <div className="bg-muted/30 p-2.5 rounded-lg border border-border flex flex-col gap-1">
+            <div className="bg-muted/30 p-3 rounded-lg border border-border flex flex-col gap-1.5">
               <div className="flex justify-between text-muted-foreground">
                 <span>Subtotal</span>
                 <span>₹{order.subtotal.toLocaleString('en-IN')}</span>
@@ -674,7 +599,7 @@ function OrderRow({
             </div>
           </div>
 
-          <DialogFooter className="flex items-center justify-between sm:justify-between gap-2 border-t pt-3">
+          <DialogFooter className="p-4 border-t border-border bg-muted/30 shrink-0 mx-0 mb-0 flex items-center justify-between sm:justify-between gap-2">
             <Button
               variant="destructive"
               size="sm"
@@ -707,8 +632,8 @@ function OrderRow({
 
       {/* Locate Customer Dialog */}
       <Dialog open={locateModalOpen} onOpenChange={setLocateModalOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-xl max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="p-5 pb-3 border-b border-border shrink-0">
             <div className="flex items-center justify-between gap-2 pr-6">
               <DialogTitle className="text-base font-bold flex items-center gap-2">
                 <Navigation className="size-4 text-primary" /> Locate Customer & Delivery Spot
@@ -731,7 +656,7 @@ function OrderRow({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3.5 py-1">
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3.5">
             {/* Indian High-Security Style License Plate Card */}
             {(draftLocation.vehicleNumber || order.vehicleNumber) ? (
               <div className="flex flex-col items-center justify-center p-4 rounded-xl bg-gradient-to-b from-muted/60 to-muted/20 border-2 border-border shadow-inner">
@@ -862,7 +787,7 @@ function OrderRow({
             />
           </div>
 
-          <DialogFooter className="border-t pt-3 flex justify-end">
+          <DialogFooter className="p-4 border-t border-border bg-muted/30 shrink-0 mx-0 mb-0 flex justify-end">
             <Button size="sm" className="text-xs" onClick={() => setLocateModalOpen(false)}>
               Close
             </Button>
@@ -920,8 +845,12 @@ function OrderRow({
 type TabFilter = 'all' | OrderStatus
 
 export function LiveOrdersView() {
+  const { auth } = useAuthContext()
+  const activeBranchId = auth?.branchId
+
   const [tab, setTab] = useState<TabFilter>('all')
   const [filterMode, setFilterMode] = useState<'all' | 'car'>('all')
+  const [urgentOnly, setUrgentOnly] = useState<boolean>(false)
   const [orders, setOrders] = useState<LiveOrder[]>([])
   const [counts, setCounts] = useState({
     all: 0,
@@ -941,11 +870,14 @@ export function LiveOrdersView() {
   })
   const [loading, setLoading] = useState(true)
 
-  // Fetch live orders directly from PostgreSQL via API
-  const fetchLiveOrders = useCallback(async () => {
+  // Fetch live orders directly from PostgreSQL via API (with background non-blocking refresh)
+  const fetchLiveOrders = useCallback(async (isManualRefresh = false) => {
     try {
-      setLoading(true)
-      const res = await fetch(`/api/orders/live?status=${tab}`)
+      if (orders.length === 0 || isManualRefresh) {
+        setLoading(true)
+      }
+      const branchParam = activeBranchId ? `&branchId=${encodeURIComponent(activeBranchId)}` : ''
+      const res = await fetch(`/api/orders/live?status=all${branchParam}`)
       const json = await res.json()
 
       if (json.success && json.data) {
@@ -958,20 +890,26 @@ export function LiveOrdersView() {
           setStats(json.data.stats)
         }
       } else {
-        setOrders([])
+        if (orders.length === 0) {
+          setOrders([])
+        }
       }
     } catch (err) {
       console.error('Failed to fetch live orders:', err)
-      setOrders([])
+      if (orders.length === 0) {
+        setOrders([])
+      }
     } finally {
       setLoading(false)
     }
-  }, [tab])
+  }, [activeBranchId, orders.length])
 
   useEffect(() => {
     fetchLiveOrders()
-    // Poll every 15 seconds to receive new live orders in real-time
-    const timer = setInterval(fetchLiveOrders, 15000)
+    // Poll every 10 seconds to receive new live orders in real-time without UI flash
+    const timer = setInterval(() => {
+      fetchLiveOrders(false)
+    }, 10000)
     return () => clearInterval(timer)
   }, [fetchLiveOrders])
 
@@ -993,6 +931,7 @@ export function LiveOrdersView() {
       setStats((prevStats) => ({
         ...prevStats,
         activeCount: Math.max(0, prevStats.activeCount - 1),
+        readyCount: updated.filter((o) => o.status === 'ready').length,
         carOrdersCount: carCount,
       }))
       return updated
@@ -1000,42 +939,99 @@ export function LiveOrdersView() {
   }
 
   const handleOrderUpdated = (updatedOrder: LiveOrder) => {
-    setOrders((prev) =>
-      prev.map((o) =>
+    setOrders((prev) => {
+      const updated = prev.map((o) =>
         o.id === updatedOrder.id || o.fullId === updatedOrder.fullId
           ? { ...o, ...updatedOrder }
           : o
       )
-    )
+      const carCount = updated.filter(
+        (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
+      ).length
+      setCounts({
+        all: updated.length,
+        pending: updated.filter((o) => o.status === 'pending').length,
+        accepted: updated.filter((o) => o.status === 'accepted').length,
+        cooking: updated.filter((o) => o.status === 'cooking').length,
+        ready: updated.filter((o) => o.status === 'ready').length,
+        served: updated.filter((o) => o.status === 'served').length,
+        carOrders: carCount,
+      })
+      setStats((prevStats) => ({
+        ...prevStats,
+        readyCount: updated.filter((o) => o.status === 'ready').length,
+        carOrdersCount: carCount,
+      }))
+      return updated
+    })
   }
 
-  const carOrdersCount = orders.filter(
-    (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
-  ).length
+  const carOrdersCount = useMemo(
+    () =>
+      orders.filter(
+        (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
+      ).length,
+    [orders]
+  )
 
-  const displayedOrders = orders.filter((o) => {
-    if (filterMode === 'car') {
-      return Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
-    }
-    return true
-  })
+  const displayedOrders = useMemo(() => {
+    return orders.filter((o) => {
+      if (urgentOnly && o.priority !== 'urgent' && (o.ticketTime || 0) <= 20) {
+        return false
+      }
+      if (tab !== 'all' && o.status !== tab) {
+        return false
+      }
+      if (filterMode === 'car') {
+        return Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
+      }
+      return true
+    })
+  }, [orders, tab, filterMode, urgentOnly])
 
   return (
     <main className="flex flex-col gap-6 p-6">
-      {/* Summary KPIs - Dynamic from PostgreSQL */}
+      {/* Summary KPIs - Dynamic from PostgreSQL with Interactive One-Click Filters */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {[
           {
-            label: 'Active Orders',
-            value: stats.activeCount,
+            label: 'Total Orders',
+            value: stats.activeCount || orders.length,
             icon: Zap,
             color: 'text-primary',
+            active: tab === 'all' && filterMode === 'all' && !urgentOnly,
+            activeClass: 'ring-2 ring-primary border-primary bg-primary/10 shadow-sm',
+            onClick: () => {
+              setTab('all')
+              setFilterMode('all')
+              setUrgentOnly(false)
+            },
           },
           {
             label: 'Ready to Serve',
             value: stats.readyCount,
             icon: CheckCircle2,
             color: 'text-success',
+            active: tab === 'ready' && filterMode === 'all' && !urgentOnly,
+            activeClass: 'ring-2 ring-success border-success bg-success/10 shadow-sm',
+            onClick: () => {
+              setTab('ready')
+              setFilterMode('all')
+              setUrgentOnly(false)
+            },
+          },
+          {
+            label: 'Served Today',
+            value: counts.served,
+            icon: ShoppingBag,
+            color: 'text-sky-500',
+            active: tab === 'served' && filterMode === 'all' && !urgentOnly,
+            activeClass: 'ring-2 ring-sky-500 border-sky-500 bg-sky-500/10 shadow-sm',
+            onClick: () => {
+              setTab('served')
+              setFilterMode('all')
+              setUrgentOnly(false)
+            },
           },
           {
             label: 'Car / Drive-In',
@@ -1043,57 +1039,90 @@ export function LiveOrdersView() {
             icon: Car,
             color: 'text-amber-500',
             active: filterMode === 'car',
-            onClick: () => setFilterMode((m) => (m === 'car' ? 'all' : 'car')),
+            activeClass: 'ring-2 ring-amber-500 border-amber-500 bg-amber-500/10 shadow-sm',
+            onClick: () => {
+              setUrgentOnly(false)
+              setFilterMode((m) => (m === 'car' ? 'all' : 'car'))
+            },
           },
           {
             label: 'Urgent',
             value: stats.urgentCount,
             icon: AlertTriangle,
             color: 'text-destructive',
-          },
-          {
-            label: 'Overdue (>20m)',
-            value: stats.overdueCount,
-            icon: Clock,
-            color: 'text-warning',
+            active: urgentOnly,
+            activeClass: 'ring-2 ring-destructive border-destructive bg-destructive/10 shadow-sm',
+            onClick: () => {
+              setUrgentOnly((u) => !u)
+              setFilterMode('all')
+            },
           },
         ].map((stat) => (
           <Card
             key={stat.label}
             onClick={stat.onClick}
+            role="button"
+            tabIndex={0}
             className={cn(
-              'transition-all',
-              stat.onClick && 'cursor-pointer hover:border-primary/50',
-              stat.active && 'ring-2 ring-primary border-primary bg-primary/10',
+              'transition-all duration-200 cursor-pointer select-none relative overflow-hidden',
+              'hover:shadow-md hover:border-primary/50 active:scale-[0.98]',
+              stat.active
+                ? stat.activeClass
+                : 'border-border/70 bg-card/60 hover:bg-muted/30',
               stat.label === 'Urgent' &&
                 stats.urgentCount > 0 &&
-                'border-destructive/30 bg-destructive/5',
+                !stat.active &&
+                'border-destructive/30 bg-destructive/5 hover:border-destructive/60',
               stat.label === 'Ready to Serve' &&
                 stats.readyCount > 0 &&
-                'border-success/30 bg-success/5',
+                !stat.active &&
+                'border-success/30 bg-success/5 hover:border-success/60',
               stat.label === 'Car / Drive-In' &&
                 carOrdersCount > 0 &&
                 !stat.active &&
-                'border-amber-500/30 bg-amber-500/5'
+                'border-amber-500/30 bg-amber-500/5 hover:border-amber-500/60'
             )}
           >
-            <CardContent className="p-4 flex items-center gap-3">
-              <div
-                className={cn(
-                  'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted',
-                  stat.color
-                )}
-              >
-                <stat.icon className="size-4" />
+            <CardContent className="p-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div
+                  className={cn(
+                    'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted transition-transform duration-200',
+                    stat.color,
+                    stat.active && 'scale-110 shadow-sm'
+                  )}
+                >
+                  <stat.icon className="size-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-xs text-muted-foreground">{stat.label}</p>
+                    {stat.active && (
+                      <span className="size-1.5 rounded-full bg-primary animate-ping" />
+                    )}
+                  </div>
+                  {loading && orders.length === 0 ? (
+                    <Skeleton className="h-7 w-10 mt-0.5" />
+                  ) : (
+                    <p className="text-xl font-bold">{stat.value}</p>
+                  )}
+                </div>
               </div>
-              <div>
-                <p className="text-xs text-muted-foreground">{stat.label}</p>
-                {loading && orders.length === 0 ? (
-                  <Skeleton className="h-7 w-10 mt-0.5" />
-                ) : (
-                  <p className="text-xl font-bold">{stat.value}</p>
-                )}
-              </div>
+              {stat.active && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'text-[10px] h-5 px-1.5 font-medium shrink-0',
+                    stat.label === 'Urgent' && 'border-destructive/40 text-destructive bg-destructive/10',
+                    stat.label === 'Ready to Serve' && 'border-success/40 text-success bg-success/10',
+                    stat.label === 'Served Today' && 'border-sky-500/40 text-sky-500 bg-sky-500/10',
+                    stat.label === 'Car / Drive-In' && 'border-amber-500/40 text-amber-500 bg-amber-500/10',
+                    stat.label === 'Total Orders' && 'border-primary/40 text-primary bg-primary/10'
+                  )}
+                >
+                  Active
+                </Badge>
+              )}
             </CardContent>
           </Card>
         ))}
@@ -1105,11 +1134,30 @@ export function LiveOrdersView() {
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
               <Zap className="size-4 text-warning" />
-              {filterMode === 'car' ? 'Car & GPS Locked Orders' : 'All Orders'}
+              {filterMode === 'car'
+                ? 'Car & GPS Locked Orders'
+                : urgentOnly
+                ? 'Urgent Orders (>20m)'
+                : tab === 'ready'
+                ? 'Ready to Serve Orders'
+                : tab === 'served'
+                ? 'Served Today Orders'
+                : tab !== 'all'
+                ? `${tab.charAt(0).toUpperCase() + tab.slice(1)} Orders`
+                : 'All Orders'}
               <div className="flex items-center gap-1 ml-1">
                 <span className="size-1.5 rounded-full bg-success animate-pulse" />
                 <span className="text-xs font-normal text-muted-foreground">Live</span>
               </div>
+              {urgentOnly && (
+                <Badge
+                  variant="outline"
+                  className="cursor-pointer gap-1 border-destructive/40 bg-destructive/10 text-destructive text-xs py-0.5 px-2 hover:bg-destructive/20 ml-2"
+                  onClick={() => setUrgentOnly(false)}
+                >
+                  Urgent Only ✕
+                </Badge>
+              )}
             </CardTitle>
 
             <div className="flex items-center gap-2">
@@ -1117,10 +1165,13 @@ export function LiveOrdersView() {
               <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/50">
                 <button
                   type="button"
-                  onClick={() => setFilterMode('all')}
+                  onClick={() => {
+                    setFilterMode('all')
+                    setUrgentOnly(false)
+                  }}
                   className={cn(
                     'px-3 py-1 text-xs font-semibold rounded-md transition-all',
-                    filterMode === 'all'
+                    filterMode === 'all' && !urgentOnly
                       ? 'bg-background text-foreground shadow-sm'
                       : 'text-muted-foreground hover:text-foreground'
                   )}
@@ -1129,7 +1180,10 @@ export function LiveOrdersView() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setFilterMode('car')}
+                  onClick={() => {
+                    setUrgentOnly(false)
+                    setFilterMode('car')
+                  }}
                   className={cn(
                     'flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-md transition-all',
                     filterMode === 'car'
@@ -1145,7 +1199,7 @@ export function LiveOrdersView() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => fetchLiveOrders()}
+                onClick={() => fetchLiveOrders(true)}
                 disabled={loading}
                 className="h-7 gap-1.5 text-xs"
               >
@@ -1157,7 +1211,13 @@ export function LiveOrdersView() {
 
           {/* Status tabs */}
           <div className="pt-3 pb-0">
-            <Tabs value={tab} onValueChange={(v) => setTab(v as TabFilter)}>
+            <Tabs
+              value={tab}
+              onValueChange={(v) => {
+                setTab(v as TabFilter)
+                if (urgentOnly) setUrgentOnly(false)
+              }}
+            >
               <TabsList className="h-8 bg-muted/50 p-0.5">
                 {(
                   [
@@ -1166,6 +1226,7 @@ export function LiveOrdersView() {
                     ['accepted', 'Accepted'],
                     ['cooking', 'Cooking'],
                     ['ready', 'Ready'],
+                    ['served', 'Served'],
                   ] as [TabFilter, string][]
                 ).map(([val, label]) => (
                   <TabsTrigger

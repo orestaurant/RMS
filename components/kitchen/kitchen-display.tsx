@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Clock,
   AlertTriangle,
@@ -291,7 +291,7 @@ function OrderTimer({ startTime, priority }: { startTime: string; priority: Prio
   )
 }
 
-function KitchenOrderCard({
+const KitchenOrderCard = React.memo(function KitchenOrderCard({
   ticket,
   onAdvance,
   onToggleItem,
@@ -599,7 +599,7 @@ function KitchenOrderCard({
       </div>
     </div>
   )
-}
+})
 
 export function KitchenDisplay() {
   const [tickets, setTickets] = useState<KitchenTicket[]>([])
@@ -612,17 +612,62 @@ export function KitchenDisplay() {
   const [loading, setLoading] = useState(true)
   const [lastSync, setLastSync] = useState<Date>(new Date())
   const prevIncomingCountRef = useRef<number>(0)
+  // Track recent optimistic updates to prevent race-condition rollbacks from stale server polling
+  const recentStatusUpdatesRef = useRef<Map<string, { status: KanbanStatus; timestamp: number }>>(new Map())
 
   // Fetch live tickets from backend API
   const fetchTickets = useCallback(async (isInitial = false) => {
     try {
       if (isInitial) setLoading(true)
-      const res = await fetch(`/api/kds/tickets?station=${encodeURIComponent(activeStation)}`)
+      const res = await fetch(`/api/kds/tickets?station=${encodeURIComponent(activeStation)}`, {
+        cache: 'no-store',
+      })
       const json = await res.json()
 
       if (json.success && json.data) {
         const incomingTickets: KitchenTicket[] = json.data.tickets || []
-        setTickets(incomingTickets)
+        const currentTime = Date.now()
+
+        // Clean up locks older than 15 seconds
+        for (const [k, val] of recentStatusUpdatesRef.current.entries()) {
+          if (currentTime - val.timestamp > 15000) {
+            recentStatusUpdatesRef.current.delete(k)
+          }
+        }
+
+        // Reconcile with optimistic locks to prevent rolling back to previous status
+        const reconciledTickets: KitchenTicket[] = []
+        const seenTicketKeys = new Set<string>()
+
+        for (const ticket of incomingTickets) {
+          const tKeys = [ticket.id, ticket.fullId, ticket.orderNumber].filter(Boolean) as string[]
+
+          let activeLockedStatus: KanbanStatus | null = null
+          for (const k of tKeys) {
+            const lock = recentStatusUpdatesRef.current.get(k)
+            if (lock && currentTime - lock.timestamp < 15000) {
+              activeLockedStatus = lock.status
+              break
+            }
+          }
+
+          const resolvedStatus = activeLockedStatus || ticket.status
+
+          // Exclude served or cancelled orders from live board
+          if (resolvedStatus === 'served') continue
+
+          // Strictly deduplicate by primary key (order cannot exist in multiple columns)
+          const primaryKey = ticket.fullId || ticket.orderNumber || ticket.id
+          if (seenTicketKeys.has(primaryKey)) continue
+          seenTicketKeys.add(primaryKey)
+
+          reconciledTickets.push({
+            ...ticket,
+            status: resolvedStatus,
+          })
+        }
+
+        setTickets(reconciledTickets)
 
         if (json.data.batchItems) {
           setBatchItems(json.data.batchItems)
@@ -632,7 +677,7 @@ export function KitchenDisplay() {
         }
 
         // Sound alert if new incoming orders arrived
-        const pendingCount = incomingTickets.filter((t) => t.status === 'pending').length
+        const pendingCount = reconciledTickets.filter((t) => t.status === 'pending').length
         if (!isInitial && pendingCount > prevIncomingCountRef.current && soundEnabled) {
           playKitchenChime()
         }
@@ -844,16 +889,40 @@ export function KitchenDisplay() {
       })
     }
 
-    // Optimistic UI update
+    // Register optimistic lock so stale polling responses cannot revert the status
+    const targetKeys = Array.from(
+      new Set([targetTicket.id, targetTicket.fullId, targetTicket.orderNumber, id].filter(Boolean))
+    ) as string[]
+
+    const now = Date.now()
+    for (const key of targetKeys) {
+      recentStatusUpdatesRef.current.set(key, { status: nextStatus, timestamp: now })
+    }
+
+    // Instant UI update: Remove from previous column immediately, move to new status column
     setTickets((prev) => {
       if (nextStatus === 'served') {
-        return prev.filter((t) => t.id !== id && t.fullId !== id)
+        return prev.filter(
+          (t) =>
+            !targetKeys.includes(t.id) &&
+            !(t.fullId && targetKeys.includes(t.fullId)) &&
+            !(t.orderNumber && targetKeys.includes(t.orderNumber))
+        )
       }
-      return prev.map((t) => (t.id === id || t.fullId === id ? { ...t, status: nextStatus } : t))
+      return prev.map((t) => {
+        const isMatch =
+          targetKeys.includes(t.id) ||
+          (t.fullId && targetKeys.includes(t.fullId)) ||
+          (t.orderNumber && targetKeys.includes(t.orderNumber))
+        if (isMatch) {
+          return { ...t, status: nextStatus }
+        }
+        return t
+      })
     })
 
     try {
-      const sendId = targetTicket.fullId || targetTicket.id || id
+      const sendId = targetTicket.fullId || targetTicket.orderNumber || targetTicket.id || id
       await fetch(`/api/kds/tickets/${encodeURIComponent(sendId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -863,8 +932,11 @@ export function KitchenDisplay() {
           orderNumber: targetTicket.orderNumber || targetTicket.id,
         }),
       })
-      // Refresh silently
-      fetchTickets(false)
+
+      // Silently sync in background after a brief delay without racing
+      setTimeout(() => {
+        fetchTickets(false)
+      }, 600)
     } catch (err) {
       console.error('Failed to update ticket status on server:', err)
     }
@@ -1084,8 +1156,7 @@ export function KitchenDisplay() {
 
                 {/* Column Cards Container - Native Smooth Scroll */}
                 <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0">
-                  <div className="flex flex-col gap-3 p-4">
-                    {/* Active 20-Second Cuisine Batch Countdown Card in Cooking Column */}
+                  {/* Active 20-Second Cuisine Batch Countdown Card in Cooking Column */}
                     {col.id === 'cooking' && Object.keys(cuisineBatches).length > 0 && (
                       <div className="flex flex-col gap-2 mb-1 shrink-0">
                         {Object.values(cuisineBatches).map((batch) => {
@@ -1167,7 +1238,6 @@ export function KitchenDisplay() {
                         />
                       ))
                     )}
-                  </div>
                 </div>
               </div>
             )

@@ -5,8 +5,19 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { registerActiveLiveOrder, getKitchenStation, getRealTimeLiveOrders } from '@/lib/kds-utils'
+import {
+  registerActiveLiveOrder,
+  getKitchenStation,
+  getRealTimeLiveOrders,
+  invalidateKDSCache,
+  invalidateLiveOrdersCache,
+} from '@/lib/kds-utils'
 import { Prisma } from '@prisma/client'
+import {
+  invalidateDashboardStatsCache,
+  getCachedBranchMeta,
+  setCachedBranchMeta,
+} from '@/lib/dashboard-cache'
 
 /**
  * GET /api/orders
@@ -169,7 +180,6 @@ export async function POST(request: NextRequest) {
       items,
       totalAmount: clientTotalAmount,
       orderType = 'dine_in',
-      status: requestedStatus = 'pending',
       notes = '',
       customerId = null,
       isLocationLocked = false,
@@ -180,6 +190,8 @@ export async function POST(request: NextRequest) {
       locationAccuracy = null,
       locationCapturedAt = null,
     } = body
+
+    const requestedStatus = body.status || body.requestedStatus || 'pending'
 
     const parsedLat = customerLat !== null && customerLat !== undefined && !isNaN(Number(customerLat)) ? Number(customerLat) : null
     const parsedLng = customerLng !== null && customerLng !== undefined && !isNaN(Number(customerLng)) ? Number(customerLng) : null
@@ -212,79 +224,72 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 3. Resolve Branch, Restaurant, and Organization context
-    let branch: any = null
-    if (branchId) {
-      branch = await prisma.branch.findUnique({
-        where: { id: branchId },
-      })
-    }
-
+    // 3. Resolve Branch, Restaurant, and Organization context (with fast memory cache)
+    let branch: any = getCachedBranchMeta(branchId)
     if (!branch) {
-      branch = await prisma.branch.findFirst({
-        orderBy: { isPrimary: 'desc' },
-      })
-    }
-
-    if (!branch) {
-      // Fallback: lookup restaurant
-      const restaurant = await prisma.restaurant.findFirst()
-      if (!restaurant) {
-        return NextResponse.json(
-          { success: false, message: 'No restaurant or branch configured in database' },
-          { status: 500 }
-        )
+      if (branchId) {
+        branch = await prisma.branch.findUnique({
+          where: { id: branchId },
+          select: { id: true, organizationId: true, restaurantId: true, name: true },
+        })
       }
-      // Create default branch
-      branch = await prisma.branch.create({
-        data: {
-          restaurantId: restaurant.id,
-          organizationId: restaurant.organizationId,
-          name: 'Main Branch',
-          address: 'Main Dining Hall',
-          isPrimary: true,
-        },
-      })
+      if (!branch) {
+        branch = await prisma.branch.findFirst({
+          orderBy: { isPrimary: 'desc' },
+          select: { id: true, organizationId: true, restaurantId: true, name: true },
+        })
+      }
+      if (!branch) {
+        const restaurant = await prisma.restaurant.findFirst()
+        if (!restaurant) {
+          return NextResponse.json(
+            { success: false, message: 'No restaurant or branch configured in database' },
+            { status: 500 }
+          )
+        }
+        branch = await prisma.branch.create({
+          data: {
+            restaurantId: restaurant.id,
+            organizationId: restaurant.organizationId,
+            name: 'Main Branch',
+            address: 'Main Dining Hall',
+            isPrimary: true,
+          },
+          select: { id: true, organizationId: true, restaurantId: true, name: true },
+        })
+      }
+      if (branch && !branchId) {
+        setCachedBranchMeta(branch)
+      }
     }
 
     const organizationId = branch.organizationId
     const restaurantId = branch.restaurantId
     branchId = branch.id
 
-    // 4. Resolve or Associate Table
+    // 4. Resolve or Associate Table (Fast lookup)
     let tableId = providedTableId || null
     let finalTableNumber = resolvedTableNumber || '1'
 
     if (isDineIn) {
-      if (tableId) {
+      if (tableId && !resolvedTableNumber) {
         const existingTable = await prisma.restaurantTable.findUnique({
           where: { id: tableId },
+          select: { tableNumber: true },
         })
         if (existingTable) {
           finalTableNumber = existingTable.tableNumber
         }
-      } else if (resolvedTableNumber) {
+      } else if (resolvedTableNumber && !tableId) {
         let table = await prisma.restaurantTable.findFirst({
           where: {
-            restaurantId,
             branchId,
             tableNumber: resolvedTableNumber,
             deletedAt: null,
           },
+          select: { id: true, tableNumber: true },
         })
 
-        if (!table) {
-          // Check by tableNumber only in branch
-          table = await prisma.restaurantTable.findFirst({
-            where: {
-              branchId,
-              tableNumber: resolvedTableNumber,
-              deletedAt: null,
-            },
-          })
-        }
-
-        // If table doesn't exist, create it dynamically
         if (!table) {
           try {
             table = await prisma.restaurantTable.create({
@@ -297,33 +302,41 @@ export async function POST(request: NextRequest) {
                 section: 'dining',
                 status: 'occupied',
               },
+              select: { id: true, tableNumber: true },
             })
           } catch (tblErr) {
             console.warn('Could not create table record:', tblErr)
           }
-        } else {
-          // Update status to occupied
-          await prisma.restaurantTable.update({
-            where: { id: table.id },
-            data: { status: 'occupied' },
-          }).catch(() => {})
         }
-
         if (table) {
           tableId = table.id
         }
       }
+
+      // Mark table occupied non-blockingly
+      if (tableId) {
+        prisma.restaurantTable.update({
+          where: { id: tableId },
+          data: { status: 'occupied' },
+        }).catch(() => {})
+      }
     }
 
-    // 5. Fetch Menu Items from database to verify availability and prices
+    // 5. Fetch Menu Items with lean select for maximum speed
     const itemIds = items.map((i: any) => i.menuItemId).filter(Boolean)
     const dbMenuItems = await prisma.menuItem.findMany({
       where: {
         id: { in: itemIds },
         deletedAt: null,
       },
-      include: {
-        category: true,
+      select: {
+        id: true,
+        name: true,
+        basePrice: true,
+        isAvailable: true,
+        category: {
+          select: { name: true },
+        },
       },
     })
 
@@ -379,9 +392,8 @@ export async function POST(request: NextRequest) {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000)
     const orderNumber = `ORD-${dateStr}-${randomSuffix}`
 
-    // 8. Validate requested status against OrderStatusEnum
-    const validStatuses = ['pending', 'confirmed', 'preparing', 'served', 'completed']
-    const finalStatus = validStatuses.includes(requestedStatus) ? requestedStatus : 'pending'
+    // 8. Newly placed orders must start as 'pending' so they appear in KDS 'Incoming' queue
+    const finalStatus = 'pending'
 
     // 9. Persist Order in database
     const order = await prisma.order.create({
@@ -426,11 +438,26 @@ export async function POST(request: NextRequest) {
           create: orderItemsCreateData,
         },
       },
-      include: {
-        items: true,
-        table: true,
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+        isLocationLocked: true,
+        vehicleNumber: true,
+        landmarkNote: true,
+        customerLat: true,
+        customerLng: true,
+        locationAccuracy: true,
+        locationCapturedAt: true,
       },
     })
+
+    // Invalidate dashboard stats cache, KDS cache, and live orders cache immediately
+    invalidateDashboardStatsCache(branchId)
+    invalidateKDSCache()
+    invalidateLiveOrdersCache()
 
     // 10. Register immediately into KDS live queue for kitchen display
     try {
@@ -441,7 +468,7 @@ export async function POST(request: NextRequest) {
         source: body.source === 'POS' ? 'pos' : 'qr_order',
         waiter: body.waiter || (body.source === 'POS' ? 'POS Staff' : 'QR Self-Order'),
         customerName: body.customerName || (parsedVehicle ? `Car (${parsedVehicle})` : `Guest (${finalTableNumber})`),
-        status: order.status === 'confirmed' ? 'accepted' : 'pending',
+        status: 'pending',
         priority: 'normal',
         createdAt: order.createdAt.toISOString(),
         specialNotes: notes || undefined,
@@ -452,10 +479,10 @@ export async function POST(request: NextRequest) {
         customerLng: parsedLng,
         locationAccuracy: parsedAccuracy,
         locationCapturedAt: parsedCapturedAt ? parsedCapturedAt.toISOString() : null,
-        items: order.items.map((i: any) => {
+        items: orderItemsCreateData.map((i: any) => {
           const dbItem = menuItemMap.get(i.menuItemId)
           return {
-            id: i.id,
+            id: i.menuItemId,
             name: i.itemName,
             quantity: i.quantity,
             station: getKitchenStation(
@@ -482,7 +509,7 @@ export async function POST(request: NextRequest) {
           subtotal: calculatedSubtotal,
           taxAmount,
           totalAmount: finalTotal,
-          itemsCount: order.items.length,
+          itemsCount: orderItemsCreateData.length,
           createdAt: order.createdAt,
           isLocationLocked: order.isLocationLocked,
           vehicleNumber: order.vehicleNumber,

@@ -6,58 +6,138 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
-import { getRealTimeLiveOrders } from '@/lib/kds-utils'
+import {
+  getRealTimeLiveOrders,
+  normalizeKdsStatus,
+  getLiveOrdersCache,
+  setLiveOrdersCache,
+  invalidateLiveOrdersCache,
+} from '@/lib/kds-utils'
+import { getCachedBranchMeta, setCachedBranchMeta } from '@/lib/dashboard-cache'
+import { startOfDay } from 'date-fns'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
+export { invalidateLiveOrdersCache }
 
 export async function GET(request: NextRequest) {
   try {
-    const branchId = request.nextUrl.searchParams.get('branchId')
-    const statusFilter = request.nextUrl.searchParams.get('status') || 'all'
+    const branchIdParam = request.nextUrl.searchParams.get('branchId')
+    const statusFilter = (request.nextUrl.searchParams.get('status') || 'all').toLowerCase()
 
-    // Statuses that count as "live" (in-progress orders)
-    const liveStatuses = [
+    // 1. Resolve branchId consistently (with memory cache to avoid unnecessary DB queries)
+    let branchId = branchIdParam
+    if (!branchId) {
+      const cachedBranch = getCachedBranchMeta()
+      if (cachedBranch) {
+        branchId = cachedBranch.id
+      } else {
+        const defaultBranch = await prisma.branch.findFirst({
+          select: { id: true, organizationId: true, restaurantId: true, name: true },
+        })
+        branchId = defaultBranch?.id || null
+        if (defaultBranch) {
+          setCachedBranchMeta(defaultBranch)
+        }
+      }
+    }
+
+    const cacheKey = `${branchId || 'all'}_${statusFilter}`
+    const cachedData = getLiveOrdersCache(cacheKey, 3000)
+
+    // 2. High-speed in-memory cache check (< 5ms response)
+    if (cachedData) {
+      return NextResponse.json(cachedData, {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'X-Orders-Cache': 'HIT',
+        },
+      })
+    }
+
+    const now = Date.now()
+
+    const todayStart = startOfDay(new Date())
+
+    // Active in-progress order statuses
+    const inProgressStatuses = [
       'pending',
       'confirmed',
       'preparing',
       'ready',
       'PENDING',
       'PREPARING',
+      'CONFIRMED',
+      'READY',
     ]
 
     let formattedOrders: any[] = []
 
     try {
-      // Fetch all live orders for the branch
+      // 3. Fetch active orders OR orders created today with lean SELECT query
       const rawOrders = await prisma.order.findMany({
         where: {
           ...(branchId ? { branchId } : {}),
-          status: {
-            in: liveStatuses as any,
-          },
           deletedAt: null,
+          status: {
+            notIn: ['cancelled', 'CANCELLED', 'refunded'],
+          },
+          OR: [
+            { createdAt: { gte: todayStart } },
+            {
+              status: {
+                in: inProgressStatuses as any,
+              },
+            },
+          ],
         },
-        include: {
-          table: true,
-          items: true,
-          createdBy: true,
-          customer: true,
+        select: {
+          id: true,
+          orderNumber: true,
+          status: true,
+          createdAt: true,
+          subtotal: true,
+          discountAmount: true,
+          taxAmount: true,
+          totalAmount: true,
+          total: true,
+          isLocationLocked: true,
+          vehicleNumber: true,
+          landmarkNote: true,
+          customerLat: true,
+          customerLng: true,
+          locationAccuracy: true,
+          locationCapturedAt: true,
+          metadata: true,
+          table: {
+            select: { id: true, tableNumber: true },
+          },
+          items: {
+            select: {
+              id: true,
+              itemName: true,
+              quantity: true,
+              basePrice: true,
+              specialInstructions: true,
+            },
+          },
+          createdBy: {
+            select: { id: true, name: true, firstName: true },
+          },
+          customer: {
+            select: { id: true, name: true, firstName: true, lastName: true, phone: true },
+          },
         },
         orderBy: {
           createdAt: 'desc',
         },
-        take: 100,
+        take: 120,
       })
-
-      const now = Date.now()
 
       if (rawOrders && rawOrders.length > 0) {
         formattedOrders = rawOrders.map((order) => {
-          const rawStatus = (order.status || 'pending').toLowerCase()
-          let normalizedStatus: 'pending' | 'accepted' | 'cooking' | 'ready' | 'served' = 'pending'
-          if (rawStatus === 'confirmed') normalizedStatus = 'accepted'
-          else if (rawStatus === 'preparing') normalizedStatus = 'cooking'
-          else if (rawStatus === 'ready') normalizedStatus = 'ready'
-          else if (rawStatus === 'served' || rawStatus === 'completed') normalizedStatus = 'served'
-          else normalizedStatus = 'pending'
+          const normalizedStatus = normalizeKdsStatus(order.status)
 
           const minutesAgo = Math.max(
             0,
@@ -120,7 +200,7 @@ export async function GET(request: NextRequest) {
       console.warn('Orders live DB lookup notice:', dbErr)
     }
 
-    // Merge fallback live orders from in-memory session if DB has fewer orders
+    // 4. Merge fallback live orders from in-memory session if DB has fewer orders
     const memoryOrders = getRealTimeLiveOrders()
     for (const mo of memoryOrders) {
       if (!formattedOrders.some((fo) => fo.id === mo.id || fo.fullId === mo.fullId)) {
@@ -138,7 +218,7 @@ export async function GET(request: NextRequest) {
           waiter: mo.waiter || 'Staff',
           customerName: mo.customerName,
           customerPhone: mo.customerPhone,
-          status: mo.status || 'cooking',
+          status: normalizeKdsStatus(mo.status || 'pending'),
           priority: mo.priority || 'normal',
           ticketTime: mo.ticketTime || 5,
           items: (mo.items || []).map((it: any) => ({
@@ -164,7 +244,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Compute status counts across all live orders
+    // 5. Compute status counts across all live orders
     const carOrdersCount = formattedOrders.filter(
       (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
     ).length
@@ -179,33 +259,49 @@ export async function GET(request: NextRequest) {
       carOrders: carOrdersCount,
     }
 
-    const urgentCount = formattedOrders.filter((o) => o.priority === 'urgent').length
+    const urgentCount = formattedOrders.filter(
+      (o) => o.priority === 'urgent' || (o.ticketTime || 0) > 20
+    ).length
     const overdueCount = formattedOrders.filter((o) => (o.ticketTime || 0) > 20).length
 
-    // Filter by tab if specified
+    // Filter by tab/status if specified
     let filteredOrders = formattedOrders
     if (statusFilter === 'car_orders' || statusFilter === 'car') {
       filteredOrders = formattedOrders.filter(
         (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
       )
+    } else if (statusFilter === 'active' || statusFilter === 'in_progress') {
+      filteredOrders = formattedOrders.filter((o) =>
+        ['pending', 'accepted', 'cooking', 'ready'].includes(o.status)
+      )
     } else if (statusFilter !== 'all') {
-      filteredOrders = formattedOrders.filter((o) => o.status === statusFilter)
+      filteredOrders = filteredOrders.filter((o) => o.status === statusFilter)
     }
 
-    return NextResponse.json(
-      successResponse({
-        orders: filteredOrders,
+    const responsePayload = successResponse({
+      orders: filteredOrders,
+      activeCount: formattedOrders.length,
+      counts,
+      stats: {
         activeCount: formattedOrders.length,
-        counts,
-        stats: {
-          activeCount: formattedOrders.length,
-          readyCount: counts.ready,
-          urgentCount,
-          overdueCount,
-          carOrdersCount,
-        },
-      })
-    )
+        inProgressCount: counts.pending + counts.accepted + counts.cooking + counts.ready,
+        readyCount: counts.ready,
+        servedCount: counts.served,
+        urgentCount,
+        overdueCount,
+        carOrdersCount,
+      },
+    })
+
+    // Store in live orders fast cache
+    setLiveOrdersCache(cacheKey, responsePayload)
+
+    return NextResponse.json(responsePayload, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'X-Orders-Cache': 'MISS',
+      },
+    })
   } catch (error: any) {
     console.error('Error fetching live orders:', error)
     return NextResponse.json(

@@ -114,13 +114,13 @@ export function AppSidebar() {
           label: 'Reservations',
           href: '/reservations',
           icon: CalendarDays,
-          badge: counts?.reservations !== undefined ? String(counts.reservations) : undefined,
+          badge: counts?.reservations ? String(counts.reservations) : undefined,
         },
         {
           label: 'Live Orders',
           href: '/orders',
           icon: Zap,
-          badge: counts?.liveOrders !== undefined ? String(counts.liveOrders) : undefined,
+          badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
         },
         ...(isCustomer
           ? [
@@ -147,7 +147,7 @@ export function AppSidebar() {
           label: 'Inventory',
           href: '/inventory',
           icon: Package,
-          badge: counts?.inventoryAlerts !== undefined ? String(counts.inventoryAlerts) : undefined,
+          badge: counts?.inventoryAlerts ? String(counts.inventoryAlerts) : undefined,
         },
       ],
     },

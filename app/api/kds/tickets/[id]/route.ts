@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
-import { updateFallbackOrder } from '@/lib/kds-utils'
+import {
+  updateFallbackOrder,
+  removeFallbackOrder,
+  updateKDSCacheTicket,
+  invalidateKDSCache,
+  invalidateLiveOrdersCache,
+  normalizeKdsStatus,
+} from '@/lib/kds-utils'
+
+export const dynamic = 'force-dynamic'
 
 export async function PATCH(
   request: NextRequest,
@@ -13,9 +22,11 @@ export async function PATCH(
     const body = await request.json().catch(() => ({}))
     const { status, priority, toggleItemId, notes, fullId, orderNumber } = body
 
+    const normalizedKdsStatus = status ? normalizeKdsStatus(status) : null
+
     // Status mapping from KDS to DB OrderStatusEnum
     // KDS: pending | accepted | cooking | ready | served
-    // DB: pending | confirmed | preparing | ready | served
+    // DB:  pending | confirmed | preparing | ready | served
     const dbStatusMap: Record<string, string> = {
       pending: 'pending',
       accepted: 'confirmed',
@@ -28,17 +39,17 @@ export async function PATCH(
     let existing: any = null
 
     try {
-      const matchKeys = Array.from(new Set([id, fullId, orderNumber].filter(Boolean))) as string[]
+      const matchKeys = Array.from(
+        new Set([id, fullId, orderNumber].filter(Boolean))
+      ) as string[]
 
-      // Find matching order in DB by ID or orderNumber
-      const orClauses: any[] = [
-        ...matchKeys.map((k) => ({ orderNumber: k })),
-        { orderNumber: { equals: id, mode: 'insensitive' } },
-      ]
+      const orClauses: any[] = []
+      const isUuid = (str: string) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
 
-      // Only check UUID if string looks like UUID
-      const isUuid = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
       for (const k of matchKeys) {
+        orClauses.push({ orderNumber: k })
+        orClauses.push({ orderNumber: { equals: k, mode: 'insensitive' } })
         if (isUuid(k)) {
           orClauses.push({ id: k })
         }
@@ -59,8 +70,13 @@ export async function PATCH(
           updatedAt: new Date(),
         }
 
-        if (status && dbStatusMap[status]) {
-          updateData.status = dbStatusMap[status] as any
+        if (normalizedKdsStatus && dbStatusMap[normalizedKdsStatus]) {
+          updateData.status = dbStatusMap[normalizedKdsStatus] as any
+          if (normalizedKdsStatus === 'ready') {
+            updateData.preparedAt = new Date()
+          } else if (normalizedKdsStatus === 'served') {
+            updateData.servedAt = new Date()
+          }
         }
         if (notes) {
           updateData.notes = notes
@@ -81,14 +97,14 @@ export async function PATCH(
             served: 'served',
           }
 
-          if (status && ktStatusMap[status]) {
+          if (normalizedKdsStatus && ktStatusMap[normalizedKdsStatus]) {
             for (const kt of existing.kitchenTickets) {
               await prisma.kitchenTicket.update({
                 where: { id: kt.id },
                 data: {
-                  status: ktStatusMap[status],
-                  ...(status === 'cooking' ? { startedAt: new Date() } : {}),
-                  ...(status === 'ready' ? { completedAt: new Date() } : {}),
+                  status: ktStatusMap[normalizedKdsStatus],
+                  ...(normalizedKdsStatus === 'cooking' ? { startedAt: new Date() } : {}),
+                  ...(normalizedKdsStatus === 'ready' ? { completedAt: new Date() } : {}),
                 },
               })
             }
@@ -111,26 +127,45 @@ export async function PATCH(
       console.warn('Database update fallback:', (dbErr as any)?.message)
     }
 
-    // Always update fallback memory store as well
+    // Always update server-side memory store & KDS cache immediately
+    const allKeys = Array.from(
+      new Set([id, fullId, orderNumber, existing?.id, existing?.orderNumber].filter(Boolean))
+    ) as string[]
+
     const fallbackUpdate: any = {}
-    if (status) fallbackUpdate.status = status
+    if (normalizedKdsStatus) fallbackUpdate.status = normalizedKdsStatus
     if (priority) fallbackUpdate.priority = priority
     if (notes) fallbackUpdate.specialNotes = notes
 
-    let updatedFallback = updateFallbackOrder(id, fallbackUpdate)
-    if (fullId && fullId !== id) updateFallbackOrder(fullId, fallbackUpdate)
-    if (orderNumber && orderNumber !== id) updateFallbackOrder(orderNumber, fallbackUpdate)
-    if (existing?.id) updateFallbackOrder(existing.id, fallbackUpdate)
-    if (existing?.orderNumber) updateFallbackOrder(existing.orderNumber, fallbackUpdate)
+    for (const k of allKeys) {
+      if (normalizedKdsStatus === 'served') {
+        removeFallbackOrder(k)
+      } else {
+        updateFallbackOrder(k, fallbackUpdate)
+      }
+      updateKDSCacheTicket(k, fallbackUpdate)
+    }
+
+    if (normalizedKdsStatus === 'served') {
+      invalidateKDSCache()
+    }
+    invalidateLiveOrdersCache()
 
     return NextResponse.json(
       successResponse({
         id,
-        status,
+        fullId: existing?.id || fullId,
+        orderNumber: existing?.orderNumber || orderNumber || id,
+        status: normalizedKdsStatus || status,
         priority,
         updated: true,
-        ticket: updatedFallback || updatedDbOrder,
-      })
+        ticket: fallbackUpdate,
+      }),
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+        },
+      }
     )
   } catch (error: any) {
     console.error('Error updating KDS ticket:', error)
@@ -140,4 +175,3 @@ export async function PATCH(
     )
   }
 }
-

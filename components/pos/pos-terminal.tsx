@@ -38,6 +38,7 @@ import {
 import { usePOSStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
 import { CustomerLocationLock, CustomerLocationData, isValidCoord } from '@/components/orders/CustomerLocationLock'
+import { useAuthContext } from '@/hooks/useAuthContext'
 
 export type PaymentMethod = 'cash' | 'card' | 'upi'
 
@@ -151,6 +152,8 @@ function PaymentDialog({
   locationData: CustomerLocationData
   setLocationData: (data: CustomerLocationData) => void
 }) {
+  const { auth } = useAuthContext()
+  const activeBranchId = auth?.branchId
   const { cartItems, paymentMethod, setPaymentMethod, getTotal, clearCart, selectedTableId } = usePOSStore()
   const [paid, setPaid] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -177,17 +180,19 @@ function PaymentDialog({
         ? `Car Guest (${locationData.vehicleNumber})`
         : 'POS Guest'
 
-      // 1. Submit real Order to backend
+      // 1. Submit real Order to backend with branchId for ultra-fast placement
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          branchId: activeBranchId || null,
           tableNumber: tableNum,
           tableId: tableObj?.id || null,
           isDineIn: !!selectedTableId,
           source: 'POS',
           customerName,
-          requestedStatus: 'confirmed',
+          status: 'pending',
+          requestedStatus: 'pending',
           items: cartItems.map((item) => ({
             menuItemId: item.menuItemId,
             name: item.name,
@@ -215,7 +220,7 @@ function PaymentDialog({
             source: isCarDelivery ? 'delivery' : selectedTableId ? 'dine_in' : 'takeaway',
             waiter: 'POS Staff',
             customerName,
-            status: 'accepted',
+            status: 'pending',
             priority: 'normal',
             items: cartItems.map((item) => ({
               name: item.name,
@@ -242,13 +247,13 @@ function PaymentDialog({
         })
         setPaid(false)
         onClose()
-      }, 1800)
+      }, 600)
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {paid ? 'Payment Successful' : 'Confirm Payment'}
@@ -539,7 +544,7 @@ export function POSTerminal() {
 
       {/* Dedicated Spot / Vehicle Details Dialog for POS */}
       <Dialog open={spotDialogOpen} onOpenChange={setSpotDialogOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base font-bold">
               <Car className="size-4 text-primary" /> Customer Vehicle & Delivery Spot

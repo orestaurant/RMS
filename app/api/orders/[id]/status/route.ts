@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
-import { updateFallbackOrder } from '@/lib/kds-utils'
+import { updateFallbackOrder, invalidateKDSCache, invalidateLiveOrdersCache } from '@/lib/kds-utils'
 
 export async function PATCH(
   request: NextRequest,
@@ -53,6 +53,10 @@ export async function PATCH(
       ...(priority ? { priority } : {}),
       ...(notes ? { specialNotes: notes } : {}),
     })
+
+    // Invalidate KDS and Live Orders caches for instant UI updates
+    invalidateKDSCache()
+    invalidateLiveOrdersCache()
 
     return NextResponse.json(successResponse({ id, status, updated: true }))
   } catch (error: any) {

@@ -1,9 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
+let categoriesCache: { data: any[]; timestamp: number } | null = null
+
+export function invalidateCategoriesCache() {
+  categoriesCache = null
+}
+
 export async function GET(request: NextRequest) {
   try {
     const restaurantId = request.nextUrl.searchParams.get('restaurantId')
+
+    const now = Date.now()
+    const CACHE_TTL = 45_000 // 45 seconds
+
+    if (!restaurantId && categoriesCache && now - categoriesCache.timestamp < CACHE_TTL) {
+      return NextResponse.json(
+        {
+          success: true,
+          data: categoriesCache.data,
+        },
+        {
+          headers: {
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'X-Category-Cache': 'HIT',
+          },
+        }
+      )
+    }
 
     const where: any = {
       deletedAt: null,
@@ -16,7 +43,13 @@ export async function GET(request: NextRequest) {
     const categories = await prisma.menuCategory.findMany({
       where,
       orderBy: { displayOrder: 'asc' },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        displayOrder: true,
+        isActive: true,
+        status: true,
         _count: {
           select: { items: { where: { deletedAt: null } } },
         },
@@ -33,6 +66,13 @@ export async function GET(request: NextRequest) {
       itemCount: c._count.items,
     }))
 
+    if (!restaurantId) {
+      categoriesCache = {
+        data: formatted,
+        timestamp: now,
+      }
+    }
+
     return NextResponse.json(
       {
         success: true,
@@ -41,6 +81,7 @@ export async function GET(request: NextRequest) {
       {
         headers: {
           'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'X-Category-Cache': 'MISS',
         },
       }
     )
@@ -118,6 +159,8 @@ export async function POST(request: NextRequest) {
         status: 'active',
       },
     })
+
+    invalidateCategoriesCache()
 
     return NextResponse.json({
       success: true,

@@ -6,7 +6,13 @@ import {
   getItemCuisine,
   registerActiveLiveOrder,
   getRealTimeLiveOrders,
+  normalizeKdsStatus,
+  getKDSCache,
+  setKDSCache,
 } from '@/lib/kds-utils'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,9 +20,39 @@ export async function GET(request: NextRequest) {
     const stationFilter = searchParams.get('station')
     const statusFilter = searchParams.get('status') || 'all'
 
+    // 1. High-speed in-memory cache check (sub-5ms response for real-time polling)
+    const cached = getKDSCache(2500)
+    if (cached) {
+      let filteredTickets = cached.tickets
+      if (statusFilter !== 'all') {
+        filteredTickets = filteredTickets.filter((t: any) => t.status === statusFilter)
+      }
+      if (stationFilter && stationFilter !== 'All') {
+        filteredTickets = filteredTickets.filter((t: any) =>
+          t.items.some((i: any) => i.station === stationFilter)
+        )
+      }
+
+      return NextResponse.json(
+        successResponse({
+          tickets: filteredTickets,
+          counts: cached.counts,
+          batchItems: cached.batchItems,
+          stations: cached.stations,
+          syncedAt: cached.syncedAt,
+        }),
+        {
+          headers: {
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'X-KDS-Cache': 'HIT',
+          },
+        }
+      )
+    }
+
     let formattedTickets: any[] = []
 
-    // 1. Fetch real active orders from PostgreSQL via Prisma
+    // 2. Fetch real active orders from PostgreSQL via Prisma using lean SELECT fields
     try {
       const liveStatuses: any[] = [
         'pending',
@@ -25,6 +61,8 @@ export async function GET(request: NextRequest) {
         'ready',
         'PENDING',
         'PREPARING',
+        'CONFIRMED',
+        'READY',
       ]
 
       const dbOrders = await prisma.order.findMany({
@@ -32,22 +70,48 @@ export async function GET(request: NextRequest) {
           status: { in: liveStatuses as any },
           deletedAt: null,
         },
-        include: {
-          table: true,
-          items: {
-            include: {
-              menuItem: {
-                include: {
-                  category: true,
-                },
-              },
+        select: {
+          id: true,
+          orderNumber: true,
+          status: true,
+          source: true,
+          notes: true,
+          createdAt: true,
+          table: {
+            select: {
+              tableNumber: true,
+              section: true,
             },
           },
-          createdBy: true,
-          customer: true,
-          kitchenTickets: {
-            include: {
-              items: true,
+          createdBy: {
+            select: {
+              name: true,
+              firstName: true,
+            },
+          },
+          customer: {
+            select: {
+              name: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+          items: {
+            select: {
+              id: true,
+              itemName: true,
+              quantity: true,
+              specialInstructions: true,
+              status: true,
+              menuItem: {
+                select: {
+                  category: {
+                    select: {
+                      name: true,
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -59,73 +123,87 @@ export async function GET(request: NextRequest) {
 
       if (dbOrders && dbOrders.length > 0) {
         const now = Date.now()
-        formattedTickets = dbOrders.map((order) => {
-          const rawStatus = (order.status || 'pending').toLowerCase()
-          let normalizedStatus: 'pending' | 'accepted' | 'cooking' | 'ready' | 'served' = 'pending'
-          if (rawStatus === 'confirmed') normalizedStatus = 'accepted'
-          else if (rawStatus === 'preparing') normalizedStatus = 'cooking'
-          else if (rawStatus === 'ready') normalizedStatus = 'ready'
-          else if (rawStatus === 'served' || rawStatus === 'completed') normalizedStatus = 'served'
-          else normalizedStatus = 'pending'
+        formattedTickets = dbOrders
+          .map((order) => {
+            const normalizedStatus = normalizeKdsStatus(order.status)
+            // If already served or cancelled, exclude completely from active kitchen queue
+            if (normalizedStatus === 'served') return null
 
-          const minutesAgo = Math.max(
-            0,
-            Math.floor((now - new Date(order.createdAt).getTime()) / 60000)
-          )
+            const minutesAgo = Math.max(
+              0,
+              Math.floor((now - new Date(order.createdAt).getTime()) / 60000)
+            )
 
-          let priority: 'normal' | 'high' | 'urgent' = 'normal'
-          if (minutesAgo > 20) priority = 'urgent'
-          else if (minutesAgo > 15) priority = 'high'
+            let priority: 'normal' | 'high' | 'urgent' = 'normal'
+            if (minutesAgo > 20) priority = 'urgent'
+            else if (minutesAgo > 15) priority = 'high'
 
-          const custName = order.customer
-            ? (order.customer.name || `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() || 'Customer')
-            : undefined
+            const custName = order.customer
+              ? (order.customer.name || `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() || 'Customer')
+              : undefined
 
-          const ticketItems = order.items.map((i) => {
-            const rawCat = (i.menuItem as any)?.category?.name
-            const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
-            const catName = rawCat && !isUuid(rawCat) ? rawCat : undefined
+            const ticketItems = order.items.map((i) => {
+              const rawCat = (i.menuItem as any)?.category?.name
+              const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
+              const catName = rawCat && !isUuid(rawCat) ? rawCat : undefined
+              return {
+                id: i.id,
+                name: i.itemName,
+                quantity: i.quantity,
+                notes: i.specialInstructions || undefined,
+                station: getKitchenStation(i.itemName, catName),
+                cuisine: getItemCuisine(i.itemName, catName),
+                completed: i.status === 'ready' || i.status === 'served',
+              }
+            })
+
+            const ticketCuisines = Array.from(new Set(ticketItems.map((ti) => ti.cuisine)))
+
             return {
-              id: i.id,
-              name: i.itemName,
-              quantity: i.quantity,
-              notes: i.specialInstructions || undefined,
-              station: getKitchenStation(i.itemName, catName),
-              cuisine: getItemCuisine(i.itemName, catName),
-              completed: i.status === 'ready' || i.status === 'served',
+              id: order.orderNumber || `ORD-${order.id.slice(0, 4)}`,
+              fullId: order.id,
+              orderNumber: order.orderNumber || `ORD-${order.id.slice(0, 4)}`,
+              tableNumber: order.table?.tableNumber || 'Takeaway',
+              tableName: order.table?.section ? `Table ${order.table.tableNumber} (${order.table.section})` : undefined,
+              source: (order.source?.toLowerCase() || 'dine_in') as any,
+              waiter: order.createdBy?.name || order.createdBy?.firstName || 'Staff',
+              customerName: custName,
+              status: normalizedStatus,
+              priority,
+              ticketTime: minutesAgo,
+              createdAt: order.createdAt.toISOString(),
+              specialNotes: order.notes || undefined,
+              cuisines: ticketCuisines,
+              items: ticketItems,
             }
           })
-
-          const ticketCuisines = Array.from(new Set(ticketItems.map((ti) => ti.cuisine)))
-
-          return {
-            id: order.orderNumber || `ORD-${order.id.slice(0, 4)}`,
-            fullId: order.id,
-            tableNumber: order.table?.tableNumber || 'Takeaway',
-            source: order.source?.toLowerCase() || 'dine_in',
-            waiter: order.createdBy?.name || order.createdBy?.firstName || 'Staff',
-            customerName: custName,
-            status: normalizedStatus,
-            priority,
-            ticketTime: minutesAgo,
-            createdAt: order.createdAt.toISOString(),
-            specialNotes: order.notes || undefined,
-            cuisines: ticketCuisines,
-            items: ticketItems,
-          }
-        })
+          .filter(Boolean) as any[]
       }
     } catch (dbErr) {
       console.warn('PostgreSQL orders lookup fallback:', (dbErr as any)?.message)
     }
 
-    // 2. If PostgreSQL had no orders or is disconnected, check real-time session orders
+    // 3. Merge fallback real-time live orders, strictly preventing duplicates
     const fallbackOrders = getRealTimeLiveOrders()
-    if (formattedTickets.length === 0 && fallbackOrders.length > 0) {
-      formattedTickets = fallbackOrders
+    for (const fo of fallbackOrders) {
+      const normalizedStatus = normalizeKdsStatus(fo.status)
+      if (normalizedStatus === 'served') continue
+
+      const alreadyExists = formattedTickets.some(
+        (t) =>
+          (t.fullId && fo.fullId && t.fullId === fo.fullId) ||
+          (t.orderNumber && fo.orderNumber && t.orderNumber === fo.orderNumber) ||
+          t.id === fo.id
+      )
+      if (!alreadyExists) {
+        formattedTickets.push({
+          ...fo,
+          status: normalizedStatus,
+        })
+      }
     }
 
-    // Calculate dynamic batch cooking aggregation (PRD: "Batch cooking groups same dishes across orders")
+    // 4. Calculate dynamic batch cooking aggregation
     const batchMap = new Map<
       string,
       {
@@ -193,6 +271,15 @@ export async function GET(request: NextRequest) {
       'Desserts',
     ]
 
+    // Save to server fast cache for subsequent queries
+    setKDSCache({
+      tickets: formattedTickets,
+      counts,
+      batchItems,
+      stations,
+      syncedAt: new Date().toISOString(),
+    })
+
     // Filter tickets if station or status specified
     let filteredTickets = formattedTickets
     if (statusFilter !== 'all') {
@@ -211,7 +298,13 @@ export async function GET(request: NextRequest) {
         batchItems,
         stations,
         syncedAt: new Date().toISOString(),
-      })
+      }),
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'X-KDS-Cache': 'MISS',
+        },
+      }
     )
   } catch (error: any) {
     console.error('Error fetching KDS tickets:', error)
@@ -229,11 +322,12 @@ export async function POST(request: NextRequest) {
     const newTicket = {
       id: body.id || `ORD-${String(Math.floor(100 + Math.random() * 900))}`,
       fullId: body.fullId || `ord-gen-${Date.now()}`,
+      orderNumber: body.orderNumber || body.id || `ORD-${String(Math.floor(100 + Math.random() * 900))}`,
       tableNumber: body.tableNumber || 'Table 1',
       source: body.source || 'qr_order',
       waiter: body.waiter || 'Staff',
       customerName: body.customerName || 'Customer',
-      status: body.status || 'pending',
+      status: normalizeKdsStatus(body.status || 'pending'),
       priority: body.priority || 'normal',
       createdAt: body.createdAt || new Date().toISOString(),
       specialNotes: body.specialNotes || undefined,

@@ -41,14 +41,22 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       },
     })
 
-    // 2. Live Orders count: Orders with active status (placed, cooking, kitchen_pending / pending, confirmed, preparing, ready)
+    // 2. Live Orders count: Orders created today or active in-progress (matching Live Orders view & Total Orders)
     const liveOrdersCount = await prisma.order.count({
       where: {
         ...(branchId ? { branchId } : {}),
-        status: {
-          in: ['pending', 'confirmed', 'preparing', 'ready'],
-        },
         deletedAt: null,
+        status: {
+          notIn: ['cancelled', 'CANCELLED', 'refunded'],
+        },
+        OR: [
+          { createdAt: { gte: todayStart } },
+          {
+            status: {
+              in: ['pending', 'confirmed', 'preparing', 'ready', 'PENDING', 'PREPARING'],
+            },
+          },
+        ],
       },
     })
 

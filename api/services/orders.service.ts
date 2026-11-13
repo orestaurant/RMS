@@ -53,24 +53,30 @@ export const getLiveOrders = async (
       'PREPARING',
     ]
 
-    let statusCondition: any = {
-      in: activeStatuses,
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+
+    let whereClause: any = {
+      ...(tenantContext?.organizationId ? { organizationId: tenantContext.organizationId } : {}),
+      ...(branchId ? { branchId: branchId } : {}),
+      deletedAt: null,
+      status: { notIn: ['cancelled', 'CANCELLED', 'refunded'] },
     }
 
     if (statusFilter && statusFilter !== 'all') {
       const s = statusFilter.toLowerCase()
       // If filtering by cooking, map to preparing
       const mapped = s === 'cooking' ? 'preparing' : s === 'accepted' ? 'confirmed' : s
-      statusCondition = { in: [mapped, mapped.toUpperCase()] }
+      whereClause.status = { in: [mapped, mapped.toUpperCase()] }
+    } else {
+      whereClause.OR = [
+        { createdAt: { gte: todayStart } },
+        { status: { in: activeStatuses } },
+      ]
     }
 
     const orders = await prisma.order.findMany({
-      where: {
-        ...(tenantContext?.organizationId ? { organizationId: tenantContext.organizationId } : {}),
-        ...(branchId ? { branchId: branchId } : {}),
-        status: statusCondition,
-        deletedAt: null,
-      },
+      where: whereClause,
       include: {
         table: true,
         items: {
