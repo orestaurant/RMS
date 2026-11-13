@@ -104,11 +104,6 @@ export function AppSidebar() {
           icon: ShoppingCart,
           badge: counts?.posLive ? 'Live' : undefined,
         },
-        {
-          label: 'Billing & Invoices',
-          href: '/billing',
-          icon: Receipt,
-        },
         { label: 'Tables', href: '/tables', icon: TableProperties },
         {
           label: 'Reservations',

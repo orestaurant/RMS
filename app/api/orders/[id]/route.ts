@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
-import { updateFallbackOrder, removeFallbackOrder } from '@/lib/kds-utils'
+import { updateFallbackOrder, removeFallbackOrder, invalidateLiveOrdersCache } from '@/lib/kds-utils'
 
 export async function GET(
   request: NextRequest,
@@ -172,6 +172,8 @@ export async function PATCH(
         : {}),
     })
 
+    invalidateLiveOrdersCache()
+
     return NextResponse.json(
       successResponse({
         id,
@@ -227,6 +229,8 @@ export async function DELETE(
     } catch (dbErr) {
       console.warn('Prisma order delete notice:', dbErr)
     }
+
+    invalidateLiveOrdersCache()
 
     return NextResponse.json(
       successResponse({

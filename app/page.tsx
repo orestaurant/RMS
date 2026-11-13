@@ -454,15 +454,6 @@ export default function HomePage() {
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </a>
 
-          {/* Direct Billing & Invoices Link */}
-          <Link
-            href="/billing"
-            className="gsap-hero-btn w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-white dark:bg-slate-900/95 hover:bg-slate-50 dark:hover:bg-slate-800 text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-white font-semibold text-sm border border-amber-300 dark:border-amber-500/40 hover:border-amber-500 shadow-sm dark:shadow-lg transition-all flex items-center justify-center gap-2"
-          >
-            <Receipt className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-            <span>Billing & Invoices</span>
-          </Link>
-
           {/* Interactive Live Demo */}
           <Link
             href="/dashboard"
@@ -539,19 +530,12 @@ export default function HomePage() {
 
             <div className="flex flex-col sm:flex-row gap-3">
               <Link
-                href="/billing"
+                href="/pos"
                 className="flex-1 py-3.5 px-5 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-rose-500 hover:opacity-95 text-white font-bold text-sm shadow-lg shadow-orange-500/25 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
               >
-                <Receipt className="w-4 h-4" />
-                <span>Billing & Invoices</span>
-                <ArrowRight className="w-4 h-4" />
-              </Link>
-              <Link
-                href="/pos"
-                className="py-3.5 px-5 rounded-2xl bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-850 text-slate-800 dark:text-orange-400 hover:text-orange-600 dark:hover:text-white font-bold text-sm border border-slate-200 dark:border-orange-500/40 hover:border-orange-500 flex items-center justify-center gap-2 transition-all shadow-sm dark:shadow-none"
-              >
                 <ShoppingCart className="w-4 h-4" />
-                <span>POS Terminal</span>
+                <span>Open POS Terminal</span>
+                <ArrowRight className="w-4 h-4" />
               </Link>
             </div>
           </div>
@@ -952,11 +936,6 @@ export default function HomePage() {
               <li>
                 <Link href="/inventory" className="hover:text-orange-600 dark:hover:text-white transition-colors">
                   Stock & Inventory
-                </Link>
-              </li>
-              <li>
-                <Link href="/billing" className="hover:text-orange-600 dark:hover:text-white transition-colors">
-                  Invoices & Razorpay
                 </Link>
               </li>
             </ul>

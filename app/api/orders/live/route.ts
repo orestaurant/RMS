@@ -15,6 +15,7 @@ import {
 } from '@/lib/kds-utils'
 import { getCachedBranchMeta, setCachedBranchMeta } from '@/lib/dashboard-cache'
 import { startOfDay } from 'date-fns'
+import { OrderStatusEnum } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -26,11 +27,15 @@ export async function GET(request: NextRequest) {
     const branchIdParam = request.nextUrl.searchParams.get('branchId')
     const statusFilter = (request.nextUrl.searchParams.get('status') || 'all').toLowerCase()
 
+    // UUID validator to protect Prisma queries against invalid uuid syntax
+    const isUuid = (val: string | null): boolean =>
+      !!val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)
+
     // 1. Resolve branchId consistently (with memory cache to avoid unnecessary DB queries)
-    let branchId = branchIdParam
+    let branchId = branchIdParam && isUuid(branchIdParam) ? branchIdParam : null
     if (!branchId) {
       const cachedBranch = getCachedBranchMeta()
-      if (cachedBranch) {
+      if (cachedBranch && isUuid(cachedBranch.id)) {
         branchId = cachedBranch.id
       } else {
         const defaultBranch = await prisma.branch.findFirst({
@@ -60,16 +65,14 @@ export async function GET(request: NextRequest) {
 
     const todayStart = startOfDay(new Date())
 
-    // Active in-progress order statuses
-    const inProgressStatuses = [
+    // Active in-progress order statuses matching OrderStatusEnum in Prisma
+    const inProgressStatuses: OrderStatusEnum[] = [
       'pending',
       'confirmed',
       'preparing',
       'ready',
       'PENDING',
       'PREPARING',
-      'CONFIRMED',
-      'READY',
     ]
 
     let formattedOrders: any[] = []
@@ -87,7 +90,7 @@ export async function GET(request: NextRequest) {
             { createdAt: { gte: todayStart } },
             {
               status: {
-                in: inProgressStatuses as any,
+                in: inProgressStatuses,
               },
             },
           ],
@@ -197,7 +200,7 @@ export async function GET(request: NextRequest) {
         })
       }
     } catch (dbErr) {
-      console.warn('Orders live DB lookup notice:', dbErr)
+      console.error('Orders live DB lookup error:', dbErr)
     }
 
     // 4. Merge fallback live orders from in-memory session if DB has fewer orders

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Clock,
   Zap,
@@ -869,11 +869,12 @@ export function LiveOrdersView() {
     carOrdersCount: 0,
   })
   const [loading, setLoading] = useState(true)
+  const isInitialLoadRef = useRef(true)
 
   // Fetch live orders directly from PostgreSQL via API (with background non-blocking refresh)
   const fetchLiveOrders = useCallback(async (isManualRefresh = false) => {
     try {
-      if (orders.length === 0 || isManualRefresh) {
+      if (isInitialLoadRef.current || isManualRefresh) {
         setLoading(true)
       }
       const branchParam = activeBranchId ? `&branchId=${encodeURIComponent(activeBranchId)}` : ''
@@ -889,20 +890,21 @@ export function LiveOrdersView() {
         if (json.data.stats) {
           setStats(json.data.stats)
         }
+        isInitialLoadRef.current = false
       } else {
-        if (orders.length === 0) {
+        if (isInitialLoadRef.current) {
           setOrders([])
         }
       }
     } catch (err) {
       console.error('Failed to fetch live orders:', err)
-      if (orders.length === 0) {
+      if (isInitialLoadRef.current) {
         setOrders([])
       }
     } finally {
       setLoading(false)
     }
-  }, [activeBranchId, orders.length])
+  }, [activeBranchId])
 
   useEffect(() => {
     fetchLiveOrders()
@@ -996,7 +998,7 @@ export function LiveOrdersView() {
         {[
           {
             label: 'Total Orders',
-            value: stats.activeCount || orders.length,
+            value: counts.all || stats.activeCount || orders.length,
             icon: Zap,
             color: 'text-primary',
             active: tab === 'all' && filterMode === 'all' && !urgentOnly,

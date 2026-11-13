@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { invalidatePOSMenuCache } from '@/lib/pos-cache'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -12,6 +13,7 @@ let menuItemsCache: {
 
 export function invalidateMenuItemsCache() {
   menuItemsCache = null
+  invalidatePOSMenuCache()
 }
 
 export async function GET(request: NextRequest) {

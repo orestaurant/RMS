@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { invalidatePOSMenuCache } from '@/lib/pos-cache'
+import { invalidateMenuItemsCache } from '@/app/api/menu/items/route'
 
 export async function GET(
   request: NextRequest,
@@ -105,6 +107,9 @@ export async function PATCH(
       include: { category: true },
     })
 
+    invalidateMenuItemsCache()
+    invalidatePOSMenuCache()
+
     return NextResponse.json({
       success: true,
       message: 'Menu item updated successfully',
@@ -160,6 +165,9 @@ export async function DELETE(
         status: 'inactive',
       },
     })
+
+    invalidateMenuItemsCache()
+    invalidatePOSMenuCache()
 
     return NextResponse.json({
       success: true,

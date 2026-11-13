@@ -1,7 +1,18 @@
 'use client'
 
 import { create } from 'zustand'
-import type { OrderItem, PaymentMethod } from './mock-data'
+
+export type PaymentMethod = 'cash' | 'card' | 'upi' | 'razorpay' | 'paytm'
+
+export interface OrderItem {
+  id: string
+  menuItemId: string
+  name: string
+  quantity: number
+  price: number
+  notes?: string
+  addons?: string[]
+}
 
 // ── UI Store ──────────────────────────────────────────────────────────────
 

@@ -9,6 +9,7 @@ import { getMockAuthContext } from '@/api/middleware/auth'
 import { extractTenantContext } from '@/api/middleware/tenant'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { ValidationError } from '@/api/utils/errors'
+import { getPOSTablesCache, setPOSTablesCache, invalidatePOSTablesCache } from '@/lib/pos-cache'
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,6 +23,17 @@ export async function GET(request: NextRequest) {
         select: { id: true },
       })
       branchId = defaultBranch?.id || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
+    }
+
+    const cacheKey = `${branchId || 'default'}_tables`
+    const cached = getPOSTablesCache(cacheKey)
+    if (cached) {
+      return NextResponse.json(cached, {
+        headers: {
+          'Cache-Control': 'public, max-age=5, stale-while-revalidate=10',
+          'X-Tables-Cache': 'HIT',
+        },
+      })
     }
 
     const tables = await prisma.restaurantTable.findMany({
@@ -109,7 +121,15 @@ export async function GET(request: NextRequest) {
       return String(a.tableNumber).localeCompare(String(b.tableNumber))
     })
 
-    return NextResponse.json(successResponse(formatted))
+    const responsePayload = successResponse(formatted)
+    setPOSTablesCache(cacheKey, responsePayload)
+
+    return NextResponse.json(responsePayload, {
+      headers: {
+        'Cache-Control': 'public, max-age=5, stale-while-revalidate=10',
+        'X-Tables-Cache': 'MISS',
+      },
+    })
   } catch (error: any) {
     console.error('Error fetching tables:', error)
     return NextResponse.json(
@@ -174,6 +194,7 @@ export async function POST(request: NextRequest) {
       },
     })
 
+    invalidatePOSTablesCache()
     return NextResponse.json(successResponse(newTable, 'Table created successfully'), { status: 201 })
   } catch (error: any) {
     console.error('Error creating table:', error)
@@ -230,6 +251,7 @@ export async function PATCH(request: NextRequest) {
       },
     })
 
+    invalidatePOSTablesCache()
     return NextResponse.json(successResponse(updated, 'Table updated successfully'))
   } catch (error: any) {
     console.error('Error updating table:', error)
@@ -266,6 +288,7 @@ export async function DELETE(request: NextRequest) {
       await prisma.restaurantTable.delete({
         where: { id },
       })
+      invalidatePOSTablesCache()
       return NextResponse.json(successResponse(null, `Table ${table.tableNumber} deleted successfully`))
     } catch (dbErr: any) {
       console.warn('Permanent table delete prevented by foreign keys, performing soft delete:', dbErr.message)
@@ -275,6 +298,7 @@ export async function DELETE(request: NextRequest) {
           deletedAt: new Date(),
         },
       })
+      invalidatePOSTablesCache()
       return NextResponse.json(successResponse(null, `Table ${table.tableNumber} deleted successfully`))
     }
   } catch (error: any) {

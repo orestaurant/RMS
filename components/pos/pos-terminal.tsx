@@ -436,13 +436,45 @@ function PaymentDialog({
   )
 }
 
+// In-memory module cache for instant 0ms mount (SWR pattern)
+let clientPOSCache: {
+  menuItems: POSMenuItem[]
+  categories: { id: string; label: string }[]
+  tables: POSTable[]
+} | null = null
+
+const POS_LOCAL_STORAGE_KEY = 'resto_pos_cache_v2'
+
+function getInitialPOSData() {
+  if (clientPOSCache && clientPOSCache.menuItems.length > 0) {
+    return clientPOSCache
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem(POS_LOCAL_STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (parsed?.menuItems && Array.isArray(parsed.menuItems) && parsed.menuItems.length > 0) {
+          clientPOSCache = parsed
+          return parsed
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null
+}
+
 export function POSTerminal() {
-  const [menuItems, setMenuItems] = useState<POSMenuItem[]>([])
-  const [categories, setCategories] = useState<{ id: string; label: string }[]>([
-    { id: 'all', label: 'All Items' },
-  ])
-  const [tables, setTables] = useState<POSTable[]>([])
-  const [loading, setLoading] = useState(true)
+  const initialCache = getInitialPOSData()
+
+  const [menuItems, setMenuItems] = useState<POSMenuItem[]>(initialCache?.menuItems || [])
+  const [categories, setCategories] = useState<{ id: string; label: string }[]>(
+    initialCache?.categories || [{ id: 'all', label: 'All Items' }]
+  )
+  const [tables, setTables] = useState<POSTable[]>(initialCache?.tables || [])
+  const [loading, setLoading] = useState(!initialCache || initialCache.menuItems.length === 0)
   const [refreshing, setRefreshing] = useState(false)
   const [activeCategory, setActiveCategory] = useState('all')
   const [search, setSearch] = useState('')
@@ -472,24 +504,31 @@ export function POSTerminal() {
     getTotal,
   } = usePOSStore()
 
-  // Fetch real items from Menu & Inventory APIs
-  const fetchPOSData = useCallback(async (isSilent = false) => {
+  // Fetch real items from Menu & Inventory APIs with non-blocking SWR background refresh
+  const fetchPOSData = useCallback(async (isManualRefresh = false) => {
     try {
-      if (!isSilent) setLoading(true)
-      else setRefreshing(true)
+      if (isManualRefresh) setRefreshing(true)
 
       const [menuRes, tablesRes] = await Promise.all([
         fetch('/api/pos/menu'),
         fetch('/api/tables'),
       ])
 
-      const menuJson = await menuRes.json().catch(() => null)
-      const tablesJson = await tablesRes.json().catch(() => null)
+      const [menuJson, tablesJson] = await Promise.all([
+        menuRes.json().catch(() => null),
+        tablesRes.json().catch(() => null),
+      ])
+
+      let updatedMenuItems: POSMenuItem[] = []
+      let updatedCategories: { id: string; label: string }[] = []
+      let updatedTables: POSTable[] = []
 
       if (menuJson && menuJson.success && menuJson.data) {
-        setMenuItems(menuJson.data.items || [])
+        updatedMenuItems = menuJson.data.items || []
+        setMenuItems(updatedMenuItems)
         if (menuJson.data.categories && menuJson.data.categories.length > 0) {
-          setCategories(menuJson.data.categories)
+          updatedCategories = menuJson.data.categories
+          setCategories(updatedCategories)
         }
       }
 
@@ -497,13 +536,29 @@ export function POSTerminal() {
         const rawTables = Array.isArray(tablesJson.data)
           ? tablesJson.data
           : tablesJson.data.tables || []
-        const mappedTables: POSTable[] = rawTables.map((t: any) => ({
+        updatedTables = rawTables.map((t: any) => ({
           id: t.id,
           number: t.tableNumber || t.number || '1',
           status: (t.status || 'available').toLowerCase(),
           capacity: t.capacity,
         }))
-        setTables(mappedTables)
+        setTables(updatedTables)
+      }
+
+      // Update in-memory & persistent cache for instant 0ms loads
+      if (updatedMenuItems.length > 0) {
+        clientPOSCache = {
+          menuItems: updatedMenuItems,
+          categories: updatedCategories.length > 0 ? updatedCategories : [{ id: 'all', label: 'All Items' }],
+          tables: updatedTables,
+        }
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(POS_LOCAL_STORAGE_KEY, JSON.stringify(clientPOSCache))
+          } catch {
+            // ignore
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to load real POS data:', err)

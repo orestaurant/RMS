@@ -46,17 +46,22 @@ export interface UsePOSMenuReturn {
   refetch: () => Promise<void>
 }
 
+const posMenuClientCache: Record<string, { categories: MenuCategory[]; items: MenuItem[] }> = {}
+
 export function usePOSMenu(branchId: string): UsePOSMenuReturn {
-  const [categories, setCategories] = useState<MenuCategory[]>([])
-  const [items, setItems] = useState<MenuItem[]>([])
-  const [loading, setLoading] = useState(true)
+  const cached = branchId ? posMenuClientCache[branchId] : null
+  const [categories, setCategories] = useState<MenuCategory[]>(cached?.categories || [])
+  const [items, setItems] = useState<MenuItem[]>(cached?.items || [])
+  const [loading, setLoading] = useState(!cached)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchMenu = useCallback(async () => {
+  const fetchMenu = useCallback(async (silent = false) => {
     if (!branchId) return
 
     try {
-      setLoading(true)
+      if (!silent && !posMenuClientCache[branchId]) {
+        setLoading(true)
+      }
       setError(null)
 
       const response = await fetch(`/api/pos/menu?branchId=${branchId}`)
@@ -66,22 +71,32 @@ export function usePOSMenu(branchId: string): UsePOSMenuReturn {
         throw new Error(data.error || 'Failed to fetch menu')
       }
 
-      setCategories(data.data.categories || [])
-      setItems(data.data.items || [])
+      const fetchedCategories = data.data.categories || []
+      const fetchedItems = data.data.items || []
+
+      setCategories(fetchedCategories)
+      setItems(fetchedItems)
+
+      posMenuClientCache[branchId] = {
+        categories: fetchedCategories,
+        items: fetchedItems,
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load menu')
-      setCategories([])
-      setItems([])
+      if (!posMenuClientCache[branchId]) {
+        setCategories([])
+        setItems([])
+      }
     } finally {
       setLoading(false)
     }
   }, [branchId])
 
   useEffect(() => {
-    fetchMenu()
+    fetchMenu(!!posMenuClientCache[branchId])
   }, [branchId, fetchMenu])
 
-  return { categories, items, loading, error, refetch: fetchMenu }
+  return { categories, items, loading, error, refetch: () => fetchMenu(false) }
 }
 
 // ═══════════════════════════════════════════════════════════════════════

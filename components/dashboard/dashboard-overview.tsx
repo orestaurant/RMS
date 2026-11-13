@@ -11,7 +11,6 @@ import {
   Armchair,
   Car,
   Navigation,
-  Receipt,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -170,34 +169,7 @@ export function DashboardOverview() {
       </div>
 
       {/* Quick Action Banners */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Billing & Invoices Quick Action */}
-        <div className="flex items-center justify-between p-3.5 rounded-xl bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent border border-orange-500/30 shadow-sm flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <div className="size-9 rounded-xl bg-orange-500/15 text-orange-500 flex items-center justify-center shrink-0">
-              <Receipt className="size-4.5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <p className="text-xs font-semibold text-foreground">Billing & Invoicing Portal</p>
-                <Badge variant="outline" className="text-[10px] h-4.5 px-1.5 border-orange-500/40 text-orange-500 font-medium">
-                  GST & UPI QR
-                </Badge>
-              </div>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Generate tax invoices, print thermal receipts & accept dynamic Razorpay UPI QR
-              </p>
-            </div>
-          </div>
-          <Link href="/billing">
-            <Button size="sm" className="h-8 text-xs gap-1.5 bg-orange-600 hover:bg-orange-700 text-white shadow-sm">
-              <Receipt className="size-3.5" />
-              Open Billing
-              <ArrowRight className="size-3.5" />
-            </Button>
-          </Link>
-        </div>
-
+      <div>
         {/* Drive-in & Car Delivery Orders Overview Action */}
         <div className="flex items-center justify-between p-3.5 rounded-xl bg-card border border-border/80 shadow-sm flex-wrap gap-3">
           <div className="flex items-center gap-3">
