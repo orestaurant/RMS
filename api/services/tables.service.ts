@@ -3,10 +3,8 @@
  * Handles table-related queries
  */
 
-import { PrismaClient } from '@prisma/client'
+import prisma from '@/lib/prisma'
 import { TenantContext } from '@/api/middleware/tenant'
-
-const prisma = new PrismaClient()
 
 export interface TableInfo {
   id: string

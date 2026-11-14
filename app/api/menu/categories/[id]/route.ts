@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { invalidateAllMenuCaches } from '@/lib/menu-cache'
 
 export async function DELETE(
   request: NextRequest,
@@ -34,6 +35,8 @@ export async function DELETE(
       where: { id },
       data: { deletedAt: new Date(), isActive: false, status: 'inactive' },
     })
+
+    invalidateAllMenuCaches()
 
     return NextResponse.json({
       success: true,

@@ -3,10 +3,8 @@
  * Handles user authentication and context retrieval
  */
 
-import { PrismaClient } from '@prisma/client'
+import prisma from '@/lib/prisma'
 import { NotFoundError } from '@/api/utils/errors'
-
-const prisma = new PrismaClient()
 
 export interface UserContext {
   id: string

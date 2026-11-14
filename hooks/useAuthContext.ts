@@ -34,7 +34,13 @@ export function useAuthContext(): UseAuthContextReturn {
       setLoading(true)
       setError(null)
 
-      const response = await fetch('/api/auth/me')
+      const response = await fetch('/api/auth/me', {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      })
       const data = await response.json()
 
       if (!response.ok) {

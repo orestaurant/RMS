@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { invalidatePOSMenuCache, invalidateMenuItemsCache } from '@/lib/pos-cache'
+import {
+  invalidateAllMenuCaches,
+  updateCachedItemAvailability,
+} from '@/lib/menu-cache'
 
 export async function GET(
   request: NextRequest,
@@ -106,8 +109,11 @@ export async function PATCH(
       include: { category: true },
     })
 
-    invalidateMenuItemsCache()
-    invalidatePOSMenuCache()
+    if (body.isAvailable !== undefined && Object.keys(data).length === 1) {
+      updateCachedItemAvailability(id, Boolean(body.isAvailable))
+    } else {
+      invalidateAllMenuCaches()
+    }
 
     return NextResponse.json({
       success: true,
@@ -165,8 +171,7 @@ export async function DELETE(
       },
     })
 
-    invalidateMenuItemsCache()
-    invalidatePOSMenuCache()
+    invalidateAllMenuCaches()
 
     return NextResponse.json({
       success: true,

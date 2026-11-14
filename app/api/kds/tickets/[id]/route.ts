@@ -9,6 +9,7 @@ import {
   invalidateLiveOrdersCache,
   normalizeKdsStatus,
 } from '@/lib/kds-utils'
+import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,31 +42,32 @@ export async function PATCH(
     let existing: any = null
 
     try {
-      const matchKeys = Array.from(
-        new Set([id, fullId, orderNumber].filter(Boolean))
-      ) as string[]
-
-      const orClauses: any[] = []
       const isUuid = (str: string) =>
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
 
-      for (const k of matchKeys) {
-        orClauses.push({ orderNumber: k })
-        orClauses.push({ orderNumber: { equals: k, mode: 'insensitive' } })
-        if (isUuid(k)) {
-          orClauses.push({ id: k })
-        }
+      // Fast primary-key lookup if valid UUID
+      if (fullId && isUuid(fullId)) {
+        existing = await prisma.order.findUnique({
+          where: { id: fullId },
+          select: { id: true, orderNumber: true },
+        })
+      } else if (id && isUuid(id)) {
+        existing = await prisma.order.findUnique({
+          where: { id },
+          select: { id: true, orderNumber: true },
+        })
       }
 
-      existing = await (prisma.order as any).findFirst({
-        where: {
-          OR: orClauses,
-        },
-        include: {
-          kitchenTickets: true,
-          items: true,
-        },
-      })
+      // If not found by UUID, lookup by indexed orderNumber
+      if (!existing) {
+        const orderNum = orderNumber || (!isUuid(id) ? id : null)
+        if (orderNum) {
+          existing = await prisma.order.findFirst({
+            where: { orderNumber: orderNum },
+            select: { id: true, orderNumber: true },
+          })
+        }
+      }
 
       if (existing) {
         const updateData: any = {
@@ -76,6 +78,10 @@ export async function PATCH(
           updateData.status = dbStatusMap[normalizedKdsStatus] as any
           if (normalizedKdsStatus === 'ready') {
             updateData.preparedAt = new Date()
+            // Real-time automatic inventory recipe deduction (asynchronous non-blocking)
+            deductStockForPreparedOrder(existing.id).catch((err) =>
+              console.error('Inventory auto-deduction error:', err?.message)
+            )
           } else if (normalizedKdsStatus === 'served') {
             updateData.servedAt = new Date()
           }
@@ -89,33 +95,32 @@ export async function PATCH(
           data: updateData,
         })
 
-        // Also update any linked KitchenTickets if present
-        if (existing.kitchenTickets && existing.kitchenTickets.length > 0) {
-          const ktStatusMap: Record<string, any> = {
-            pending: 'pending',
-            accepted: 'pending',
-            cooking: 'preparing',
-            ready: 'ready',
-            served: 'served',
-          }
+        // Fast parallel update for linked KitchenTickets
+        const ktStatusMap: Record<string, any> = {
+          pending: 'pending',
+          accepted: 'pending',
+          cooking: 'preparing',
+          ready: 'ready',
+          served: 'served',
+        }
 
-          if (normalizedKdsStatus && ktStatusMap[normalizedKdsStatus]) {
-            for (const kt of existing.kitchenTickets) {
-              await prisma.kitchenTicket.update({
-                where: { id: kt.id },
-                data: {
-                  status: ktStatusMap[normalizedKdsStatus],
-                  ...(normalizedKdsStatus === 'cooking' ? { startedAt: new Date() } : {}),
-                  ...(normalizedKdsStatus === 'ready' ? { completedAt: new Date() } : {}),
-                },
-              })
-            }
-          }
+        if (normalizedKdsStatus && ktStatusMap[normalizedKdsStatus]) {
+          await prisma.kitchenTicket.updateMany({
+            where: { orderId: existing.id },
+            data: {
+              status: ktStatusMap[normalizedKdsStatus],
+              ...(normalizedKdsStatus === 'cooking' ? { startedAt: new Date() } : {}),
+              ...(normalizedKdsStatus === 'ready' ? { completedAt: new Date() } : {}),
+            },
+          })
         }
 
         // If toggling an item status
-        if (toggleItemId && existing.items) {
-          const item = existing.items.find((i: any) => i.id === toggleItemId)
+        if (toggleItemId) {
+          const item = await prisma.orderItem.findUnique({
+            where: { id: toggleItemId },
+            select: { status: true },
+          })
           if (item) {
             const nextItemStatus = item.status === 'ready' ? 'preparing' : 'ready'
             await prisma.orderItem.update({

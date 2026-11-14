@@ -57,10 +57,9 @@ export default function LoginPage() {
         return
       }
 
-      // Success: redirect to dashboard
+      // Success: full navigation to clear all prior in-memory session and cache states
       const targetUrl = data.redirect || '/dashboard'
-      router.push(targetUrl)
-      router.refresh()
+      window.location.href = targetUrl
     } catch (err: any) {
       setError(err?.message || 'An unexpected network error occurred.')
       setLoading(false)

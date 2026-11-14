@@ -104,22 +104,31 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
-  // 4. Restricted Routes for Customers (Analytics & Settings are Admin-Only)
-  const isAnalyticsRoute = pathname === '/analytics' || pathname.startsWith('/analytics/')
-  const isSettingsRoute =
+  // 4. Restricted Routes for Customers (Tables, Staff, Inventory, Reservations, Analytics & Settings are Staff/Admin-Only)
+  const isCustomerRestrictedRoute =
+    pathname === '/tables' ||
+    pathname.startsWith('/tables/') ||
+    pathname === '/staff' ||
+    pathname.startsWith('/staff/') ||
+    pathname === '/inventory' ||
+    pathname.startsWith('/inventory/') ||
+    pathname === '/reservations' ||
+    pathname.startsWith('/reservations/') ||
+    pathname === '/analytics' ||
+    pathname.startsWith('/analytics/') ||
     pathname === '/settings' ||
     pathname.startsWith('/settings/') ||
     pathname === '/dashboard/settings' ||
     pathname.startsWith('/dashboard/settings/')
 
-  if (isAnalyticsRoute || isSettingsRoute) {
+  if (isCustomerRestrictedRoute) {
     // If not logged in at all, go to login
     if (!isAuthenticated) {
       return NextResponse.redirect(new URL('/login', request.url))
     }
-    // If logged in as customer (and not admin), block access and redirect to dashboard
+    // If logged in as customer (and not admin), block access and redirect to customer orders
     if (customerAuth && !adminAuth) {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+      return NextResponse.redirect(new URL('/customer/orders', request.url))
     }
     return NextResponse.next()
   }

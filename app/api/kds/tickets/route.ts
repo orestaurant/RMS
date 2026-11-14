@@ -10,6 +10,7 @@ import {
   getKDSCache,
   setKDSCache,
 } from '@/lib/kds-utils'
+import { getCategoryNameByItemId } from '@/lib/menu-cache'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -20,8 +21,8 @@ export async function GET(request: NextRequest) {
     const stationFilter = searchParams.get('station')
     const statusFilter = searchParams.get('status') || 'all'
 
-    // 1. High-speed in-memory cache check (sub-5ms response for real-time polling)
-    const cached = getKDSCache(2500)
+    // 1. High-speed in-memory cache check (sub-2ms response for real-time polling)
+    const cached = getKDSCache(7500)
     if (cached) {
       let filteredTickets = cached.tickets
       if (statusFilter !== 'all') {
@@ -72,6 +73,7 @@ export async function GET(request: NextRequest) {
         where: {
           deletedAt: null,
           status: { in: activeLiveStatuses as any },
+          createdAt: { gte: new Date(Date.now() - 36 * 60 * 60 * 1000) },
         },
         select: {
           id: true,
@@ -106,15 +108,7 @@ export async function GET(request: NextRequest) {
               quantity: true,
               specialInstructions: true,
               status: true,
-              menuItem: {
-                select: {
-                  category: {
-                    select: {
-                      name: true,
-                    },
-                  },
-                },
-              },
+              menuItemId: true,
             },
           },
         },
@@ -146,9 +140,7 @@ export async function GET(request: NextRequest) {
               : undefined
 
             const ticketItems = order.items.map((i) => {
-              const rawCat = (i.menuItem as any)?.category?.name
-              const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
-              const catName = rawCat && !isUuid(rawCat) ? rawCat : undefined
+              const catName = getCategoryNameByItemId(i.menuItemId)
               return {
                 id: i.id,
                 name: i.itemName,

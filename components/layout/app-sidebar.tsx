@@ -48,21 +48,21 @@ import { useSidebarCounts } from '@/hooks/useSidebarCounts'
 export function AppSidebar() {
   const pathname = usePathname()
   const router = useRouter()
-  const { auth } = useAuthContext()
+  const { auth, loading } = useAuthContext()
   const [loggingOut, setLoggingOut] = useState(false)
 
   // Real-time badge counts from PostgreSQL via Prisma
   const { data: counts } = useSidebarCounts(auth?.branchId || null)
 
-  const userRole = auth?.role || 'SUPER_ADMIN'
+  const userRole = auth?.role || (loading ? '' : 'STAFF')
   const userRoleUpper = String(userRole).toUpperCase()
   const isWaiter = userRoleUpper === 'WAITER'
   const isChef = userRoleUpper === 'CHEF'
-  const isCustomer = userRoleUpper === 'CUSTOMER'
+  const isCustomer = userRoleUpper === 'CUSTOMER' || pathname.startsWith('/customer')
   const isSuperAdmin =
     userRoleUpper === 'SUPER_ADMIN' ||
-    userRoleUpper === 'SUPERADMIN' ||
-    auth?.email === 'hexerve@gmail.com'
+    userRoleUpper === 'SUPERADMIN'
+  const isAdmin = userRoleUpper === 'ADMIN' || isSuperAdmin
 
   const handleLogout = async () => {
     try {
@@ -88,15 +88,20 @@ export function AppSidebar() {
   }
 
   // Dynamic user data
-  const userName = auth?.name || (isCustomer ? 'Customer' : isWaiter ? 'Waiter' : isChef ? 'Chef' : 'Rajesh')
-  const userEmail = auth?.email || (isCustomer ? 'customer@example.com' : 'hexerve@gmail.com')
+  const userName = loading
+    ? 'Loading...'
+    : auth?.name || (isCustomer ? 'Customer' : isWaiter ? 'Waiter' : isChef ? 'Chef' : isAdmin ? 'Admin' : 'Staff')
+  const userEmail = loading ? '' : auth?.email || ''
   const initials =
-    userName
-      .split(' ')
-      .map((n) => n[0])
-      .join('')
-      .substring(0, 2)
-      .toUpperCase() || (isCustomer ? 'C' : isWaiter ? 'W' : isChef ? 'CH' : 'R')
+    userName && userName !== 'Loading...'
+      ? userName
+          .split(' ')
+          .map((n) => n[0])
+          .filter(Boolean)
+          .join('')
+          .substring(0, 2)
+          .toUpperCase() || 'U'
+      : 'U'
 
   // Dynamic navigation groups with Role-Based Access Control (RBAC):
   // 1. WAITER & CHEF: Strictly limited to Tables, Reservations, Live Orders, Kitchen Display, and Menu Management.
@@ -144,13 +149,6 @@ export function AppSidebar() {
         {
           label: 'OPERATIONS',
           items: [
-            { label: 'Tables', href: '/tables', icon: TableProperties },
-            {
-              label: 'Reservations',
-              href: '/reservations',
-              icon: CalendarDays,
-              badge: counts?.reservations ? String(counts.reservations) : undefined,
-            },
             {
               label: 'Live Orders',
               href: '/orders',
@@ -165,7 +163,7 @@ export function AppSidebar() {
           ],
         },
         {
-          label: 'KITCHEN',
+          label: 'MENU',
           items: [
             { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
           ],
@@ -347,12 +345,12 @@ export function AppSidebar() {
                           ? "border-amber-500/30 text-amber-500 dark:text-amber-400 bg-amber-500/10"
                           : isChef
                           ? "border-sky-500/30 text-sky-500 dark:text-sky-400 bg-sky-500/10"
-                          : userRoleUpper === 'SUPER_ADMIN' || userRoleUpper === 'SUPERADMIN'
+                          : isSuperAdmin
                           ? "border-indigo-500/30 text-indigo-400 bg-indigo-500/10"
                           : "border-primary/30 text-primary bg-primary/5"
                       )}
                     >
-                      {userRole}
+                      {loading ? '...' : (userRole || 'STAFF')}
                     </Badge>
                   </div>
                 </DropdownMenuLabel>

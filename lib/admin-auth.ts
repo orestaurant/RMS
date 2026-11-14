@@ -85,8 +85,7 @@ export async function authenticateAdmin(
     const isSuperAdmin =
       roleUpper === 'SUPER_ADMIN' ||
       roleUpper === 'SUPERADMIN' ||
-      user.role === 'super_admin' ||
-      user.email.toLowerCase() === 'hexerve@gmail.com'
+      user.role === 'super_admin'
     const isAdmin = roleUpper === 'ADMIN' || isSuperAdmin
 
     if (!isAdmin) {

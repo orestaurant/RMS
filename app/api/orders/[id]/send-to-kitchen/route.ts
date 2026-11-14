@@ -5,13 +5,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@prisma/client'
+import prisma from '@/lib/prisma'
 import { getMockAuthContext } from '@/api/middleware/auth'
 import { extractTenantContext } from '@/api/middleware/tenant'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { ValidationError } from '@/api/utils/errors'
-
-const prisma = new PrismaClient()
+import { invalidateKDSCache } from '@/lib/kds-utils'
 
 async function generateKitchenTicketNumber(
   branchId: string,
@@ -128,6 +127,9 @@ export async function POST(
         status: 'preparing',
       },
     })
+
+    // Invalidate KDS fast cache so Kitchen Screen instantly receives new order
+    invalidateKDSCache()
 
     return NextResponse.json(
       successResponse({

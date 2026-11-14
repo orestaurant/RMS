@@ -132,8 +132,7 @@ export function StaffView() {
   const isSuperAdmin =
     currentRoleUpper === 'SUPER_ADMIN' ||
     currentRoleUpper === 'SUPERADMIN' ||
-    currentRoleUpper === 'super_admin' ||
-    auth?.email === 'hexerve@gmail.com'
+    currentRoleUpper === 'super_admin'
 
   // Roles available for assignment:
   // - Super Admin can assign ADMIN, SUPER_ADMIN, and all operational staff roles

@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   QrCode,
   ExternalLink,
+  ChefHat,
 } from 'lucide-react'
 import { TableQRGenerator } from '@/components/tables/table-qr-generator'
 import { Card, CardContent } from '@/components/ui/card'
@@ -90,49 +91,67 @@ export function MenuManagement() {
   const [isAvailable, setIsAvailable] = useState(true)
   const [qrGeneratorOpen, setQrGeneratorOpen] = useState(false)
 
+  // Recipe / Bill of Materials (BOM) state
+  const [recipeOpen, setRecipeOpen] = useState(false)
+  const [recipeItem, setRecipeItem] = useState<MenuItem | null>(null)
+  const [recipeIngredients, setRecipeIngredients] = useState<
+    Array<{ ingredientName: string; quantity: string; unit: string }>
+  >([])
+  const [recipeLoading, setRecipeLoading] = useState(false)
+  const [recipeSaving, setRecipeSaving] = useState(false)
+
   // Add Category form state
   const [catName, setCatName] = useState('')
   const [catDescription, setCatDescription] = useState('')
 
-  // Fetch live categories from PostgreSQL
+  // Fetch live categories and items in parallel from fast cached backend APIs
+  const loadMenuData = useCallback(async (showLoading = true) => {
+    try {
+      if (showLoading) setLoading(true)
+      const [catRes, itemsRes] = await Promise.all([
+        fetch('/api/menu/categories'),
+        fetch('/api/menu/items'),
+      ])
+      const [catJson, itemsJson] = await Promise.all([
+        catRes.json(),
+        itemsRes.json(),
+      ])
+
+      if (catJson.success && Array.isArray(catJson.data)) {
+        setCategories(catJson.data)
+        setCategoryId((prev) => prev || (catJson.data[0]?.id || ''))
+      }
+      if (itemsJson.success && Array.isArray(itemsJson.data)) {
+        setItems(itemsJson.data)
+      } else {
+        setItems([])
+      }
+    } catch (err) {
+      console.error('Failed to load menu data:', err)
+    } finally {
+      if (showLoading) setLoading(false)
+    }
+  }, [])
+
   const fetchCategories = useCallback(async () => {
     try {
       const res = await fetch('/api/menu/categories')
       const json = await res.json()
       if (json.success && Array.isArray(json.data)) {
         setCategories(json.data)
-        if (!categoryId && json.data.length > 0) {
-          setCategoryId(json.data[0].id)
-        }
       }
     } catch (err) {
       console.error('Failed to load menu categories:', err)
     }
-  }, [categoryId])
-
-  // Fetch live items from PostgreSQL
-  const fetchItems = useCallback(async () => {
-    try {
-      setLoading(true)
-      const res = await fetch('/api/menu/items')
-      const json = await res.json()
-      if (json.success && Array.isArray(json.data)) {
-        setItems(json.data)
-      } else {
-        setItems([])
-      }
-    } catch (err) {
-      console.error('Failed to load menu items:', err)
-      setItems([])
-    } finally {
-      setLoading(false)
-    }
   }, [])
 
+  const fetchItems = useCallback(async () => {
+    await loadMenuData(false)
+  }, [loadMenuData])
+
   useEffect(() => {
-    fetchCategories()
-    fetchItems()
-  }, [fetchCategories, fetchItems])
+    loadMenuData(true)
+  }, [loadMenuData])
 
   // Toggle item availability
   const handleToggleAvailability = async (item: MenuItem) => {
@@ -179,6 +198,72 @@ export function MenuManagement() {
     } catch (err) {
       console.error('Delete item error:', err)
       alert('Network error while deleting item')
+    }
+  }
+
+  // Open Recipe / BOM configuration modal
+  const openRecipeModal = async (item: MenuItem) => {
+    setRecipeItem(item)
+    setRecipeOpen(true)
+    setRecipeLoading(true)
+    try {
+      const res = await fetch(`/api/inventory/recipes?menuItemId=${item.id}`)
+      const json = await res.json()
+      if (json.success && json.data?.recipe) {
+        setRecipeIngredients(
+          json.data.recipe.map((r: any) => ({
+            ingredientName: r.ingredientName,
+            quantity: String(r.quantity),
+            unit: r.unit || 'kg',
+          }))
+        )
+      } else {
+        setRecipeIngredients([])
+      }
+    } catch (err) {
+      console.error('Failed to load recipe:', err)
+    } finally {
+      setRecipeLoading(false)
+    }
+  }
+
+  // Save Recipe / BOM configuration
+  const handleSaveRecipe = async () => {
+    if (!recipeItem) return
+    try {
+      setRecipeSaving(true)
+      const validIngredients = recipeIngredients
+        .filter((r) => r.ingredientName.trim())
+        .map((r) => ({
+          ingredientName: r.ingredientName.trim(),
+          quantity: parseFloat(r.quantity) || 0.1,
+          unit: r.unit.trim() || 'kg',
+        }))
+
+      const res = await fetch('/api/inventory/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          menuItemId: recipeItem.id,
+          recipe: validIngredients,
+        }),
+      })
+
+      const json = await res.json()
+      if (json.success) {
+        setRecipeOpen(false)
+        setFeedback({
+          type: 'success',
+          message: `Recipe saved! Raw materials will auto-deduct when "${recipeItem.name}" is prepared.`,
+        })
+      } else {
+        alert(json.error || 'Failed to save recipe')
+      }
+    } catch (err) {
+      console.error('Failed to save recipe:', err)
+      alert('Network error saving recipe')
+    } finally {
+      setRecipeSaving(false)
     }
   }
 
@@ -615,8 +700,17 @@ export function MenuManagement() {
                   )}
                 </Button>
 
-                {/* Actions (Edit / Delete) */}
+                {/* Actions (Recipe / Edit / Delete) */}
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-7 cursor-pointer hover:text-amber-500"
+                    onClick={() => openRecipeModal(item)}
+                    title="Recipe / Raw Materials (BOM)"
+                  >
+                    <ChefHat className="size-3.5" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -1062,6 +1156,166 @@ export function MenuManagement() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+      {/* ─── RECIPE (BOM) DIALOG ──────────────────────────────────── */}
+      <Dialog open={recipeOpen} onOpenChange={setRecipeOpen}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ChefHat className="size-5 text-amber-500" />
+              <span>Recipe & Raw Material Consumption</span>
+            </DialogTitle>
+            <DialogDescription>
+              {recipeItem?.name ? (
+                <span>
+                  Configure ingredients used per serving of{' '}
+                  <strong className="text-foreground">{recipeItem.name}</strong>. Stock will auto-deduct in real-time when prepared in Kitchen.
+                </span>
+              ) : (
+                'Configure raw material consumption for this dish.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {recipeLoading ? (
+            <div className="py-10 flex flex-col items-center justify-center gap-2 text-muted-foreground text-sm">
+              <Loader2 className="size-6 animate-spin text-primary" />
+              <span>Loading recipe breakdown...</span>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto space-y-4 py-2 pr-1">
+              <div className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground flex items-center justify-between">
+                <span>
+                  Ingredients per <strong>1 serving</strong>
+                </span>
+                <span className="text-[11px] font-mono bg-background px-2 py-0.5 rounded border">
+                  Auto-Deducts on KDS &quot;Ready&quot;
+                </span>
+              </div>
+
+              {recipeIngredients.length === 0 ? (
+                <div className="text-center py-6 text-sm text-muted-foreground">
+                  No custom ingredients configured yet.
+                  <p className="text-xs text-muted-foreground/80 mt-1">
+                    Default smart dictionary will auto-detect raw materials. Click below to customize!
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {recipeIngredients.map((ing, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-2 bg-background border rounded-lg p-2.5 shadow-xs"
+                    >
+                      <div className="flex-1">
+                        <Input
+                          placeholder="Ingredient Name (e.g. Paneer)"
+                          value={ing.ingredientName}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setRecipeIngredients((prev) =>
+                              prev.map((item, i) => (i === idx ? { ...item, ingredientName: val } : item))
+                            )
+                          }}
+                          className="h-8 text-xs font-medium"
+                        />
+                      </div>
+                      <div className="w-24">
+                        <Input
+                          type="number"
+                          step="0.001"
+                          min="0.001"
+                          placeholder="Qty"
+                          value={ing.quantity}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setRecipeIngredients((prev) =>
+                              prev.map((item, i) => (i === idx ? { ...item, quantity: val } : item))
+                            )
+                          }}
+                          className="h-8 text-xs text-right font-mono"
+                        />
+                      </div>
+                      <div className="w-20">
+                        <select
+                          value={ing.unit}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setRecipeIngredients((prev) =>
+                              prev.map((item, i) => (i === idx ? { ...item, unit: val } : item))
+                            )
+                          }}
+                          className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                        >
+                          <option value="kg">kg</option>
+                          <option value="g">g</option>
+                          <option value="L">L</option>
+                          <option value="ml">ml</option>
+                          <option value="pcs">pcs</option>
+                        </select>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={() => {
+                          setRecipeIngredients((prev) => prev.filter((_, i) => i !== idx))
+                        }}
+                        title="Remove Ingredient"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full text-xs h-8 border-dashed gap-1.5"
+                onClick={() => {
+                  setRecipeIngredients((prev) => [
+                    ...prev,
+                    { ingredientName: '', quantity: '0.1', unit: 'kg' },
+                  ])
+                }}
+              >
+                <Plus className="size-3.5" /> Add Ingredient
+              </Button>
+            </div>
+          )}
+
+          <DialogFooter className="pt-3 border-t">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setRecipeOpen(false)}
+              disabled={recipeSaving}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleSaveRecipe}
+              disabled={recipeSaving || recipeLoading}
+              className="gap-1.5"
+            >
+              {recipeSaving ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save Recipe (BOM)'
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </main>

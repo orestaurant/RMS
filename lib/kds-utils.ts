@@ -256,8 +256,15 @@ let kdsServerCache: {
   timestamp: 0,
 }
 
-export function getKDSCache(ttlMs = 3000): KDSCachedPayload | null {
+export function getKDSCache(ttlMs = 8000): KDSCachedPayload | null {
   if (kdsServerCache.data && Date.now() - kdsServerCache.timestamp < ttlMs) {
+    return kdsServerCache.data
+  }
+  return null
+}
+
+export function getStaleKDSCache(maxStaleMs = 25000): KDSCachedPayload | null {
+  if (kdsServerCache.data && Date.now() - kdsServerCache.timestamp < maxStaleMs) {
     return kdsServerCache.data
   }
   return null

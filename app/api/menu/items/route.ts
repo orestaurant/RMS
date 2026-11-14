@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { invalidatePOSMenuCache } from '@/lib/pos-cache'
+import {
+  getCachedMenuItems,
+  setCachedMenuItems,
+  invalidateAllMenuCaches,
+  CachedMenuItem,
+} from '@/lib/menu-cache'
+import { getCachedBranchMeta, setCachedBranchMeta } from '@/lib/dashboard-cache'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-
-// High-speed in-memory cache for menu items (sub-5ms response time)
-let menuItemsCache: {
-  data: any[]
-  timestamp: number
-} | null = null
-
-function invalidateMenuItemsCache() {
-  menuItemsCache = null
-  invalidatePOSMenuCache()
-}
 
 export async function GET(request: NextRequest) {
   try {
@@ -27,29 +22,13 @@ export async function GET(request: NextRequest) {
     const limitParam = searchParams.get('limit')
     let restaurantId = explicitRestId
 
-    // 1. Resolve branch to restaurantId if branchId provided
-    if (branchId) {
-      const branch = await prisma.branch.findUnique({
-        where: { id: branchId },
-        select: { restaurantId: true },
-      })
-      if (branch) {
-        restaurantId = branch.restaurantId
-      }
-    }
+    // 1. High-speed in-memory cache check (< 1ms response time)
+    let allItems: CachedMenuItem[] | null = getCachedMenuItems()
+    let isHit = true
 
-    const now = Date.now()
-    const CACHE_TTL = 30_000 // 30 seconds memory cache
-
-    let allItems: any[] = []
-    let isHit = false
-
-    // 2. Check in-memory cache
-    if (menuItemsCache && now - menuItemsCache.timestamp < CACHE_TTL) {
-      allItems = menuItemsCache.data
-      isHit = true
-    } else {
-      // 3. Fetch from DB using ultra-lean select query
+    if (!allItems) {
+      isHit = false
+      // 2. Fetch from DB using ultra-lean select query
       const dbItems = await prisma.menuItem.findMany({
         where: { deletedAt: null },
         select: {
@@ -112,14 +91,27 @@ export async function GET(request: NextRequest) {
           })) || [],
       }))
 
-      // Cache the full formatted dataset
-      menuItemsCache = {
-        data: allItems,
-        timestamp: now,
+      setCachedMenuItems(allItems)
+    }
+
+    // Resolve branch to restaurantId if branchId provided (using cache if available)
+    if (branchId && !restaurantId) {
+      const cachedBranch = getCachedBranchMeta(branchId)
+      if (cachedBranch) {
+        restaurantId = cachedBranch.restaurantId
+      } else {
+        const branch = await prisma.branch.findUnique({
+          where: { id: branchId },
+          select: { id: true, restaurantId: true, organizationId: true },
+        })
+        if (branch) {
+          restaurantId = branch.restaurantId
+          setCachedBranchMeta(branch)
+        }
       }
     }
 
-    // 4. In-memory filtering (instantaneous sub-millisecond)
+    // 3. In-memory filtering (instantaneous sub-millisecond)
     let filtered = allItems
 
     if (restaurantId && (explicitRestId || branchId)) {
@@ -146,7 +138,7 @@ export async function GET(request: NextRequest) {
 
     const total = filtered.length
 
-    // 5. Pagination support (if requested)
+    // 4. Pagination support (if requested)
     let responseData = filtered
     let pageNum: number | undefined
     let limitNum: number | undefined
@@ -171,7 +163,7 @@ export async function GET(request: NextRequest) {
       },
       {
         headers: {
-          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Cache-Control': 'public, max-age=15, stale-while-revalidate=60',
           'X-Menu-Cache': isHit ? 'HIT' : 'MISS',
         },
       }
@@ -270,8 +262,8 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // Invalidate fast cache immediately
-    invalidateMenuItemsCache()
+    // Invalidate caches immediately
+    invalidateAllMenuCaches()
 
     return NextResponse.json({
       success: true,

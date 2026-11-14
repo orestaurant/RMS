@@ -14,6 +14,7 @@ import {
   invalidateLiveOrdersCache,
   normalizeKdsStatus,
 } from '@/lib/kds-utils'
+import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
 
 // Valid status transitions state machine
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
@@ -160,6 +161,10 @@ export async function PATCH(
 
     if (normalizedTarget === 'ready' || normalizedTarget === 'READY') {
       updateData.preparedAt = new Date()
+      // Real-time automatic inventory recipe deduction (asynchronous non-blocking)
+      deductStockForPreparedOrder(existing.id).catch((err) =>
+        console.error('Inventory auto-deduction error:', err?.message)
+      )
     } else if (normalizedTarget === 'served' || normalizedTarget === 'SERVED' || normalizedTarget === 'completed') {
       updateData.servedAt = new Date()
     } else if (normalizedTarget === 'cancelled' || normalizedTarget === 'CANCELLED') {

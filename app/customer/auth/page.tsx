@@ -75,9 +75,8 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
         return
       }
 
-      // Success: redirect to main dashboard with customer sidebar
-      router.push('/dashboard')
-      router.refresh()
+      // Success: full navigation to clear all prior in-memory session and cache states
+      window.location.href = '/dashboard'
     } catch (err: any) {
       setLoginError(err?.message || 'A network error occurred. Please try again.')
       setLoginLoading(false)
@@ -119,9 +118,8 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
         return
       }
 
-      // Success: redirect to main dashboard with customer sidebar
-      router.push('/dashboard')
-      router.refresh()
+      // Success: full navigation to clear all prior in-memory session and cache states
+      window.location.href = '/dashboard'
     } catch (err: any) {
       setRegError(err?.message || 'A network error occurred. Please try again.')
       setRegLoading(false)

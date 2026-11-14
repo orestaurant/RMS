@@ -3,9 +3,8 @@
  * Handles creation of orders from POS Terminal with real calculations
  */
 
-import { PrismaClient, Prisma } from '@prisma/client'
-
-const prisma = new PrismaClient()
+import { Prisma } from '@prisma/client'
+import prisma from '@/lib/prisma'
 
 export interface CreatePOSOrderItem {
   menuItemId: string

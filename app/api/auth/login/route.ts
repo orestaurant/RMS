@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
 import prisma from '@/lib/prisma'
 import { signJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
+import { CUSTOMER_SESSION_COOKIE } from '@/lib/customer-auth'
+import { invalidateAdminAuthCache } from '@/lib/admin-auth'
 
 export async function POST(request: NextRequest) {
   try {
@@ -54,6 +56,9 @@ export async function POST(request: NextRequest) {
       console.error('Failed to update last login:', err)
     })
 
+    // Invalidate existing cached admin sessions to ensure fresh auth state
+    invalidateAdminAuthCache()
+
     // Sign JWT token
     const token = await signJWT({
       userId: user.id,
@@ -64,19 +69,30 @@ export async function POST(request: NextRequest) {
 
     const roleUpper = String(user.role || '').toUpperCase()
     const isWaiter = roleUpper === 'WAITER'
-    const redirectUrl = isWaiter ? '/tables' : '/dashboard'
+    const isChef = roleUpper === 'CHEF'
+    const redirectUrl = isWaiter ? '/tables' : isChef ? '/kitchen' : '/dashboard'
 
-    const response = NextResponse.json({
-      success: true,
-      redirect: redirectUrl,
-      user: {
-        name: user.name || 'Admin',
-        email: user.email,
-        role: user.role,
+    const response = NextResponse.json(
+      {
+        success: true,
+        redirect: redirectUrl,
+        user: {
+          id: user.id,
+          name: user.name || 'Admin',
+          email: user.email,
+          role: user.role,
+        },
       },
-    })
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          Pragma: 'no-cache',
+          Expires: '0',
+        },
+      }
+    )
 
-    // Set secure httpOnly cookie
+    // Set secure httpOnly admin session cookie
     response.cookies.set({
       name: SESSION_COOKIE_NAME,
       value: token,
@@ -85,6 +101,18 @@ export async function POST(request: NextRequest) {
       sameSite: 'lax',
       path: '/',
       maxAge: 60 * 60 * 24 * 7, // 7 days
+    })
+
+    // Wipe any existing customer cookie to prevent session bleed
+    response.cookies.set({
+      name: CUSTOMER_SESSION_COOKIE,
+      value: '',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 0,
+      expires: new Date(0),
     })
 
     return response

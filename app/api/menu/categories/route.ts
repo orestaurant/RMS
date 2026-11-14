@@ -1,31 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import {
+  getCachedCategories,
+  setCachedCategories,
+  invalidateAllMenuCaches,
+  CachedCategory,
+} from '@/lib/menu-cache'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-let categoriesCache: { data: any[]; timestamp: number } | null = null
-
-function invalidateCategoriesCache() {
-  categoriesCache = null
-}
-
 export async function GET(request: NextRequest) {
   try {
-    const restaurantId = request.nextUrl.searchParams.get('restaurantId')
+    const restaurantId = request.nextUrl.searchParams.get('restaurantId') || 'all'
 
-    const now = Date.now()
-    const CACHE_TTL = 45_000 // 45 seconds
-
-    if (!restaurantId && categoriesCache && now - categoriesCache.timestamp < CACHE_TTL) {
+    // 1. Check in-memory cache (< 1ms)
+    const cached = getCachedCategories(restaurantId)
+    if (cached) {
       return NextResponse.json(
         {
           success: true,
-          data: categoriesCache.data,
+          data: cached,
         },
         {
           headers: {
-            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'Cache-Control': 'public, max-age=15, stale-while-revalidate=60',
             'X-Category-Cache': 'HIT',
           },
         }
@@ -36,7 +35,7 @@ export async function GET(request: NextRequest) {
       deletedAt: null,
     }
 
-    if (restaurantId) {
+    if (restaurantId !== 'all') {
       where.restaurantId = restaurantId
     }
 
@@ -56,7 +55,7 @@ export async function GET(request: NextRequest) {
       },
     })
 
-    const formatted = categories.map((c) => ({
+    const formatted: CachedCategory[] = categories.map((c) => ({
       id: c.id,
       name: c.name,
       description: c.description || '',
@@ -66,12 +65,7 @@ export async function GET(request: NextRequest) {
       itemCount: c._count.items,
     }))
 
-    if (!restaurantId) {
-      categoriesCache = {
-        data: formatted,
-        timestamp: now,
-      }
-    }
+    setCachedCategories(restaurantId, formatted)
 
     return NextResponse.json(
       {
@@ -80,7 +74,7 @@ export async function GET(request: NextRequest) {
       },
       {
         headers: {
-          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Cache-Control': 'public, max-age=15, stale-while-revalidate=60',
           'X-Category-Cache': 'MISS',
         },
       }
@@ -160,7 +154,7 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    invalidateCategoriesCache()
+    invalidateAllMenuCaches()
 
     return NextResponse.json({
       success: true,
@@ -175,4 +169,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

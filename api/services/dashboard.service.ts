@@ -3,11 +3,9 @@
  * Calculates dashboard metrics from database
  */
 
-import { PrismaClient } from '@prisma/client'
+import prisma from '@/lib/prisma'
 import { startOfDay, endOfDay } from 'date-fns'
 import { TenantContext } from '@/api/middleware/tenant'
-
-const prisma = new PrismaClient()
 
 export interface DashboardSummary {
   todayRevenue: number

@@ -3,6 +3,15 @@ import prisma from '@/lib/prisma'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { verifyCustomerToken, CUSTOMER_SESSION_COOKIE } from '@/lib/customer-auth'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+}
+
 export async function GET(request: NextRequest) {
   try {
     const adminSessionCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
@@ -11,7 +20,7 @@ export async function GET(request: NextRequest) {
     if (!adminSessionCookie && !customerSessionCookie) {
       return NextResponse.json(
         { success: false, message: 'Not authenticated', user: null },
-        { status: 401 }
+        { status: 401, headers: NO_CACHE_HEADERS }
       )
     }
 
@@ -57,16 +66,19 @@ export async function GET(request: NextRequest) {
             branchName,
           }
 
-          return NextResponse.json({
-            success: true,
-            user: {
-              id: user.id,
-              email: user.email,
-              name: userData.name,
-              role: user.role,
+          return NextResponse.json(
+            {
+              success: true,
+              user: {
+                id: user.id,
+                email: user.email,
+                name: userData.name,
+                role: user.role,
+              },
+              data: userData,
             },
-            data: userData,
-          })
+            { headers: NO_CACHE_HEADERS }
+          )
         }
       }
     }
@@ -119,29 +131,32 @@ export async function GET(request: NextRequest) {
             branchName,
           }
 
-          return NextResponse.json({
-            success: true,
-            user: {
-              id: customer.id,
-              email: customer.email,
-              name: customerData.name,
-              role: 'CUSTOMER',
+          return NextResponse.json(
+            {
+              success: true,
+              user: {
+                id: customer.id,
+                email: customer.email,
+                name: customerData.name,
+                role: 'CUSTOMER',
+              },
+              data: customerData,
             },
-            data: customerData,
-          })
+            { headers: NO_CACHE_HEADERS }
+          )
         }
       }
     }
 
     return NextResponse.json(
       { success: false, message: 'Invalid or expired session', user: null },
-      { status: 401 }
+      { status: 401, headers: NO_CACHE_HEADERS }
     )
   } catch (error: any) {
     console.error('Error fetching current session:', error)
     return NextResponse.json(
       { success: false, message: 'Failed to retrieve session', error: error.message },
-      { status: 500 }
+      { status: 500, headers: NO_CACHE_HEADERS }
     )
   }
 }

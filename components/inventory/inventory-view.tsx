@@ -17,6 +17,7 @@ import {
   ChevronDown,
   PlusCircle,
   MinusCircle,
+  History,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -77,6 +78,28 @@ export function InventoryView() {
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [isAdjustOpen, setIsAdjustOpen] = useState(false)
+  const [isMovementsOpen, setIsMovementsOpen] = useState(false)
+  const [movements, setMovements] = useState<any[]>([])
+  const [movementsLoading, setMovementsLoading] = useState(false)
+
+  const handleOpenMovements = async () => {
+    setIsMovementsOpen(true)
+    setMovementsLoading(true)
+    try {
+      const res = await fetch('/api/inventory/movements?limit=50')
+      const json = await res.json()
+      if (json.success && Array.isArray(json.data)) {
+        setMovements(json.data)
+      } else {
+        setMovements([])
+      }
+    } catch (err) {
+      console.error('Failed to load stock movements:', err)
+      setMovements([])
+    } finally {
+      setMovementsLoading(false)
+    }
+  }
 
   const [activeItem, setActiveItem] = useState<InventoryItem | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -108,16 +131,15 @@ export function InventoryView() {
 
   // Helper to open Add dialog
   const handleOpenAdd = () => {
-    const randomSku = `SKU-${Math.floor(1000 + Math.random() * 9000)}`
     setFormData({
       name: '',
-      sku: randomSku,
+      sku: '',
       category: 'Kitchen Supplies',
-      quantity: '10',
+      quantity: '',
       unit: 'kg',
-      minStock: '10',
-      criticalStock: '5',
-      unitPrice: '100',
+      minStock: '',
+      criticalStock: '',
+      unitPrice: '',
     })
     setFormError(null)
     setIsAddOpen(true)
@@ -164,20 +186,20 @@ export function InventoryView() {
       setFormError('Item name is required')
       return
     }
-    if (!formData.sku.trim()) {
-      setFormError('SKU is required')
-      return
-    }
+
+    const effectiveSku =
+      formData.sku.trim().toUpperCase() ||
+      `RAW-${formData.name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8)}-${Math.floor(100 + Math.random() * 900)}`
 
     setIsSubmitting(true)
     const result = await createItem({
       name: formData.name.trim(),
-      sku: formData.sku.trim().toUpperCase(),
-      category: formData.category.trim() || 'General',
+      sku: effectiveSku,
+      category: formData.category.trim() || 'Kitchen Supplies',
       quantity: parseFloat(formData.quantity) || 0,
-      unit: formData.unit.trim() || 'units',
-      minStock: parseFloat(formData.minStock) || 10,
-      criticalStock: parseFloat(formData.criticalStock) || 5,
+      unit: formData.unit.trim() || 'kg',
+      minStock: parseFloat(formData.minStock) || 5,
+      criticalStock: parseFloat(formData.criticalStock) || 2,
       unitPrice: parseFloat(formData.unitPrice) || 0,
     })
     setIsSubmitting(false)
@@ -519,6 +541,17 @@ export function InventoryView() {
           <Button
             variant="outline"
             size="sm"
+            onClick={handleOpenMovements}
+            title="View real-time auto-deductions from kitchen orders"
+            className="h-9 gap-1.5 border-dashed"
+          >
+            <History className="size-3.5 text-primary" />
+            <span className="hidden sm:inline">Deduction Logs</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => refetch()}
             disabled={loading}
             title="Refresh database"
@@ -745,11 +778,10 @@ export function InventoryView() {
 
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-foreground">
-                  SKU <span className="text-destructive">*</span>
+                  SKU <span className="text-muted-foreground text-[10px] font-normal">(auto if blank)</span>
                 </label>
                 <Input
-                  required
-                  placeholder="e.g. SF-001"
+                  placeholder="e.g. RAW-001"
                   value={formData.sku}
                   onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
                 />
@@ -1089,6 +1121,83 @@ export function InventoryView() {
               disabled={isSubmitting}
             >
               {isSubmitting ? 'Deleting...' : 'Delete Item'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* ─── DEDUCTION LOGS (STOCK MOVEMENTS) DIALOG ────────────── */}
+      <Dialog open={isMovementsOpen} onOpenChange={setIsMovementsOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <History className="size-5 text-primary" />
+              <span>Live Stock Deduction Logs (Audit Trail)</span>
+            </DialogTitle>
+            <DialogDescription>
+              Automatic real-time deduction history of raw materials triggered when dishes are marked &quot;Prepared&quot; in the Kitchen Display System (KDS).
+            </DialogDescription>
+          </DialogHeader>
+
+          {movementsLoading ? (
+            <div className="py-12 flex flex-col items-center justify-center gap-2 text-muted-foreground text-sm">
+              <RefreshCw className="size-6 animate-spin text-primary" />
+              <span>Fetching live consumption ledger...</span>
+            </div>
+          ) : movements.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              <p className="font-medium text-foreground">No automatic stock deductions logged yet.</p>
+              <p className="text-xs text-muted-foreground/80 mt-1">
+                When kitchen staff marks an order as &quot;Prepared&quot; in KDS, ingredient deductions will appear here instantly.
+              </p>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto space-y-2 py-2 pr-1">
+              <div className="rounded-md border overflow-hidden">
+                <Table>
+                  <TableHeader className="bg-muted/50">
+                    <TableRow>
+                      <TableHead className="w-[140px] text-xs">Time</TableHead>
+                      <TableHead className="text-xs">Raw Material</TableHead>
+                      <TableHead className="w-[110px] text-right text-xs">Deducted</TableHead>
+                      <TableHead className="text-xs">Order Reference & Dish</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {movements.map((m) => (
+                      <TableRow key={m.id} className="text-xs">
+                        <TableCell className="font-mono text-muted-foreground text-[11px]">
+                          {new Date(m.createdAt).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          })}
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium">{m.itemName}</div>
+                          <div className="text-[10px] font-mono text-muted-foreground">{m.sku}</div>
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-bold text-amber-600 dark:text-amber-400">
+                          -{m.quantity} {m.unit}
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-muted-foreground text-[11px]">{m.notes || m.referenceId}</span>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="pt-2 border-t">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setIsMovementsOpen(false)}
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

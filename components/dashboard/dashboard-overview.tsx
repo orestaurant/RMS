@@ -19,6 +19,7 @@ import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { StatCard } from '@/components/ui/stat-card'
 import { TableOccupancyGrid } from '@/components/dashboard/table-occupancy-grid'
+import { CustomerDashboardView } from '@/components/dashboard/customer-dashboard-view'
 import { useDashboardStats } from '@/hooks/useDashboardStats'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import { getTopDishes, getInventoryAlerts } from '@/lib/api/dashboard'
@@ -31,18 +32,43 @@ export function DashboardOverview() {
   const router = useRouter()
   const { auth, loading: authLoading } = useAuthContext()
 
+  const roleUpper = String(auth?.role || '').toUpperCase()
+  const isCustomer = roleUpper === 'CUSTOMER'
+
   // Waiter & Chef Role Guard: automatically redirect to their specialized operational views
   useEffect(() => {
     if (!authLoading) {
-      const roleUpper = String(auth?.role || '').toUpperCase()
       if (roleUpper === 'WAITER') {
         router.replace('/tables')
       } else if (roleUpper === 'CHEF') {
         router.replace('/kitchen')
       }
     }
-  }, [auth, authLoading, router])
+  }, [authLoading, roleUpper, router])
 
+  if (authLoading) {
+    return (
+      <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">
+        <div className="h-10 w-48 rounded shimmer" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="h-28 rounded-xl shimmer" />
+          <div className="h-28 rounded-xl shimmer" />
+          <div className="h-28 rounded-xl shimmer" />
+          <div className="h-28 rounded-xl shimmer" />
+        </div>
+      </div>
+    )
+  }
+
+  // Customer Guard: strictly render customer portal dashboard
+  if (isCustomer) {
+    return <CustomerDashboardView />
+  }
+
+  return <AdminDashboardOverview auth={auth} />
+}
+
+function AdminDashboardOverview({ auth }: { auth: any }) {
   const activeBranchId = auth?.branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
 
   // Dynamic dashboard stats from PostgreSQL via Prisma
