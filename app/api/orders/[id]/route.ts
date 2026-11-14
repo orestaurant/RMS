@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
-import { updateFallbackOrder, removeFallbackOrder, invalidateLiveOrdersCache } from '@/lib/kds-utils'
+import { updateFallbackOrder, removeFallbackOrder, invalidateLiveOrdersCache, invalidateKDSCache } from '@/lib/kds-utils'
 
 export async function GET(
   request: NextRequest,
@@ -54,14 +54,22 @@ export async function PATCH(
 
     const dbStatusMap: Record<string, string> = {
       pending: 'pending',
-      accepted: 'confirmed',
-      confirmed: 'confirmed',
-      cooking: 'preparing',
-      preparing: 'preparing',
-      ready: 'ready',
-      served: 'served',
-      completed: 'completed',
+      accepted: 'ACCEPTED',
+      confirmed: 'ACCEPTED',
+      cooking: 'PREPARING',
+      preparing: 'PREPARING',
+      ready: 'READY',
+      served: 'SERVED',
+      completed: 'SERVED',
       cancelled: 'cancelled',
+      PENDING: 'pending',
+      ACCEPTED: 'ACCEPTED',
+      CONFIRMED: 'ACCEPTED',
+      PREPARING: 'PREPARING',
+      READY: 'READY',
+      SERVED: 'SERVED',
+      COMPLETED: 'SERVED',
+      CANCELLED: 'cancelled',
     }
 
     let updatedOrder: any = null
@@ -173,6 +181,7 @@ export async function PATCH(
     })
 
     invalidateLiveOrdersCache()
+    invalidateKDSCache()
 
     return NextResponse.json(
       successResponse({
@@ -231,6 +240,7 @@ export async function DELETE(
     }
 
     invalidateLiveOrdersCache()
+    invalidateKDSCache()
 
     return NextResponse.json(
       successResponse({

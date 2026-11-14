@@ -40,6 +40,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
+import { BillSettlementModal } from '@/components/billing/bill-settlement-modal'
 import {
   Dialog,
   DialogContent,
@@ -66,6 +67,7 @@ export interface OrderItem {
 export interface LiveOrder {
   id: string
   fullId?: string
+  tableId?: string
   tableNumber: number | string
   waiter: string
   status: OrderStatus
@@ -137,10 +139,16 @@ function OrderRow({
   order,
   onOrderDeleted,
   onOrderUpdated,
+  onAcceptOrder,
+  onMarkServed,
+  onGenerateBill,
 }: {
   order: LiveOrder
   onOrderDeleted?: (id: string) => void
   onOrderUpdated?: (order: LiveOrder) => void
+  onAcceptOrder?: (orderId: string, fullId?: string) => void
+  onMarkServed?: (orderId: string, fullId?: string) => void
+  onGenerateBill?: (order: LiveOrder) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -274,35 +282,63 @@ function OrderRow({
           </p>
         </div>
 
-        {/* Status badge */}
-        <Badge variant="outline" className={cn('text-xs h-6 px-2 gap-1.5 shrink-0', cfg.badge)}>
-          <StatusIcon className="size-3" />
-          {cfg.label}
-        </Badge>
+        {/* Status badge - STRICT FIXED COLUMN WIDTH */}
+        <div className="w-28 shrink-0 flex items-center">
+          <Badge variant="outline" className={cn('text-xs h-6 px-2 gap-1.5 shrink-0', cfg.badge)}>
+            <StatusIcon className="size-3" />
+            {cfg.label}
+          </Badge>
+        </div>
 
-        {/* Time */}
-        <div className="flex items-center gap-1.5 w-20 shrink-0">
-          <Clock className="size-3.5 text-muted-foreground" />
+        {/* Time - STRICT FIXED COLUMN WIDTH */}
+        <div className="w-24 shrink-0 flex items-center gap-1.5">
+          <Clock className="size-3.5 text-muted-foreground shrink-0" />
           <span
             className={cn(
               'text-xs font-mono font-medium',
-              order.ticketTime > 20 ? 'text-destructive' : 'text-muted-foreground'
+              order.ticketTime > 20 ? 'text-destructive font-bold' : 'text-muted-foreground'
             )}
           >
             {order.ticketTime}m ago
           </span>
         </div>
 
-        {/* Total */}
-        <div className="w-24 shrink-0 text-right">
-          <span className="text-sm font-semibold">₹{order.total.toLocaleString('en-IN')}</span>
+        {/* Total - STRICT FIXED COLUMN WIDTH */}
+        <div className="w-20 shrink-0 text-right">
+          <span className="text-sm font-semibold font-mono">₹{order.total.toLocaleString('en-IN')}</span>
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+        {/* Actions - STRICT FIXED COLUMN WIDTH */}
+        <div className="w-28 shrink-0 flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+          {order.status === 'pending' && (
+            <Button
+              size="sm"
+              className="h-7 px-2.5 text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white gap-1 shadow-sm shrink-0 cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation()
+                onAcceptOrder?.(order.id, order.fullId)
+              }}
+            >
+              <Check className="size-3" />
+              Accept
+            </Button>
+          )}
+          {order.status === 'ready' && (
+            <Button
+              size="sm"
+              className="h-7 px-2.5 text-xs font-extrabold bg-sky-600 hover:bg-sky-700 text-white gap-1 shadow-sm shrink-0 cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation()
+                onMarkServed?.(order.id, order.fullId)
+              }}
+            >
+              <Check className="size-3" />
+              Serve
+            </Button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger
-              render={<Button variant="ghost" size="icon" className="size-7" />}
+              render={<Button variant="ghost" size="icon" className="size-7 cursor-pointer" />}
             >
               <MoreHorizontal className="size-3.5" />
             </DropdownMenuTrigger>
@@ -318,6 +354,12 @@ function OrderRow({
                 onClick={() => setDetailsOpen(true)}
               >
                 <Eye className="size-3.5" /> View Details
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="gap-2 cursor-pointer font-bold text-emerald-600 dark:text-emerald-400"
+                onClick={() => onGenerateBill?.(order)}
+              >
+                <Receipt className="size-3.5 text-emerald-600" /> Generate Bill
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -447,6 +489,32 @@ function OrderRow({
                   <Trash2 className="size-3" />
                   Delete
                 </Button>
+                {order.status === 'pending' && (
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs font-extrabold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onAcceptOrder?.(order.id, order.fullId)
+                    }}
+                  >
+                    <Check className="size-3" />
+                    Accept Order
+                  </Button>
+                )}
+                {order.status === 'ready' && (
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs font-extrabold gap-1.5 bg-sky-600 hover:bg-sky-700 text-white shadow-sm"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onMarkServed?.(order.id, order.fullId)
+                    }}
+                  >
+                    <Check className="size-3" />
+                    Mark Served
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -613,6 +681,17 @@ function OrderRow({
               Delete Order
             </Button>
             <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                className="gap-1.5 text-xs h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer"
+                onClick={() => {
+                  setDetailsOpen(false)
+                  onGenerateBill?.(order)
+                }}
+              >
+                <Receipt className="size-3.5" />
+                Generate Bill
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -852,6 +931,7 @@ export function LiveOrdersView() {
   const [filterMode, setFilterMode] = useState<'all' | 'car'>('all')
   const [urgentOnly, setUrgentOnly] = useState<boolean>(false)
   const [orders, setOrders] = useState<LiveOrder[]>([])
+  const [settlementTable, setSettlementTable] = useState<{ id?: string; tableNumber: string | number; waiter?: string } | null>(null)
   const [counts, setCounts] = useState({
     all: 0,
     pending: 0,
@@ -908,12 +988,77 @@ export function LiveOrdersView() {
 
   useEffect(() => {
     fetchLiveOrders()
-    // Poll every 10 seconds to receive new live orders in real-time without UI flash
+    // Poll every 5 seconds to receive new live orders in real-time without UI flash
     const timer = setInterval(() => {
       fetchLiveOrders(false)
-    }, 10000)
+    }, 5000)
     return () => clearInterval(timer)
   }, [fetchLiveOrders])
+
+  const handleAcceptOrder = async (orderId: string, fullId?: string) => {
+    try {
+      const targetId = fullId || orderId
+      // Optimistic local state update
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === orderId || o.fullId === targetId
+            ? { ...o, status: 'accepted' as OrderStatus }
+            : o
+        )
+      )
+      setCounts((prev) => ({
+        ...prev,
+        pending: Math.max(0, prev.pending - 1),
+        accepted: prev.accepted + 1,
+      }))
+
+      const res = await fetch(`/api/orders/${encodeURIComponent(targetId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'accepted' }),
+      })
+
+      if (!res.ok) {
+        await fetch(`/api/orders/${encodeURIComponent(targetId)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'accepted' }),
+        })
+      }
+      fetchLiveOrders(false)
+    } catch (err) {
+      console.error('Failed to accept order:', err)
+      fetchLiveOrders(false)
+    }
+  }
+
+  const handleMarkServed = async (orderId: string, fullId?: string) => {
+    try {
+      const targetId = fullId || orderId
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === orderId || o.fullId === targetId
+            ? { ...o, status: 'served' as OrderStatus }
+            : o
+        )
+      )
+      setCounts((prev) => ({
+        ...prev,
+        ready: Math.max(0, prev.ready - 1),
+        served: prev.served + 1,
+      }))
+
+      await fetch(`/api/orders/${encodeURIComponent(targetId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'served' }),
+      })
+      fetchLiveOrders(false)
+    } catch (err) {
+      console.error('Failed to mark order as served:', err)
+      fetchLiveOrders(false)
+    }
+  }
 
   const handleOrderDeleted = (orderId: string) => {
     setOrders((prev) => {
@@ -973,6 +1118,11 @@ export function LiveOrdersView() {
       orders.filter(
         (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
       ).length,
+    [orders]
+  )
+
+  const pendingOrders = useMemo(
+    () => orders.filter((o) => o.status === 'pending'),
     [orders]
   )
 
@@ -1130,6 +1280,119 @@ export function LiveOrdersView() {
         ))}
       </div>
 
+      {/* ── New / Pending Requests Section (Waiter Order Acceptance) ── */}
+      {pendingOrders.length > 0 && (
+        <div className="rounded-2xl border-2 border-warning/40 bg-warning/5 p-4 md:p-5 shadow-sm space-y-3.5">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="size-9 rounded-xl bg-warning/20 text-warning flex items-center justify-center font-bold">
+                <AlertTriangle className="size-5 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-black text-foreground">
+                    New / Pending Requests
+                  </h3>
+                  <Badge className="bg-warning text-black font-extrabold text-[10px] px-2 py-0.5">
+                    {pendingOrders.length} Awaiting Acceptance
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Customer QR orders placed from tables — click Accept Order to route immediately to Chef&apos;s queue
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setTab('pending')
+                setFilterMode('all')
+                setUrgentOnly(false)
+              }}
+              className="h-8 text-xs font-bold gap-1 border-warning/40 text-warning hover:bg-warning/10"
+            >
+              View Pending Tab ({pendingOrders.length})
+            </Button>
+          </div>
+
+          {/* Cards Grid for Pending Requests */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {pendingOrders.map((ord) => (
+              <Card
+                key={ord.id}
+                className="border border-warning/30 bg-card/95 shadow-sm rounded-xl overflow-hidden flex flex-col justify-between"
+              >
+                <CardHeader className="p-3.5 pb-2">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <Badge
+                        variant="outline"
+                        className="border-warning/50 text-warning bg-warning/10 font-black text-xs px-2.5 py-0.5"
+                      >
+                        {typeof ord.tableNumber === 'number' || !isNaN(Number(ord.tableNumber))
+                          ? `Table ${ord.tableNumber}`
+                          : ord.tableNumber}
+                      </Badge>
+                      <div className="font-mono text-xs font-bold text-foreground mt-1">
+                        {ord.id}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[11px] text-muted-foreground font-mono flex items-center gap-1 justify-end">
+                        <Clock className="size-3" />
+                        {ord.ticketTime}m ago
+                      </span>
+                      <span className="text-xs font-black text-primary">
+                        ₹{ord.total.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-3.5 pt-0 space-y-2.5 flex-1 flex flex-col justify-between">
+                  <div className="space-y-1 text-xs border-t border-border/50 pt-2">
+                    {ord.items.map((it, idx) => (
+                      <div key={idx} className="flex justify-between items-center text-muted-foreground">
+                        <span className="font-medium text-foreground">
+                          <span className="font-bold text-primary mr-1">{it.quantity}×</span>
+                          {it.name}
+                        </span>
+                        <span>₹{(it.price * it.quantity).toLocaleString('en-IN')}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {ord.items.some((it) => it.notes) && (
+                    <div className="text-[11px] bg-warning/10 border border-warning/20 p-2 rounded-lg text-warning font-medium">
+                      ⚠ Special Notes: {ord.items.filter((it) => it.notes).map((it) => it.notes).join(', ')}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 pt-2 border-t border-border/50">
+                    <Button
+                      size="sm"
+                      className="flex-1 h-9 font-extrabold text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 shadow-sm"
+                      onClick={() => handleAcceptOrder(ord.id, ord.fullId)}
+                    >
+                      <Check className="size-3.5" />
+                      Accept Order
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 px-3 text-xs text-destructive hover:bg-destructive/10 border-destructive/30"
+                      onClick={() => handleOrderDeleted(ord.id)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Table card */}
       <Card className="overflow-hidden">
         <CardHeader className="pb-0 pt-4 px-5">
@@ -1254,27 +1517,29 @@ export function LiveOrdersView() {
         </CardHeader>
 
         {/* Column headers */}
-        <div className="flex items-center gap-4 px-5 py-2 border-y border-border bg-muted/20 mt-3">
+        <div className="flex items-center gap-4 px-5 py-2.5 border-y border-border bg-muted/20 mt-3 select-none">
           <span className="w-2 shrink-0" />
-          <span className="w-24 shrink-0 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          <span className="w-24 shrink-0 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             Order
           </span>
-          <span className="w-36 shrink-0 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          <span className="w-36 shrink-0 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             Table / Waiter
           </span>
-          <span className="flex-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          <span className="flex-1 min-w-0 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             Items
           </span>
-          <span className="w-24 shrink-0 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          <span className="w-28 shrink-0 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             Status
           </span>
-          <span className="w-20 shrink-0 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          <span className="w-24 shrink-0 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             Time
           </span>
-          <span className="w-24 shrink-0 text-xs font-medium text-muted-foreground uppercase tracking-wide text-right">
+          <span className="w-20 shrink-0 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">
             Total
           </span>
-          <span className="w-16 shrink-0" />
+          <span className="w-28 shrink-0 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">
+            Actions
+          </span>
         </div>
 
         <CardContent className="p-0">
@@ -1283,12 +1548,13 @@ export function LiveOrdersView() {
               {[1, 2, 3].map((i) => (
                 <div key={i} className="flex items-center gap-4 py-2">
                   <Skeleton className="size-2 rounded-full" />
-                  <Skeleton className="h-4 w-20" />
-                  <Skeleton className="h-4 w-28" />
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-4 w-36" />
                   <Skeleton className="h-4 flex-1" />
-                  <Skeleton className="h-6 w-20" />
-                  <Skeleton className="h-4 w-16" />
-                  <Skeleton className="h-4 w-16" />
+                  <Skeleton className="h-6 w-28" />
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-4 w-20" />
+                  <Skeleton className="h-7 w-28" />
                 </div>
               ))}
             </div>
@@ -1326,12 +1592,37 @@ export function LiveOrdersView() {
                   order={order}
                   onOrderDeleted={handleOrderDeleted}
                   onOrderUpdated={handleOrderUpdated}
+                  onAcceptOrder={handleAcceptOrder}
+                  onMarkServed={handleMarkServed}
+                  onGenerateBill={(ord) =>
+                    setSettlementTable({
+                      id: ord.tableId,
+                      tableNumber: ord.tableNumber,
+                      waiter: ord.waiter,
+                    })
+                  }
                 />
               ))}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Bill Settlement Modal */}
+      {settlementTable && (
+        <BillSettlementModal
+          open={!!settlementTable}
+          onOpenChange={(open) => {
+            if (!open) setSettlementTable(null)
+          }}
+          tableId={settlementTable.id}
+          tableNumber={settlementTable.tableNumber}
+          waiterName={settlementTable.waiter}
+          onSuccess={() => {
+            fetchLiveOrders()
+          }}
+        />
+      )}
     </main>
   )
 }

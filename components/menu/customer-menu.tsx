@@ -26,7 +26,12 @@ import {
   ChevronRight,
   ShieldCheck,
   Star,
+  Check,
+  SlidersHorizontal,
+  Edit3,
+  Receipt,
 } from 'lucide-react'
+import { CustomerBillModal } from '@/components/billing/customer-bill-modal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -51,11 +56,51 @@ export interface CustomerMenuItem {
   rating?: number
 }
 
-interface CartItem {
+export interface ItemCustomization {
+  spiceLevel: 'Mild' | 'Medium' | 'Spicy' | 'Extra Spicy'
+  vegPreference: 'Veg' | 'Non-Veg'
+  sauces: string[]
+  cheese: string
+  cheeseCost: number
+  specialNote?: string
+}
+
+export interface CartItem {
+  cartKey: string
   menuItem: CustomerMenuItem
   quantity: number
+  unitPrice: number
+  customization?: ItemCustomization
   specialInstructions?: string
 }
+
+export function generateCartKey(itemId: string, cust?: ItemCustomization): string {
+  if (!cust) return itemId
+  const saucesKey = (cust.sauces || []).slice().sort().join('-')
+  return `${itemId}_${cust.spiceLevel || 'Med'}_${cust.vegPreference || 'Veg'}_${cust.cheese || 'NoCheese'}_${saucesKey}`
+}
+
+export const SPICE_OPTIONS = [
+  { id: 'Mild', label: 'Mild', desc: 'No red chilli, kid-friendly' },
+  { id: 'Medium', label: 'Medium', desc: 'Balanced traditional spices' },
+  { id: 'Spicy', label: 'Spicy', desc: 'Extra green chillies 🔥' },
+  { id: 'Extra Spicy', label: 'Extra Spicy', desc: 'Fiery hot chef special 🔥🔥' },
+] as const
+
+export const SAUCE_OPTIONS = [
+  { id: 'Mint Chutney', label: 'Mint Chutney', desc: 'Fresh pudina & curd dip' },
+  { id: 'Garlic Mayo', label: 'Garlic Mayo Dip', desc: 'Creamy garlic dip' },
+  { id: 'Sweet Saunth', label: 'Sweet Saunth', desc: 'Tangy tamarind chutney' },
+  { id: 'Schezwan Dip', label: 'Schezwan Dip', desc: 'Spicy chilli dipping sauce' },
+  { id: 'Tomato Ketchup', label: 'Tomato Ketchup', desc: 'Classic condiment' },
+]
+
+export const CHEESE_OPTIONS = [
+  { id: 'No Extra Cheese', label: 'No Extra Cheese', cost: 0 },
+  { id: 'Cheese Slice', label: 'Cheese Slice (+₹20)', cost: 20 },
+  { id: 'Extra Amul Cheese', label: 'Extra Amul Grated Cheese (+₹30)', cost: 30 },
+  { id: 'Mozzarella Cheese Burst', label: 'Mozzarella Cheese Burst (+₹45)', cost: 45 },
+]
 
 interface OrderConfirmationData {
   id: string
@@ -68,6 +113,56 @@ interface OrderConfirmationData {
   itemsCount: number
   createdAt: string
   items?: Array<{ name: string; quantity: number; price: number }>
+}
+
+export const LIFECYCLE_STEPS = [
+  { step: 1, label: 'Order Placed', shortLabel: 'Placed', icon: ShoppingBag },
+  { step: 2, label: 'Accepted by Waiter', shortLabel: 'Accepted', icon: CheckCircle2 },
+  { step: 3, label: 'Preparing in Kitchen', shortLabel: 'Preparing', icon: Flame },
+  { step: 4, label: 'Ready to Serve', shortLabel: 'Ready', icon: ChefHat },
+  { step: 5, label: 'Served', shortLabel: 'Served', icon: UtensilsCrossed },
+]
+
+export function getOrderLifecycleInfo(status: string) {
+  const s = String(status || '').toLowerCase().trim()
+  if (s === 'served' || s === 'completed') {
+    return {
+      step: 5,
+      label: 'Served',
+      badgeColor: 'border-sky-500/40 bg-sky-500/10 text-sky-500',
+      description: 'Your food has been served to your table. Enjoy your meal!',
+    }
+  }
+  if (s === 'ready') {
+    return {
+      step: 4,
+      label: 'Ready to Serve',
+      badgeColor: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500',
+      description: 'Dishes are freshly prepared & ready for table serving!',
+    }
+  }
+  if (s === 'preparing' || s === 'cooking') {
+    return {
+      step: 3,
+      label: 'Preparing in Kitchen',
+      badgeColor: 'border-chart-4/40 bg-chart-4/10 text-chart-4',
+      description: 'Chef is actively cooking your fresh dishes in the kitchen.',
+    }
+  }
+  if (s === 'accepted' || s === 'confirmed') {
+    return {
+      step: 2,
+      label: 'Accepted by Waiter',
+      badgeColor: 'border-primary/40 bg-primary/10 text-primary',
+      description: 'Waiter has verified and accepted your order. Routed to kitchen queue.',
+    }
+  }
+  return {
+    step: 1,
+    label: 'Order Placed',
+    badgeColor: 'border-warning/40 bg-warning/10 text-warning',
+    description: 'Order placed from table. Waiting for waiter to confirm & accept.',
+  }
 }
 
 export function CustomerMenu() {
@@ -89,6 +184,7 @@ export function CustomerMenu() {
   // 3. Table Orders & Live Queue State
   const [tableOrders, setTableOrders] = useState<any[]>([])
   const [showOrdersModal, setShowOrdersModal] = useState<boolean>(false)
+  const [showBillModal, setShowBillModal] = useState<boolean>(false)
 
   // 4. Filters & Pagination State
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
@@ -98,11 +194,21 @@ export function CustomerMenu() {
   const [itemsPerPage, setItemsPerPage] = useState<number>(8)
 
   // 5. Cart & Drawer State
-  const [cart, setCart] = useState<{ [id: string]: CartItem }>({})
+  const [cart, setCart] = useState<{ [cartKey: string]: CartItem }>({})
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false)
   const [orderNotes, setOrderNotes] = useState<string>('')
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [orderError, setOrderError] = useState<string | null>(null)
+
+  // 5b. Customization Modal State
+  const [customizingItem, setCustomizingItem] = useState<CustomerMenuItem | null>(null)
+  const [editingCartKey, setEditingCartKey] = useState<string | null>(null)
+  const [draftSpice, setDraftSpice] = useState<'Mild' | 'Medium' | 'Spicy' | 'Extra Spicy'>('Medium')
+  const [draftVeg, setDraftVeg] = useState<'Veg' | 'Non-Veg'>('Veg')
+  const [draftSauces, setDraftSauces] = useState<string[]>([])
+  const [draftCheese, setDraftCheese] = useState<string>('No Extra Cheese')
+  const [draftCheeseCost, setDraftCheeseCost] = useState<number>(0)
+  const [draftSpecialNote, setDraftSpecialNote] = useState<string>('')
 
   // 6. Order Confirmation State
   const [confirmedOrder, setConfirmedOrder] = useState<OrderConfirmationData | null>(null)
@@ -200,32 +306,174 @@ export function CustomerMenu() {
     setShowTableModal(false)
   }
 
-  // Cart operations
-  const addToCart = (item: CustomerMenuItem) => {
-    setCart((prev) => {
-      const currentQty = prev[item.id]?.quantity || 0
-      return {
-        ...prev,
-        [item.id]: {
-          menuItem: item,
-          quantity: currentQty + 1,
-        },
-      }
-    })
+  // Helper to count total quantity of a menu item across all customized keys
+  const getItemQtyInCart = (itemId: string) => {
+    return Object.values(cart)
+      .filter((ci) => ci.menuItem.id === itemId)
+      .reduce((sum, ci) => sum + ci.quantity, 0)
   }
 
-  const decrementCart = (itemId: string) => {
+  // Open Customization Modal (for new item or editing existing cart item)
+  const openCustomizeModal = (
+    item: CustomerMenuItem,
+    cartKey?: string,
+    existingCust?: ItemCustomization
+  ) => {
+    setCustomizingItem(item)
+    setEditingCartKey(cartKey || null)
+
+    if (existingCust) {
+      setDraftSpice(existingCust.spiceLevel)
+      setDraftVeg(existingCust.vegPreference)
+      setDraftSauces(existingCust.sauces || [])
+      setDraftCheese(existingCust.cheese)
+      setDraftCheeseCost(existingCust.cheeseCost || 0)
+      setDraftSpecialNote(existingCust.specialNote || '')
+    } else {
+      setDraftSpice(item.isSpicy ? 'Spicy' : 'Medium')
+      setDraftVeg(item.isVeg ? 'Veg' : 'Non-Veg')
+      setDraftSauces([])
+      setDraftCheese('No Extra Cheese')
+      setDraftCheeseCost(0)
+      setDraftSpecialNote('')
+    }
+  }
+
+  const toggleDraftSauce = (sauceId: string) => {
+    setDraftSauces((prev) =>
+      prev.includes(sauceId) ? prev.filter((s) => s !== sauceId) : [...prev, sauceId]
+    )
+  }
+
+  const handleSelectCheese = (cheeseOption: { id: string; label: string; cost: number }) => {
+    setDraftCheese(cheeseOption.id)
+    setDraftCheeseCost(cheeseOption.cost)
+  }
+
+  const handleSaveCustomization = () => {
+    if (!customizingItem) return
+
+    const customization: ItemCustomization = {
+      spiceLevel: draftSpice,
+      vegPreference: draftVeg,
+      sauces: draftSauces,
+      cheese: draftCheese,
+      cheeseCost: draftCheeseCost,
+      specialNote: draftSpecialNote.trim() || undefined,
+    }
+
+    const instructionParts: string[] = []
+    instructionParts.push(`Spice: ${draftSpice}`)
+    instructionParts.push(draftVeg === 'Veg' ? 'Veg 🟢' : 'Non-Veg 🔴')
+    if (draftCheeseCost > 0) {
+      instructionParts.push(`${draftCheese} (+₹${draftCheeseCost})`)
+    }
+    if (draftSauces.length > 0) {
+      instructionParts.push(`Sauce: ${draftSauces.join(', ')}`)
+    }
+    if (draftSpecialNote.trim()) {
+      instructionParts.push(`Note: ${draftSpecialNote.trim()}`)
+    }
+    const specialInstructions = instructionParts.join(' • ')
+
+    const unitPrice = customizingItem.price + draftCheeseCost
+    const newKey = generateCartKey(customizingItem.id, customization)
+
     setCart((prev) => {
-      const existing = prev[itemId]
+      const copy = { ...prev }
+
+      if (editingCartKey && editingCartKey !== newKey) {
+        const oldQty = copy[editingCartKey]?.quantity || 1
+        delete copy[editingCartKey]
+        copy[newKey] = {
+          cartKey: newKey,
+          menuItem: customizingItem,
+          quantity: (copy[newKey]?.quantity || 0) + oldQty,
+          unitPrice,
+          customization,
+          specialInstructions,
+        }
+      } else if (editingCartKey && editingCartKey === newKey) {
+        copy[newKey] = {
+          ...copy[newKey],
+          unitPrice,
+          customization,
+          specialInstructions,
+        }
+      } else {
+        copy[newKey] = {
+          cartKey: newKey,
+          menuItem: customizingItem,
+          quantity: (copy[newKey]?.quantity || 0) + 1,
+          unitPrice,
+          customization,
+          specialInstructions,
+        }
+      }
+
+      return copy
+    })
+
+    setCustomizingItem(null)
+    setEditingCartKey(null)
+  }
+
+  // Quick 1-click add from menu item cards
+  const addToCart = (item: CustomerMenuItem) => {
+    const matchingKey = Object.keys(cart).find((k) => cart[k].menuItem.id === item.id)
+    if (matchingKey) {
+      setCart((prev) => ({
+        ...prev,
+        [matchingKey]: {
+          ...prev[matchingKey],
+          quantity: prev[matchingKey].quantity + 1,
+        },
+      }))
+    } else {
+      const defaultCust: ItemCustomization = {
+        spiceLevel: item.isSpicy ? 'Spicy' : 'Medium',
+        vegPreference: item.isVeg ? 'Veg' : 'Non-Veg',
+        sauces: [],
+        cheese: 'No Extra Cheese',
+        cheeseCost: 0,
+      }
+      const specialInstructions = `Spice: ${defaultCust.spiceLevel} • ${defaultCust.vegPreference === 'Veg' ? 'Veg 🟢' : 'Non-Veg 🔴'}`
+      const newKey = generateCartKey(item.id, defaultCust)
+      setCart((prev) => ({
+        ...prev,
+        [newKey]: {
+          cartKey: newKey,
+          menuItem: item,
+          quantity: 1,
+          unitPrice: item.price,
+          customization: defaultCust,
+          specialInstructions,
+        },
+      }))
+    }
+  }
+
+  // Quick decrement from menu item cards
+  const decrementCart = (itemId: string) => {
+    const matchingKeys = Object.keys(cart).filter((k) => cart[k].menuItem.id === itemId)
+    if (matchingKeys.length === 0) return
+    const keyToDec = matchingKeys[matchingKeys.length - 1]
+    decrementCartKey(keyToDec)
+  }
+
+  // Precise cart drawer operations by cartKey
+  const decrementCartKey = (key: string) => {
+    setCart((prev) => {
+      const existing = prev[key]
       if (!existing) return prev
       if (existing.quantity <= 1) {
         const copy = { ...prev }
-        delete copy[itemId]
+        delete copy[key]
         return copy
       }
       return {
         ...prev,
-        [itemId]: {
+        [key]: {
           ...existing,
           quantity: existing.quantity - 1,
         },
@@ -233,22 +481,40 @@ export function CustomerMenu() {
     })
   }
 
-  const removeFromCart = (itemId: string) => {
+  const incrementCartKey = (key: string) => {
+    setCart((prev) => {
+      const existing = prev[key]
+      if (!existing) return prev
+      return {
+        ...prev,
+        [key]: {
+          ...existing,
+          quantity: existing.quantity + 1,
+        },
+      }
+    })
+  }
+
+  const removeFromCartKey = (key: string) => {
     setCart((prev) => {
       const copy = { ...prev }
-      delete copy[itemId]
+      delete copy[key]
       return copy
     })
   }
 
-  // Calculate cart totals
+  // Calculate cart totals (using dynamic unitPrice including customization extras)
   const cartItemList = useMemo(() => Object.values(cart), [cart])
   const cartItemCount = useMemo(
     () => cartItemList.reduce((sum, item) => sum + item.quantity, 0),
     [cartItemList]
   )
   const cartSubtotal = useMemo(
-    () => cartItemList.reduce((sum, item) => sum + item.menuItem.price * item.quantity, 0),
+    () =>
+      cartItemList.reduce(
+        (sum, item) => sum + (item.unitPrice ?? item.menuItem.price) * item.quantity,
+        0
+      ),
     [cartItemList]
   )
   const cartTax = Math.round(cartSubtotal * 0.05 * 100) / 100
@@ -390,7 +656,7 @@ export function CustomerMenu() {
         items: cartItemList.map((ci) => ({
           menuItemId: ci.menuItem.id,
           name: ci.menuItem.name,
-          price: ci.menuItem.price,
+          price: ci.unitPrice ?? ci.menuItem.price,
           quantity: ci.quantity,
           specialInstructions: ci.specialInstructions,
         })),
@@ -414,7 +680,7 @@ export function CustomerMenu() {
         items: cartItemList.map((ci) => ({
           name: ci.menuItem.name,
           quantity: ci.quantity,
-          price: ci.menuItem.price,
+          price: ci.unitPrice ?? ci.menuItem.price,
         })),
       }
 
@@ -423,6 +689,9 @@ export function CustomerMenu() {
       setCart({})
       setIsCartOpen(false)
       setOrderNotes('')
+      // Refresh table live orders and switch directly to Live Orders tracker view
+      fetchTableOrders()
+      setShowOrdersModal(true)
     } catch (err: any) {
       console.error('Order creation failed:', err)
       setOrderError(err.message || 'Network error occurred while sending order. Please try again.')
@@ -545,27 +814,41 @@ export function CustomerMenu() {
               </Button>
             )}
 
-            {/* Live Orders & Queue Tracker Button */}
+            {/* Live Orders Button - Always prominent in header */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowOrdersModal(true)}
+              className="h-9 px-3 rounded-xl font-extrabold gap-1.5 border-primary/40 text-primary hover:bg-primary/10 shadow-xs cursor-pointer relative"
+              title="Track live table orders and kitchen status"
+            >
+              <Clock className="size-3.5 text-primary" />
+              <span>Live Orders</span>
+              {tableOrders.length > 0 && (
+                <span
+                  className={cn(
+                    'flex size-5 items-center justify-center rounded-full text-[10px] font-black shadow-xs',
+                    totalActiveOrders > 0
+                      ? 'bg-primary text-primary-foreground animate-pulse'
+                      : 'bg-muted text-muted-foreground'
+                  )}
+                >
+                  {tableOrders.length}
+                </span>
+              )}
+            </Button>
+
+            {/* Bring Bill / Pay Button (Visible once customer has placed at least one order) */}
             {tableOrders.length > 0 && (
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowOrdersModal(true)}
-                className="h-9 px-3 rounded-xl font-bold gap-1.5 border-primary/40 text-primary hover:bg-primary/10 shadow-xs"
+                onClick={() => setShowBillModal(true)}
+                className="h-9 px-3 rounded-xl font-extrabold gap-1.5 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 shadow-xs cursor-pointer"
+                title="View itemized bill, tip waiter, or pay online"
               >
-                <Clock className="size-3.5 text-primary" />
-                <span className="hidden sm:inline">Orders</span>
-                {totalActiveOrders > 0 ? (
-                  <span className="flex items-center gap-1 text-[11px] bg-primary text-primary-foreground px-2 py-0.5 rounded-full font-extrabold animate-pulse">
-                    {queueOrders.length > 0 && `Queue (${queueOrders.length})`}
-                    {queueOrders.length > 0 && prepOrders.length > 0 && ' · '}
-                    {prepOrders.length > 0 && `Prep (${prepOrders.length})`}
-                  </span>
-                ) : (
-                  <Badge variant="secondary" className="text-[10px] px-1.5 h-4">
-                    {tableOrders.length}
-                  </Badge>
-                )}
+                <Receipt className="size-3.5 text-emerald-500" />
+                <span>Bill & Tip</span>
               </Button>
             )}
 
@@ -732,174 +1015,494 @@ export function CustomerMenu() {
         </div>
       )}
 
-      {/* 4. LIVE TABLE ORDERS & QUEUE MODAL */}
+      {/* 4. LIVE TABLE ORDERS & REAL-TIME 5-STEP TRACKER MODAL */}
       {showOrdersModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in">
-          <div className="relative w-full max-w-lg bg-card border border-border shadow-2xl rounded-3xl overflow-hidden p-6 text-left space-y-4 max-h-[85vh] flex flex-col">
+          <div className="relative w-full max-w-xl bg-card border border-border shadow-2xl rounded-3xl overflow-hidden p-5 sm:p-6 text-left space-y-4 max-h-[90vh] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between pb-3 border-b border-border/70">
               <div className="flex items-center gap-2.5">
-                <div className="size-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold">
-                  <ChefHat className="size-5" />
+                <div className="size-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center font-bold shadow-xs">
+                  <Clock className="size-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-extrabold text-foreground">
-                    Live Table Orders & Kitchen Queue
+                  <h2 className="text-base font-extrabold text-foreground flex items-center gap-2">
+                    Live Table Orders
+                    {totalActiveOrders > 0 && (
+                      <span className="size-2 rounded-full bg-emerald-500 animate-ping" />
+                    )}
                   </h2>
                   <p className="text-xs text-muted-foreground">
-                    Active tickets for {displayTableBadge}
+                    Live status tracking for {displayTableBadge} · updates automatically
                   </p>
                 </div>
               </div>
-              <button
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 rounded-xl text-muted-foreground hover:text-foreground"
+                  onClick={() => fetchTableOrders()}
+                  title="Refresh Orders"
+                >
+                  <RefreshCw className="size-4" />
+                </Button>
+                <button
+                  onClick={() => setShowOrdersModal(false)}
+                  className="p-1.5 rounded-xl hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Orders List with Stepper */}
+            <div className="overflow-y-auto flex-1 space-y-4 pr-1">
+              {tableOrders.length === 0 ? (
+                <div className="py-14 text-center text-muted-foreground space-y-3">
+                  <div className="size-12 rounded-2xl bg-muted/50 text-muted-foreground flex items-center justify-center mx-auto">
+                    <ShoppingBag className="size-6 opacity-60" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-foreground">No orders placed yet for this table</p>
+                    <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
+                      Explore the menu, add your favorite dishes to the cart, and place an order to track live progress here.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="rounded-xl font-bold text-xs mt-2"
+                    onClick={() => setShowOrdersModal(false)}
+                  >
+                    Browse Menu
+                  </Button>
+                </div>
+              ) : (
+                tableOrders.map((ord: any) => {
+                  const stepInfo = getOrderLifecycleInfo(ord.status)
+                  const itemsList = ord.items || []
+                  const s = String(ord.status || '').toLowerCase().trim()
+                  const isServed = s === 'served' || s === 'completed'
+                  // Show only 4 steps until staff marks it served! "Served" step only appears when served.
+                  const activeSteps = isServed ? LIFECYCLE_STEPS : LIFECYCLE_STEPS.slice(0, 4)
+                  const currentActiveIndex = isServed
+                    ? 4
+                    : Math.max(0, Math.min(activeSteps.length - 1, stepInfo.step - 1))
+                  const progressPercent =
+                    activeSteps.length > 1
+                      ? (currentActiveIndex / (activeSteps.length - 1)) * 100
+                      : 0
+
+                  return (
+                    <div
+                      key={ord.id || ord.orderNumber}
+                      className="p-4 rounded-2xl bg-card border border-border/80 shadow-xs space-y-3.5 hover:border-primary/40 transition-colors"
+                    >
+                      {/* Ticket Header */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono font-bold text-xs text-foreground">
+                              {ord.orderNumber || ord.id}
+                            </span>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                'text-[10px] font-extrabold capitalize px-2 py-0.5',
+                                stepInfo.badgeColor
+                              )}
+                            >
+                              {stepInfo.label}
+                            </Badge>
+                          </div>
+                          <span className="text-[11px] text-muted-foreground font-medium block mt-0.5">
+                            Placed {ord.createdAt ? new Date(ord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'recently'}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-extrabold text-primary block">
+                            ₹{Number(ord.totalAmount || ord.total || 0).toFixed(2)}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground capitalize">
+                            {ord.paymentStatus || 'pay at counter'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* ── Visual Stepper Tracker (Served step hidden until served) ── */}
+                      <div className="py-3 px-3 bg-muted/40 rounded-2xl border border-border/50">
+                        <div className="flex items-center justify-between relative px-2 sm:px-4">
+                          {/* Connector line container with strict bounds and overflow-hidden */}
+                          <div className="absolute top-3.5 left-5 right-5 h-1 z-0 overflow-hidden rounded-full bg-muted-foreground/20">
+                            <div
+                              className="h-full bg-gradient-to-r from-warning via-primary to-emerald-500 transition-all duration-500 rounded-full"
+                              style={{
+                                width: `${Math.max(0, Math.min(100, progressPercent))}%`,
+                              }}
+                            />
+                          </div>
+
+                          {activeSteps.map((st) => {
+                            const isDone = isServed ? true : stepInfo.step > st.step
+                            const isCurrent = isServed ? st.step === 5 : stepInfo.step === st.step
+                            const StepIcon = st.icon
+
+                            return (
+                              <div key={st.step} className="flex flex-col items-center z-10 gap-1.5">
+                                <div
+                                  className={cn(
+                                    'size-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all duration-300',
+                                    isDone && !isCurrent
+                                      ? 'bg-emerald-500 text-black shadow-xs font-black'
+                                      : isCurrent
+                                      ? 'bg-primary text-primary-foreground ring-4 ring-primary/20 animate-pulse shadow-md font-black scale-110'
+                                      : 'bg-card border border-border text-muted-foreground/60'
+                                  )}
+                                >
+                                  {isDone && !isCurrent ? (
+                                    <Check className="size-3.5 stroke-[3]" />
+                                  ) : (
+                                    <StepIcon className="size-3.5" />
+                                  )}
+                                </div>
+                                <span
+                                  className={cn(
+                                    'text-[10px] tracking-tight text-center leading-tight',
+                                    isCurrent
+                                      ? 'font-black text-foreground'
+                                      : isDone
+                                      ? 'font-bold text-emerald-600 dark:text-emerald-400'
+                                      : 'text-muted-foreground/60 font-medium'
+                                  )}
+                                >
+                                  {st.shortLabel}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+
+                        {/* Status Description Explainer */}
+                        <div className="mt-3.5 p-2.5 rounded-xl bg-background/90 border border-border/60 text-xs flex items-center gap-2">
+                          <span className="font-bold text-foreground shrink-0 text-[11px] uppercase tracking-wide">
+                            Live Update:
+                          </span>
+                          <span className={cn('text-xs font-semibold leading-snug', stepInfo.badgeColor.split(' ')[2])}>
+                            {stepInfo.description}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Ordered Items List with Customization Details */}
+                      <div className="space-y-2 pt-1 text-xs border-t border-border/50">
+                        {itemsList.map((it: any, i: number) => (
+                          <div key={i} className="flex flex-col gap-0.5">
+                            <div className="flex justify-between items-center text-foreground font-medium">
+                              <span>
+                                <span className="text-primary font-bold mr-1.5">{it.quantity}x</span>
+                                {it.name}
+                              </span>
+                              <span className="text-muted-foreground font-mono">
+                                ₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}
+                              </span>
+                            </div>
+                            {(it.notes || it.specialInstructions) && (
+                              <span className="text-[10px] text-amber-500/90 font-medium pl-4">
+                                ↳ {it.notes || it.specialInstructions}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Order Special Notes */}
+                      {ord.notes && (
+                        <div className="text-[11px] text-muted-foreground bg-muted/30 p-2 rounded-xl border border-border/50 flex items-start gap-1.5">
+                          <span className="font-semibold text-foreground">Note:</span>
+                          <span>{ord.notes}</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="pt-2 border-t border-border flex flex-col sm:flex-row gap-2">
+              {tableOrders.length > 0 && (
+                <Button
+                  variant="default"
+                  className="flex-1 h-11 rounded-xl font-extrabold text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-2 shadow-md cursor-pointer"
+                  onClick={() => {
+                    setShowOrdersModal(false)
+                    setShowBillModal(true)
+                  }}
+                >
+                  <Receipt className="size-4" />
+                  <span>Bring Bill & Tip Waiter</span>
+                </Button>
+              )}
+              <Button
+                variant={tableOrders.length > 0 ? 'outline' : 'default'}
+                className="flex-1 h-11 rounded-xl font-bold cursor-pointer"
                 onClick={() => setShowOrdersModal(false)}
-                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                Continue Browsing Menu
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4b. CUSTOMIZE DISH MODAL (Spices, Veg/Non-Veg, Sauces, Cheese, Chef Notes) */}
+      {customizingItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in">
+          <div className="relative w-full max-w-lg bg-card border border-border shadow-2xl rounded-3xl overflow-hidden p-5 sm:p-6 text-left space-y-4 max-h-[92vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between pb-3 border-b border-border/70">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-primary uppercase tracking-wide">
+                    {editingCartKey ? 'Edit Customisation' : 'Customise Dish'}
+                  </span>
+                </div>
+                <h2 className="text-lg font-black text-foreground mt-0.5">
+                  {customizingItem.name}
+                </h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Base: ₹{customizingItem.price.toFixed(2)}
+                  {draftCheeseCost > 0 && (
+                    <span className="text-emerald-500 font-bold ml-1.5">
+                      + ₹{draftCheeseCost} cheese
+                    </span>
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setCustomizingItem(null)
+                  setEditingCartKey(null)
+                }}
+                className="p-1.5 rounded-xl hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
               >
                 <X className="size-5" />
               </button>
             </div>
 
-            {/* Content List */}
+            {/* Scrollable Customization Options */}
             <div className="overflow-y-auto flex-1 space-y-4 pr-1">
-              {/* 1. Queue Orders */}
-              {queueOrders.length > 0 && (
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-500">
-                    <Clock className="size-4 animate-spin" style={{ animationDuration: '4s' }} />
-                    <span>In Kitchen Queue ({queueOrders.length})</span>
-                  </div>
-                  <div className="space-y-2">
-                    {queueOrders.map((ord) => (
-                      <div
-                        key={ord.id}
-                        className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-2"
+              {/* 1. Veg / Non-Veg Preference */}
+              <div className="space-y-2">
+                <label className="text-xs font-black uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <span>Dietary Preference</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setDraftVeg('Veg')}
+                    className={cn(
+                      'flex items-center justify-center gap-2 p-3 rounded-2xl border text-xs font-bold transition-all cursor-pointer',
+                      draftVeg === 'Veg'
+                        ? 'border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ring-2 ring-emerald-500/30'
+                        : 'border-border/80 hover:bg-muted text-muted-foreground'
+                    )}
+                  >
+                    <span className="size-3.5 border-2 border-emerald-600 dark:border-emerald-500 rounded-sm flex items-center justify-center p-0.5">
+                      <span className="size-1.5 bg-emerald-600 dark:bg-emerald-500 rounded-full" />
+                    </span>
+                    <span>Pure Veg 🟢</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDraftVeg('Non-Veg')}
+                    className={cn(
+                      'flex items-center justify-center gap-2 p-3 rounded-2xl border text-xs font-bold transition-all cursor-pointer',
+                      draftVeg === 'Non-Veg'
+                        ? 'border-rose-500 bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-2 ring-rose-500/30'
+                        : 'border-border/80 hover:bg-muted text-muted-foreground'
+                    )}
+                  >
+                    <span className="size-3.5 border-2 border-rose-600 dark:border-rose-500 rounded-sm flex items-center justify-center p-0.5">
+                      <span className="size-1.5 bg-rose-600 dark:border-rose-500 rounded-full" />
+                    </span>
+                    <span>Non-Veg 🔴</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 2. Spices Level */}
+              <div className="space-y-2">
+                <label className="text-xs font-black uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <Flame className="size-3.5 text-amber-500" />
+                  <span>Spice Level</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {SPICE_OPTIONS.map((sp) => {
+                    const isSelected = draftSpice === sp.id
+                    return (
+                      <button
+                        key={sp.id}
+                        type="button"
+                        onClick={() => setDraftSpice(sp.id as any)}
+                        className={cn(
+                          'p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1',
+                          isSelected
+                            ? 'border-primary bg-primary/10 text-primary ring-2 ring-primary/25 shadow-xs'
+                            : 'border-border/80 hover:bg-muted text-foreground'
+                        )}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="font-mono font-bold text-xs text-foreground">
-                            {ord.orderNumber}
-                          </span>
-                          <Badge className="bg-amber-500 text-black text-[10px] font-extrabold">
-                            In Queue
-                          </Badge>
+                          <span className="font-extrabold text-xs">{sp.label}</span>
+                          {isSelected && <Check className="size-3.5 text-primary stroke-[3]" />}
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
-                          Order received. Waiting for chef to select into preparation.
-                        </p>
-                        <div className="space-y-1 pt-1 border-t border-amber-500/20 text-xs">
-                          {(ord.items || []).map((it: any, i: number) => (
-                            <div key={i} className="flex justify-between items-center text-foreground font-medium">
-                              <span>
-                                {it.quantity}x {it.name}
-                              </span>
-                              <span className="text-muted-foreground font-mono">
-                                ₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                        <span className="text-[10px] text-muted-foreground font-medium leading-tight">
+                          {sp.desc}
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
-              )}
+              </div>
 
-              {/* 2. Preparation Orders */}
-              {prepOrders.length > 0 && (
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary">
-                    <Flame className="size-4 animate-pulse text-chart-4" />
-                    <span>In Kitchen Preparation ({prepOrders.length})</span>
-                  </div>
-                  <div className="space-y-2">
-                    {prepOrders.map((ord) => (
-                      <div
-                        key={ord.id}
-                        className="p-3.5 rounded-2xl bg-primary/10 border border-primary/30 space-y-2"
+              {/* 3. Cheese Options */}
+              <div className="space-y-2">
+                <label className="text-xs font-black uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <span>Cheese Customisation</span>
+                </label>
+                <div className="space-y-1.5">
+                  {CHEESE_OPTIONS.map((ch) => {
+                    const isSelected = draftCheese === ch.id
+                    return (
+                      <button
+                        key={ch.id}
+                        type="button"
+                        onClick={() => handleSelectCheese(ch)}
+                        className={cn(
+                          'w-full flex items-center justify-between p-2.5 rounded-2xl border text-left transition-all cursor-pointer',
+                          isSelected
+                            ? 'border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-2 ring-amber-500/25'
+                            : 'border-border/80 hover:bg-muted text-foreground'
+                        )}
                       >
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono font-bold text-xs text-foreground">
-                            {ord.orderNumber}
-                          </span>
-                          <Badge className="bg-chart-4 text-white text-[10px] font-extrabold animate-pulse">
-                            Chef Cooking
-                          </Badge>
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className={cn(
+                              'size-4 rounded-full border flex items-center justify-center transition-all',
+                              isSelected
+                                ? 'border-amber-500 bg-amber-500 text-black'
+                                : 'border-muted-foreground/40'
+                            )}
+                          >
+                            {isSelected && <span className="size-1.5 bg-black rounded-full" />}
+                          </div>
+                          <span className="text-xs font-bold">{ch.label}</span>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
-                          Chef has selected this order and is actively preparing your dishes.
-                        </p>
-                        <div className="space-y-1 pt-1 border-t border-primary/20 text-xs">
-                          {(ord.items || []).map((it: any, i: number) => (
-                            <div key={i} className="flex justify-between items-center text-foreground font-medium">
-                              <span>
-                                {it.quantity}x {it.name}
-                              </span>
-                              <span className="text-muted-foreground font-mono">
-                                ₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                        <span className="text-xs font-black text-primary">
+                          {ch.cost > 0 ? `+₹${ch.cost}` : 'Included'}
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
-              )}
+              </div>
 
-              {/* 3. Ready / Served Orders */}
-              {readyOrServedOrders.length > 0 && (
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-600">
-                    <CheckCircle2 className="size-4 text-emerald-500" />
-                    <span>Ready / Served ({readyOrServedOrders.length})</span>
-                  </div>
-                  <div className="space-y-2">
-                    {readyOrServedOrders.map((ord) => (
-                      <div
-                        key={ord.id}
-                        className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-1.5 opacity-85"
+              {/* 4. Sauces & Dips (Multi-select) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-black uppercase tracking-wider text-muted-foreground">
+                    Complimentary Sauces & Dips
+                  </label>
+                  <span className="text-[10px] text-muted-foreground font-semibold">
+                    (Multi-select)
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {SAUCE_OPTIONS.map((sc) => {
+                    const isChecked = draftSauces.includes(sc.id)
+                    return (
+                      <button
+                        key={sc.id}
+                        type="button"
+                        onClick={() => toggleDraftSauce(sc.id)}
+                        className={cn(
+                          'p-2.5 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2',
+                          isChecked
+                            ? 'border-emerald-500/60 bg-emerald-500/10 text-foreground ring-1 ring-emerald-500/30'
+                            : 'border-border/80 hover:bg-muted text-muted-foreground'
+                        )}
                       >
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono font-bold text-xs text-foreground">
-                            {ord.orderNumber}
-                          </span>
-                          <Badge className="bg-emerald-600 text-white text-[10px] font-bold">
-                            {ord.status === 'ready' ? 'Ready' : 'Served'}
-                          </Badge>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-foreground leading-snug">
+                            {sc.label}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground truncate">{sc.desc}</p>
                         </div>
-                        <div className="space-y-1 text-xs">
-                          {(ord.items || []).map((it: any, i: number) => (
-                            <div key={i} className="flex justify-between items-center text-muted-foreground">
-                              <span>
-                                {it.quantity}x {it.name}
-                              </span>
-                              <span>₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}</span>
-                            </div>
-                          ))}
+                        <div
+                          className={cn(
+                            'size-4 rounded-md border flex items-center justify-center shrink-0 transition-all',
+                            isChecked
+                              ? 'border-emerald-500 bg-emerald-500 text-black'
+                              : 'border-muted-foreground/40'
+                          )}
+                        >
+                          {isChecked && <Check className="size-3 stroke-[3]" />}
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      </button>
+                    )
+                  })}
                 </div>
-              )}
+              </div>
 
-              {tableOrders.length === 0 && (
-                <div className="py-12 text-center text-muted-foreground space-y-2">
-                  <UtensilsCrossed className="size-10 mx-auto opacity-40" />
-                  <p className="text-sm font-semibold">No active orders for this table yet</p>
-                  <p className="text-xs">Browse the menu below and add items to your cart to order.</p>
-                </div>
-              )}
+              {/* 5. Special Notes / Chef Instruction */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-black uppercase tracking-wider text-muted-foreground">
+                  Special Cooking Instructions (Optional)
+                </label>
+                <Textarea
+                  placeholder="e.g. Extra crispy, less oil, separate chutney..."
+                  value={draftSpecialNote}
+                  onChange={(e) => setDraftSpecialNote(e.target.value)}
+                  rows={2}
+                  className="text-xs resize-none rounded-xl"
+                />
+              </div>
             </div>
 
-            {/* Footer */}
-            <div className="pt-3 border-t border-border flex gap-2">
-              <Button
-                variant="default"
-                className="w-full h-11 rounded-xl font-bold"
-                onClick={() => setShowOrdersModal(false)}
-              >
-                + Order More Items from Menu
-              </Button>
+            {/* Modal Footer with Live Dynamic Price and Save/Add Action */}
+            <div className="pt-3 border-t border-border flex items-center justify-between gap-3">
+              <div>
+                <span className="text-[11px] text-muted-foreground block font-medium">
+                  Item Total
+                </span>
+                <span className="text-base font-black text-foreground">
+                  ₹{(customizingItem.price + draftCheeseCost).toFixed(2)}
+                </span>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setCustomizingItem(null)
+                    setEditingCartKey(null)
+                  }}
+                  className="rounded-xl font-bold text-xs h-10"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSaveCustomization}
+                  className="rounded-xl font-extrabold text-xs h-10 px-4 gap-2 shadow-md cursor-pointer"
+                >
+                  <Check className="size-4" />
+                  <span>
+                    {editingCartKey ? 'Update Item' : 'Add to Order'} · ₹
+                    {(customizingItem.price + draftCheeseCost).toFixed(2)}
+                  </span>
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -1115,7 +1718,7 @@ export function CustomerMenu() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {items.map((item) => {
-                    const inCartQty = cart[item.id]?.quantity || 0
+                    const inCartQty = getItemQtyInCart(item.id)
                     const desc = getCleanDescription(item.description)
 
                     return (
@@ -1202,8 +1805,8 @@ export function CustomerMenu() {
                               )}
                             </div>
 
-                            {/* Controls: Add or Quantity increment/decrement */}
-                            <div className="w-full">
+                            {/* Controls: Add or Quantity increment/decrement + Customise */}
+                            <div className="w-full space-y-1">
                               {inCartQty === 0 ? (
                                 <Button
                                   size="sm"
@@ -1233,6 +1836,16 @@ export function CustomerMenu() {
                                   </button>
                                 </div>
                               )}
+
+                              <button
+                                type="button"
+                                onClick={() => openCustomizeModal(item)}
+                                className="w-full text-[10px] font-bold text-muted-foreground hover:text-primary flex items-center justify-center gap-1 transition-colors cursor-pointer py-0.5"
+                                title="Customise Spices, Veg/Non-Veg, Sauces & Cheese"
+                              >
+                                <SlidersHorizontal className="size-2.5 text-primary" />
+                                <span>Customise</span>
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -1421,49 +2034,101 @@ export function CustomerMenu() {
                   <p className="text-xs text-muted-foreground font-medium">Your cart is empty</p>
                 </div>
               ) : (
-                cartItemList.map(({ menuItem, quantity }) => (
+                cartItemList.map((item) => (
                   <div
-                    key={menuItem.id}
-                    className="flex items-center justify-between p-3 rounded-2xl bg-muted/30 border border-border/60 gap-3"
+                    key={item.cartKey}
+                    className="p-3.5 rounded-2xl bg-muted/30 border border-border/70 space-y-2.5"
                   >
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-bold text-xs truncate text-foreground">
-                        {menuItem.name}
-                      </h4>
-                      <p className="text-[11px] text-muted-foreground font-medium">
-                        ₹{menuItem.price.toFixed(2)} each
-                      </p>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-extrabold text-xs text-foreground truncate">
+                          {item.menuItem.name}
+                        </h4>
+                        <p className="text-[11px] text-muted-foreground font-medium">
+                          ₹{item.unitPrice.toFixed(2)} each
+                        </p>
+
+                        {/* Customization Details Badges */}
+                        {item.customization && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                              <Flame className="size-2.5" />
+                              {item.customization.spiceLevel}
+                            </span>
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold border',
+                                item.customization.vegPreference === 'Veg'
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                                  : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
+                              )}
+                            >
+                              {item.customization.vegPreference === 'Veg' ? 'Veg 🟢' : 'Non-Veg 🔴'}
+                            </span>
+                            {item.customization.cheeseCost > 0 && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-primary/10 text-primary border border-primary/20">
+                                {item.customization.cheese}
+                              </span>
+                            )}
+                            {item.customization.sauces.length > 0 && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-muted text-muted-foreground border border-border">
+                                {item.customization.sauces.join(', ')}
+                              </span>
+                            )}
+                            {item.customization.specialNote && (
+                              <span className="text-[10px] text-muted-foreground italic block w-full mt-0.5">
+                                Note: "{item.customization.specialNote}"
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Edit Customization Trigger */}
+                        <button
+                          type="button"
+                          onClick={() => openCustomizeModal(item.menuItem, item.cartKey, item.customization)}
+                          className="px-2 py-1 rounded-lg hover:bg-primary/15 text-primary font-bold text-[10px] flex items-center gap-1 border border-primary/25 bg-primary/5 cursor-pointer transition-colors"
+                          title="Edit Customisation"
+                        >
+                          <Edit3 className="size-3" />
+                          <span>Edit</span>
+                        </button>
+
+                        <button
+                          onClick={() => removeFromCartKey(item.cartKey)}
+                          className="text-muted-foreground/60 hover:text-destructive p-1 rounded-lg hover:bg-muted cursor-pointer transition-colors"
+                          title="Remove item"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
                     </div>
 
-                    {/* Quantity controls */}
-                    <div className="flex items-center gap-2">
+                    {/* Quantity controls & item total */}
+                    <div className="flex items-center justify-between pt-1 border-t border-border/40">
                       <div className="flex items-center bg-background border border-border rounded-xl">
                         <button
-                          onClick={() => decrementCart(menuItem.id)}
-                          className="size-7 flex items-center justify-center text-muted-foreground hover:text-foreground"
+                          onClick={() => decrementCartKey(item.cartKey)}
+                          className="size-7 flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer"
+                          aria-label="Decrease quantity"
                         >
                           <Minus className="size-3" />
                         </button>
-                        <span className="font-bold text-xs px-2">{quantity}</span>
+                        <span className="font-bold text-xs px-2">{item.quantity}</span>
                         <button
-                          onClick={() => addToCart(menuItem)}
-                          className="size-7 flex items-center justify-center text-muted-foreground hover:text-foreground"
+                          onClick={() => incrementCartKey(item.cartKey)}
+                          className="size-7 flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer"
+                          aria-label="Increase quantity"
                         >
                           <Plus className="size-3" />
                         </button>
                       </div>
 
-                      <span className="font-extrabold text-xs text-foreground min-w-12 text-right">
-                        ₹{(menuItem.price * quantity).toFixed(2)}
+                      <span className="font-black text-xs text-foreground font-mono">
+                        ₹{(item.unitPrice * item.quantity).toFixed(2)}
                       </span>
-
-                      <button
-                        onClick={() => removeFromCart(menuItem.id)}
-                        className="text-muted-foreground/60 hover:text-destructive p-1"
-                        title="Remove"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
                     </div>
                   </div>
                 ))
@@ -1526,6 +2191,51 @@ export function CustomerMenu() {
           </div>
         </div>
       )}
+      {/* Floating Bottom Bar for Mobile / Table QR Customers */}
+      <div className="fixed bottom-3 inset-x-3 sm:hidden z-40 flex items-center gap-2 max-w-md mx-auto">
+        {tableOrders.length > 0 && (
+          <Button
+            onClick={() => setShowBillModal(true)}
+            className="h-12 px-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-xl flex items-center justify-center gap-1.5 shrink-0"
+          >
+            <Receipt className="size-4" />
+            <span>Bill & Tip</span>
+          </Button>
+        )}
+
+        <Button
+          onClick={() => setShowOrdersModal(true)}
+          className="flex-1 h-12 rounded-2xl bg-card/95 backdrop-blur-md border border-primary/40 text-primary hover:bg-primary/10 font-bold text-xs shadow-xl flex items-center justify-center gap-2"
+        >
+          <Clock className="size-4 text-primary" />
+          <span>Live Orders</span>
+          {tableOrders.length > 0 && (
+            <Badge className="bg-primary text-primary-foreground text-[10px] px-1.5 h-4 font-black">
+              {tableOrders.length}
+            </Badge>
+          )}
+        </Button>
+
+        <Button
+          onClick={() => setIsCartOpen(true)}
+          className="flex-1 h-12 rounded-2xl bg-primary text-primary-foreground font-extrabold text-xs shadow-xl flex items-center justify-center gap-2"
+        >
+          <ShoppingBag className="size-4" />
+          <span>Cart ({cartItemCount})</span>
+          {cartItemCount > 0 && <span>· ₹{cartGrandTotal.toFixed(0)}</span>}
+        </Button>
+      </div>
+
+      {/* 7. DIGITAL BILL & POST-SERVICE TIPPING MODAL */}
+      <CustomerBillModal
+        open={showBillModal}
+        onOpenChange={setShowBillModal}
+        tableNumber={tableNumber}
+        tableOrders={tableOrders}
+        onSuccess={() => {
+          fetchTableOrders()
+        }}
+      />
     </div>
   )
 }

@@ -37,6 +37,29 @@ export function invalidatePOSMenuCache(): void {
   posMenuCache.clear()
 }
 
+let customerMenuItemsCache: { data: any[]; timestamp: number } | null = null
+
+export function getCustomerMenuItemsCache(ttlMs: number = 30_000): any[] | null {
+  if (!customerMenuItemsCache) return null
+  if (Date.now() - customerMenuItemsCache.timestamp > ttlMs) {
+    customerMenuItemsCache = null
+    return null
+  }
+  return customerMenuItemsCache.data
+}
+
+export function setCustomerMenuItemsCache(data: any[]): void {
+  customerMenuItemsCache = {
+    data,
+    timestamp: Date.now(),
+  }
+}
+
+export function invalidateMenuItemsCache(): void {
+  customerMenuItemsCache = null
+  invalidatePOSMenuCache()
+}
+
 export function getPOSTablesCache<T = any>(key: string = 'default', ttlMs: number = DEFAULT_TABLES_TTL): T | null {
   const entry = posTablesCache.get(key)
   if (!entry) return null

@@ -13,7 +13,6 @@ import {
 
 const pages = [
   { label: 'Dashboard', href: '/', icon: LayoutDashboard, shortcut: 'D' },
-  { label: 'POS Terminal', href: '/pos', icon: ShoppingCart, shortcut: 'P' },
   { label: 'Tables', href: '/tables', icon: TableProperties, shortcut: 'T' },
   { label: 'Reservations', href: '/reservations', icon: CalendarDays },
   { label: 'Live Orders', href: '/orders', icon: Zap },

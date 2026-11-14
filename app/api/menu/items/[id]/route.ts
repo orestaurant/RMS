@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { invalidatePOSMenuCache } from '@/lib/pos-cache'
-import { invalidateMenuItemsCache } from '@/app/api/menu/items/route'
+import { invalidatePOSMenuCache, invalidateMenuItemsCache } from '@/lib/pos-cache'
 
 export async function GET(
   request: NextRequest,

@@ -84,6 +84,7 @@ model Organization {
   suppliers                Supplier[]
   tableLayouts             TableLayout[]
   tableQrTokens            TableQrToken[]
+  tips                     Tip[]
   users                    User[]
 
   @@index([slug])
@@ -146,6 +147,7 @@ model Restaurant {
   suppliers                Supplier[]
   tableLayouts             TableLayout[]
   tableQrTokens            TableQrToken[]
+  tips                     Tip[]
 
   @@unique([organizationId, slug], name: "idx_restaurant_org_slug")
   @@index([organizationId])
@@ -218,6 +220,7 @@ model Branch {
   stockMovements           StockMovement[]
   tableLayouts             TableLayout[]
   tableQrTokens            TableQrToken[]
+  tips                     Tip[]
 
   @@unique([restaurantId, name], name: "idx_branch_restaurant_name")
   @@index([restaurantId])
@@ -272,6 +275,8 @@ model User {
   staffProfile           StaffProfile?
   stockAdjustments       StockAdjustment[]
   stockMovements         StockMovement[]
+  waiterBills            Bill[]                 @relation("waiter_bills")
+  waiterTips             Tip[]                  @relation("waiter_tips")
   organization           Organization?          @relation(fields: [organizationId], references: [id])
 
   @@index([organizationId])
@@ -786,8 +791,11 @@ model Order {
   confirmedById        String?           @db.Uuid
   servedById           String?           @db.Uuid
   total                Decimal           @default(0) @db.Decimal(12, 2)
+  billId               String?           @db.Uuid
+  isBilled             Boolean           @default(false)
   aggregatorOrderRel   AggregatorOrder?  @relation("OrderAggregator")
   bill                 Bill?
+  tableBill            Bill?             @relation("BillOrders", fields: [billId], references: [id])
   kitchenTickets       KitchenTicket[]
   branch               Branch            @relation(fields: [branchId], references: [id], onDelete: Cascade)
   confirmedBy          User?             @relation("confirmed_by", fields: [confirmedById], references: [id])
@@ -978,12 +986,18 @@ model Bill {
   taxAmount          Decimal            @default(0) @db.Decimal(12, 2)
   serviceCharge      Decimal            @default(0) @db.Decimal(12, 2)
   roundingAdjustment Decimal            @default(0) @db.Decimal(12, 2)
+  tipAmount          Decimal            @default(0) @db.Decimal(12, 2)
   totalAmount        Decimal            @default(0) @db.Decimal(12, 2)
+  grandTotal         Decimal            @default(0) @db.Decimal(12, 2)
   amountPaid         Decimal            @default(0) @db.Decimal(12, 2)
   balanceDue         Decimal            @default(0) @db.Decimal(12, 2)
   paymentStatus      PaymentStatusEnum  @default(pending)
   billStatus         String             @default("open") @db.VarChar(50)
+  status             String             @default("GENERATED") @db.VarChar(50)
+  paymentMethod      String?            @db.VarChar(50)
+  paidAt             DateTime?
   tableId            String?            @db.Uuid
+  waiterId           String?            @db.Uuid
   customerPhone      String?            @db.VarChar(20)
   customerName       String?            @db.VarChar(100)
   notes              String?
@@ -1003,11 +1017,14 @@ model Bill {
   organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   restaurant         Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   settledBy          User?              @relation("settled_by", fields: [settledById], references: [id])
+  waiter             User?              @relation("waiter_bills", fields: [waiterId], references: [id])
   table              RestaurantTable?   @relation(fields: [tableId], references: [id])
   items              BillItem[]
   taxBreakdowns      BillTaxBreakdown[]
   payments           Payment[]
   refunds            Refund[]
+  orders             Order[]            @relation("BillOrders")
+  tip                Tip?
 
   @@unique([branchId, billNumber], name: "idx_bill_branch_number")
   @@index([branchId])
@@ -1664,6 +1681,29 @@ model AiSetupRecommendation {
   @@index([restaurantId])
 }
 
+model Tip {
+  id             String        @id @default(uuid()) @db.Uuid
+  billId         String        @unique @db.Uuid
+  waiterId       String        @db.Uuid
+  restaurantId   String        @db.Uuid
+  branchId       String?       @db.Uuid
+  organizationId String?       @db.Uuid
+  amount         Decimal       @default(0) @db.Decimal(12, 2)
+  status         String        @default("PENDING") @db.VarChar(50)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  bill           Bill          @relation(fields: [billId], references: [id], onDelete: Cascade)
+  waiter         User          @relation("waiter_tips", fields: [waiterId], references: [id], onDelete: Cascade)
+  restaurant     Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch         Branch?       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([waiterId])
+  @@index([restaurantId])
+  @@index([status])
+  @@index([createdAt])
+}
+
 enum UserRoleEnum {
   super_admin
   restaurant_owner
@@ -1697,6 +1737,9 @@ enum OrderStatusEnum {
   SERVED
   COMPLETED
   CANCELLED
+  ACCEPTED
+  READY
+  accepted
 }
 
 enum PaymentStatusEnum {

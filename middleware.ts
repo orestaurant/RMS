@@ -36,12 +36,14 @@ export async function middleware(request: NextRequest) {
 
   const adminPayload = await getAdminPayload(request)
   const adminAuth = !!adminPayload?.userId
-  const isWaiter = String(adminPayload?.role || '').toUpperCase() === 'WAITER'
+  const roleUpper = String(adminPayload?.role || '').toUpperCase()
+  const isWaiter = roleUpper === 'WAITER'
+  const isChef = roleUpper === 'CHEF'
   const customerAuth = await isCustomerAuthenticated(request)
   const isAuthenticated = adminAuth || customerAuth
 
   // Default redirect path based on user role
-  const defaultAuthRedirect = isWaiter ? '/tables' : '/dashboard'
+  const defaultAuthRedirect = isWaiter ? '/tables' : isChef ? '/kitchen' : '/dashboard'
 
   // 1. Customer Auth Pages (/customer/auth, /customer/login, /customer/register)
   const isCustomerAuthRoute =
@@ -64,15 +66,16 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // 2b. Waiter Role Route Security:
-  // Waiter can only access Tables, Reservations, Live Orders, Kitchen Display, and Menu Management.
-  // Other administrative and operational routes redirect directly to /tables.
-  if (isWaiter) {
+  // 2b. Waiter & Chef Role Route Security:
+  // Waiter & Chef can only access Tables, Reservations, Live Orders, Kitchen Display, and Menu Management.
+  // Other administrative and operational routes redirect directly to /kitchen (for chef) or /tables (for waiter).
+  if (isWaiter || isChef) {
+    const fallbackRoute = isChef ? '/kitchen' : '/tables'
     if (pathname === '/dashboard' || pathname === '/dashboard/') {
-      return NextResponse.redirect(new URL('/tables', request.url))
+      return NextResponse.redirect(new URL(fallbackRoute, request.url))
     }
 
-    const isRestrictedForWaiter =
+    const isRestricted =
       pathname === '/settings' ||
       pathname.startsWith('/settings/') ||
       pathname === '/dashboard/settings' ||
@@ -88,8 +91,8 @@ export async function middleware(request: NextRequest) {
       pathname === '/crm' ||
       pathname.startsWith('/crm/')
 
-    if (isRestrictedForWaiter) {
-      return NextResponse.redirect(new URL('/tables', request.url))
+    if (isRestricted) {
+      return NextResponse.redirect(new URL(fallbackRoute, request.url))
     }
   }
 
@@ -149,7 +152,9 @@ export async function middleware(request: NextRequest) {
     pathname === '/crm' ||
     pathname.startsWith('/crm/') ||
     pathname === '/staff' ||
-    pathname.startsWith('/staff/')
+    pathname.startsWith('/staff/') ||
+    pathname === '/billing' ||
+    pathname.startsWith('/billing/')
 
   if (isProtectedDashboardRoute) {
     if (!isAuthenticated) {
@@ -185,6 +190,8 @@ export const config = {
     '/crm',
     '/staff/:path*',
     '/staff',
+    '/billing/:path*',
+    '/billing',
     '/login',
     '/customer/:path*',
   ],

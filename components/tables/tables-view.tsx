@@ -15,7 +15,10 @@ import {
   AlertCircle,
   Search,
   Trash2,
+  Receipt,
 } from 'lucide-react'
+import { BillSettlementModal } from '@/components/billing/bill-settlement-modal'
+import { WaiterTipTracker } from '@/components/billing/waiter-tip-tracker'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -81,6 +84,8 @@ export interface TableData {
   guestCount?: number
   order?: { id: string; status: string }
   activeReservation?: { guestName: string; guestCount: number; time?: string }
+  billRequested?: boolean
+  activeBillId?: string
   x?: number
   y?: number
 }
@@ -137,11 +142,13 @@ function TableCard({
   onGenerateQR,
   onUpdateStatus,
   onDelete,
+  onGenerateBill,
 }: {
   table: TableData
   onGenerateQR?: (tableNum: string | number) => void
   onUpdateStatus?: (tableId: string, status: TableStatus) => Promise<void>
   onDelete?: (table: TableData) => void
+  onGenerateBill?: (table: TableData) => void
 }) {
   const normStatus: TableStatus = statusConfig[table.status] ? table.status : 'available'
   const cfg = statusConfig[normStatus]
@@ -152,6 +159,7 @@ function TableCard({
     <div
       className={cn(
         'group relative rounded-2xl border p-4 transition-all duration-200 cursor-pointer select-none flex flex-col justify-between',
+        table.billRequested && 'border-amber-500/60 bg-amber-500/10 ring-2 ring-amber-500/30',
         cfg.card
       )}
     >
@@ -164,7 +172,15 @@ function TableCard({
               {formatTableDisplay(table.tableNumber || table.number, isVip)}
             </span>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            {table.billRequested && (
+              <Badge
+                variant="outline"
+                className="text-[10px] h-5 px-1.5 font-black border-amber-500/50 bg-amber-500/20 text-amber-500 animate-pulse shadow-xs"
+              >
+                🔔 Bill Requested
+              </Badge>
+            )}
             <Badge variant="outline" className={cn('text-[10px] h-5 px-1.5 font-medium', cfg.badge)}>
               {cfg.label}
             </Badge>
@@ -338,6 +354,27 @@ function TableCard({
           Seat Guests
         </Button>
       )}
+
+      {/* Occupied / Active / Bill Requested CTA */}
+      {(normStatus === 'occupied' || table.order || table.billRequested) && (
+        <Button
+          variant="default"
+          size="sm"
+          onClick={(e) => {
+            e.stopPropagation()
+            onGenerateBill?.(table)
+          }}
+          className={cn(
+            'w-full mt-2 h-7 text-xs font-bold gap-1 shadow-xs cursor-pointer',
+            table.billRequested
+              ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse'
+              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+          )}
+        >
+          <Receipt className="size-3.5" />
+          <span>{table.billRequested ? 'Bill Requested — Settle' : 'Generate Bill'}</span>
+        </Button>
+      )}
     </div>
   )
 }
@@ -377,7 +414,10 @@ export function TablesView() {
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  // Fetch real tables from dynamic database API
+  // Bill Settlement Modal state
+  const [settlementTarget, setSettlementTarget] = useState<TableData | null>(null)
+
+  // Fetch real tables from dynamic database API + check for active bill requests
   const fetchTables = useCallback(async () => {
     try {
       setLoading(true)
@@ -390,7 +430,35 @@ export function TablesView() {
         throw new Error(json.message || 'Failed to fetch tables')
       }
 
-      setTables(json.data || [])
+      // Check for any active requested bills
+      let requestedTableNumbers: Set<string> = new Set()
+      try {
+        const billsRes = await fetch('/api/bills?status=REQUESTED')
+        if (billsRes.ok) {
+          const billsJson = await billsRes.json()
+          if (billsJson.success && Array.isArray(billsJson.data?.bills)) {
+            requestedTableNumbers = new Set(
+              billsJson.data.bills.map((b: any) =>
+                String(b.tableNumber || '').toLowerCase().trim().replace(/[^0-9]/g, '')
+              )
+            )
+          }
+        }
+      } catch (bErr) {
+        console.warn('Could not query active requested bills:', bErr)
+      }
+
+      const rawTables = json.data || []
+      const mappedTables: TableData[] = rawTables.map((t: any) => {
+        const cleanNum = String(t.tableNumber || t.number || '').toLowerCase().trim().replace(/[^0-9]/g, '')
+        const isReq = requestedTableNumbers.has(cleanNum)
+        return {
+          ...t,
+          billRequested: isReq,
+        }
+      })
+
+      setTables(mappedTables)
     } catch (err: any) {
       console.error('Failed to load tables:', err)
       setError(err.message || 'Unable to load live tables')
@@ -401,6 +469,8 @@ export function TablesView() {
 
   useEffect(() => {
     fetchTables()
+    const interval = setInterval(fetchTables, 10000)
+    return () => clearInterval(interval)
   }, [fetchTables])
 
   // Update table status in database
@@ -528,6 +598,8 @@ export function TablesView() {
 
   return (
     <main className="flex flex-col gap-6 p-6">
+      {/* Waiter Tip Tracker Widget */}
+      <WaiterTipTracker />
       {/* QR Code Generator Modal */}
       <TableQRGenerator
         isOpen={qrOpen}
@@ -754,6 +826,7 @@ export function TablesView() {
               table={table}
               onGenerateQR={handleOpenQR}
               onUpdateStatus={handleUpdateStatus}
+              onGenerateBill={(tbl) => setSettlementTarget(tbl)}
               onDelete={(tbl) => {
                 setDeleteError(null)
                 setDeleteTableTarget(tbl)
@@ -841,6 +914,22 @@ export function TablesView() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Bill Settlement Modal */}
+      {settlementTarget && (
+        <BillSettlementModal
+          open={!!settlementTarget}
+          onOpenChange={(open) => {
+            if (!open) setSettlementTarget(null)
+          }}
+          tableId={settlementTarget.id}
+          tableNumber={settlementTarget.tableNumber || settlementTarget.number}
+          waiterName={settlementTarget.waiter}
+          onSuccess={() => {
+            fetchTables()
+          }}
+        />
+      )}
     </main>
   )
 }

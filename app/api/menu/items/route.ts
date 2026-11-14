@@ -11,7 +11,7 @@ let menuItemsCache: {
   timestamp: number
 } | null = null
 
-export function invalidateMenuItemsCache() {
+function invalidateMenuItemsCache() {
   menuItemsCache = null
   invalidatePOSMenuCache()
 }

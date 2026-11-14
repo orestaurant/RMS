@@ -6,7 +6,7 @@ export const revalidate = 0
 
 let categoriesCache: { data: any[]; timestamp: number } | null = null
 
-export function invalidateCategoriesCache() {
+function invalidateCategoriesCache() {
   categoriesCache = null
 }
 

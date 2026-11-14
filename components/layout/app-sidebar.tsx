@@ -57,6 +57,7 @@ export function AppSidebar() {
   const userRole = auth?.role || 'SUPER_ADMIN'
   const userRoleUpper = String(userRole).toUpperCase()
   const isWaiter = userRoleUpper === 'WAITER'
+  const isChef = userRoleUpper === 'CHEF'
   const isCustomer = userRoleUpper === 'CUSTOMER'
   const isSuperAdmin =
     userRoleUpper === 'SUPER_ADMIN' ||
@@ -87,7 +88,7 @@ export function AppSidebar() {
   }
 
   // Dynamic user data
-  const userName = auth?.name || (isCustomer ? 'Customer' : isWaiter ? 'Waiter' : 'Rajesh')
+  const userName = auth?.name || (isCustomer ? 'Customer' : isWaiter ? 'Waiter' : isChef ? 'Chef' : 'Rajesh')
   const userEmail = auth?.email || (isCustomer ? 'customer@example.com' : 'hexerve@gmail.com')
   const initials =
     userName
@@ -95,14 +96,15 @@ export function AppSidebar() {
       .map((n) => n[0])
       .join('')
       .substring(0, 2)
-      .toUpperCase() || (isCustomer ? 'C' : isWaiter ? 'W' : 'R')
+      .toUpperCase() || (isCustomer ? 'C' : isWaiter ? 'W' : isChef ? 'CH' : 'R')
 
   // Dynamic navigation groups with Role-Based Access Control (RBAC):
-  // 1. WAITER: Strictly limited to Tables, Reservations, Live Orders, Kitchen Display, and Menu Management
+  // 1. WAITER & CHEF: Strictly limited to Tables, Reservations, Live Orders, Kitchen Display, and Menu Management.
+  //    All other dashboard/business options (POS Terminal, Inventory, Staff & Roles, Settings) are removed.
   // 2. CUSTOMER: Customer operations and menu without internal settings
   // 3. ADMIN/SUPER_ADMIN: Full system control across operations, kitchen, and business settings
   const navGroups = (() => {
-    if (isWaiter) {
+    if (isWaiter || isChef) {
       return [
         {
           label: 'OPERATIONS',
@@ -176,12 +178,6 @@ export function AppSidebar() {
         label: 'OPERATIONS',
         items: [
           { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-          {
-            label: 'POS Terminal',
-            href: '/pos',
-            icon: ShoppingCart,
-            badge: counts?.posLive ? 'Live' : undefined,
-          },
           { label: 'Tables', href: '/tables', icon: TableProperties },
           {
             label: 'Reservations',
@@ -218,6 +214,7 @@ export function AppSidebar() {
       {
         label: 'BUSINESS',
         items: [
+          { label: 'Billing & Invoices', href: '/billing', icon: Receipt },
           { label: 'Staff & Roles', href: '/staff', icon: UserCheck },
           { label: 'Settings', href: '/dashboard/settings', icon: Settings },
         ],
@@ -348,6 +345,8 @@ export function AppSidebar() {
                           ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
                           : isWaiter
                           ? "border-amber-500/30 text-amber-500 dark:text-amber-400 bg-amber-500/10"
+                          : isChef
+                          ? "border-sky-500/30 text-sky-500 dark:text-sky-400 bg-sky-500/10"
                           : userRoleUpper === 'SUPER_ADMIN' || userRoleUpper === 'SUPERADMIN'
                           ? "border-indigo-500/30 text-indigo-400 bg-indigo-500/10"
                           : "border-primary/30 text-primary bg-primary/5"
@@ -375,6 +374,14 @@ export function AppSidebar() {
                   >
                     <TableProperties className="size-4 text-muted-foreground" />
                     <span>Assigned Tables</span>
+                  </DropdownMenuItem>
+                ) : isChef ? (
+                  <DropdownMenuItem
+                    render={<Link href="/kitchen" />}
+                    className="cursor-pointer gap-2 py-2 px-2"
+                  >
+                    <ChefHat className="size-4 text-muted-foreground" />
+                    <span>Kitchen Display</span>
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem

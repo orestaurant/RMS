@@ -15,8 +15,6 @@ import { getPOSMenuCache, setPOSMenuCache, invalidatePOSMenuCache } from '@/lib/
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export { invalidatePOSMenuCache }
-
 export async function GET(request: NextRequest) {
   try {
     const authContext = getMockAuthContext()

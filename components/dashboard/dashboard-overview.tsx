@@ -31,10 +31,15 @@ export function DashboardOverview() {
   const router = useRouter()
   const { auth, loading: authLoading } = useAuthContext()
 
-  // Waiter Role Guard: automatically redirect to Tables view
+  // Waiter & Chef Role Guard: automatically redirect to their specialized operational views
   useEffect(() => {
-    if (!authLoading && String(auth?.role || '').toUpperCase() === 'WAITER') {
-      router.replace('/tables')
+    if (!authLoading) {
+      const roleUpper = String(auth?.role || '').toUpperCase()
+      if (roleUpper === 'WAITER') {
+        router.replace('/tables')
+      } else if (roleUpper === 'CHEF') {
+        router.replace('/kitchen')
+      }
     }
   }, [auth, authLoading, router])
 

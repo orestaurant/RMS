@@ -145,7 +145,7 @@ const nextTransitions: Record<'pending' | 'accepted' | 'cooking' | 'ready', Kanb
 
 const nextTransitionLabels: Record<'pending' | 'accepted' | 'cooking' | 'ready', string> = {
   pending: 'Accept',
-  accepted: 'Start Cooking',
+  accepted: 'Start Preparing',
   cooking: 'Mark Ready',
   ready: 'Mark Served',
 }
@@ -569,20 +569,52 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
         </div>
       )}
 
-      {/* Action Advance Button */}
+      {/* Action Advance Buttons per Lifecycle State Machine */}
       <div className="mt-2 pt-2 border-t border-border/40 flex items-center gap-2 shrink-0">
-        {nextStatus ? (
+        {currentStatus === 'accepted' ? (
+          <>
+            <Button
+              size="sm"
+              className="flex-1 h-10 text-xs font-bold tracking-wide bg-chart-4 hover:bg-chart-4/90 text-white shadow-sm active:scale-[0.98] cursor-pointer"
+              onClick={() => onAdvance(ticket.id, 'cooking')}
+            >
+              <Flame className="size-3.5 mr-1 text-white animate-pulse" />
+              Start Preparing
+            </Button>
+            <Button
+              size="sm"
+              className="flex-1 h-10 text-xs font-bold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-[0.98] cursor-pointer"
+              onClick={() => onAdvance(ticket.id, 'ready')}
+            >
+              <CheckCircle2 className="size-3.5 mr-1" />
+              Mark Ready
+            </Button>
+          </>
+        ) : currentStatus === 'cooking' ? (
           <Button
             size="sm"
-            className={cn(
-              'flex-1 h-10 text-sm font-bold tracking-wide transition-all shadow-sm active:scale-[0.98] cursor-pointer',
-              currentStatus === 'pending' && 'bg-primary hover:bg-primary/90 text-primary-foreground',
-              currentStatus === 'accepted' && 'bg-chart-4 hover:bg-chart-4/90 text-white',
-              currentStatus === 'cooking' && 'bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold shadow-md'
-            )}
-            onClick={() => onAdvance(ticket.id, nextStatus)}
+            className="flex-1 h-10 text-sm font-extrabold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-md active:scale-[0.98] cursor-pointer"
+            onClick={() => onAdvance(ticket.id, 'ready')}
           >
-            {nextTransitionLabels[currentStatus]}
+            <CheckCircle2 className="size-4 mr-1.5" />
+            Mark Ready
+          </Button>
+        ) : currentStatus === 'ready' ? (
+          <Button
+            size="sm"
+            className="flex-1 h-10 text-sm font-extrabold tracking-wide bg-sky-600 hover:bg-sky-700 text-white shadow-md active:scale-[0.98] cursor-pointer"
+            onClick={() => onAdvance(ticket.id, 'served')}
+          >
+            <Check className="size-4 mr-1.5" />
+            Mark Served
+          </Button>
+        ) : currentStatus === 'pending' ? (
+          <Button
+            size="sm"
+            className="flex-1 h-10 text-sm font-bold tracking-wide bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm active:scale-[0.98] cursor-pointer"
+            onClick={() => onAdvance(ticket.id, 'accepted')}
+          >
+            Accept Order
             <ArrowRight className="size-4 ml-1.5" />
           </Button>
         ) : (

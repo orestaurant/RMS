@@ -29,10 +29,12 @@ export async function PATCH(
     // DB:  pending | confirmed | preparing | ready | served
     const dbStatusMap: Record<string, string> = {
       pending: 'pending',
-      accepted: 'confirmed',
-      cooking: 'preparing',
-      ready: 'ready',
-      served: 'served',
+      accepted: 'ACCEPTED',
+      confirmed: 'ACCEPTED',
+      cooking: 'PREPARING',
+      preparing: 'PREPARING',
+      ready: 'READY',
+      served: 'SERVED',
     }
 
     let updatedDbOrder = null

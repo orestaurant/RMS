@@ -1,14 +1,13 @@
 /**
  * GET & POST /api/bills
- * Bill Generation, Tax Calculation (CGST/SGST), UPI QR Payload, and Invoicing
+ * Bill Generation, Tax Calculation (CGST/SGST), Invoicing, and Multi-filter Billing History
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { Prisma } from '@prisma/client'
 import { addNotification } from '@/lib/notifications-store'
 
-// Real bills store (starts empty; bills are generated directly from live orders)
+// Real bills store fallback
 let memoryBills: any[] = []
 
 export async function GET(request: NextRequest) {
@@ -16,43 +15,130 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const status = searchParams.get('status')
     const search = searchParams.get('search') || ''
+    const restaurantId = searchParams.get('restaurantId')
+    const tableId = searchParams.get('tableId')
+    const tableNumber = searchParams.get('tableNumber')
+    const waiterId = searchParams.get('waiterId')
+    const dateParam = searchParams.get('date') // 'today' | 'YYYY-MM-DD'
 
     let bills: any[] = []
 
     try {
+      const where: any = { deletedAt: null }
+
+      if (restaurantId) where.restaurantId = restaurantId
+      if (tableId) where.tableId = tableId
+      if (waiterId) where.waiterId = waiterId
+
+      if (tableNumber) {
+        where.table = {
+          tableNumber: {
+            contains: tableNumber,
+            mode: 'insensitive',
+          },
+        }
+      }
+
+      if (status && status !== 'all') {
+        const sUpper = status.toUpperCase()
+        const sLower = status.toLowerCase()
+        where.OR = [
+          { status: sUpper },
+          { billStatus: sLower },
+          { paymentStatus: sLower },
+        ]
+      }
+
+      if (dateParam) {
+        if (dateParam === 'today') {
+          const startOfToday = new Date()
+          startOfToday.setHours(0, 0, 0, 0)
+          where.createdAt = { gte: startOfToday }
+        } else {
+          const parsed = new Date(dateParam)
+          if (!isNaN(parsed.getTime())) {
+            const startOfDay = new Date(parsed)
+            startOfDay.setHours(0, 0, 0, 0)
+            const endOfDay = new Date(parsed)
+            endOfDay.setHours(23, 59, 59, 999)
+            where.createdAt = { gte: startOfDay, lte: endOfDay }
+          }
+        }
+      }
+
       const dbBills = await prisma.bill.findMany({
-        where: { deletedAt: null },
+        where,
         include: {
           items: true,
           table: true,
           order: true,
           customer: true,
+          waiter: {
+            select: {
+              id: true,
+              name: true,
+              firstName: true,
+              lastName: true,
+              phone: true,
+            },
+          },
+          tip: true,
         },
         orderBy: { createdAt: 'desc' },
-        take: 100,
+        take: 150,
       })
 
       if (dbBills && dbBills.length > 0) {
         bills = dbBills.map((b) => {
           const subtotal = Number(b.subtotal || 0)
           const tax = Number(b.taxAmount || 0)
+          const tip = Number(b.tipAmount || 0)
+          const discount = Number(b.discountAmount || 0)
+          const grandTotal = Number(b.grandTotal || b.totalAmount || subtotal + tax - discount + tip)
+
+          const waiterDisplayName = b.waiter
+            ? b.waiter.name || `${b.waiter.firstName || ''} ${b.waiter.lastName || ''}`.trim() || 'Waiter'
+            : null
+
           return {
             id: b.id,
             billNumber: b.billNumber,
             orderNumber: b.order?.orderNumber || 'ORD-DINE',
+            tableId: b.tableId,
             tableNumber: b.table?.tableNumber || 'Table 1',
-            customerName: b.customer?.name || 'Walk-in Guest',
-            customerPhone: b.customer?.phone || '',
+            customerName: b.customerName || b.customer?.name || 'Walk-in Guest',
+            customerPhone: b.customerPhone || b.customer?.phone || '',
             subtotal,
-            discountAmount: Number(b.discountAmount || 0),
+            discountAmount: discount,
             taxAmount: tax,
+            tipAmount: tip,
+            grandTotal,
             cgst: Math.round((tax / 2) * 100) / 100,
             sgst: Math.round((tax / 2) * 100) / 100,
             serviceCharge: Number(b.serviceCharge || 0),
-            totalAmount: Number(b.totalAmount || 0),
-            paymentStatus: b.paymentStatus || 'paid',
-            paymentMethod: 'upi',
+            totalAmount: grandTotal,
+            status: b.status || (b.paymentStatus === 'completed' ? 'PAID' : 'GENERATED'),
+            billStatus: b.billStatus || 'open',
+            paymentStatus: b.paymentStatus || 'pending',
+            paymentMethod: (b.paymentMethod || 'CASH').toLowerCase(),
+            paidAt: b.paidAt ? b.paidAt.toISOString() : null,
             createdAt: b.createdAt.toISOString(),
+            waiterId: b.waiterId,
+            waiterName: waiterDisplayName,
+            waiter: b.waiter
+              ? {
+                  id: b.waiter.id,
+                  name: waiterDisplayName,
+                  phone: b.waiter.phone || '',
+                }
+              : null,
+            tip: b.tip
+              ? {
+                  id: b.tip.id,
+                  amount: Number(b.tip.amount),
+                  status: b.tip.status,
+                }
+              : null,
             items: b.items.map((i) => ({
               id: i.id,
               name: i.itemName,
@@ -71,7 +157,6 @@ export async function GET(request: NextRequest) {
     if (bills.length === 0) {
       bills = [...memoryBills]
     } else {
-      // Ensure memory bills are included without duplicate IDs
       for (const mb of memoryBills) {
         if (!bills.some((b) => b.billNumber === mb.billNumber)) {
           bills.push(mb)
@@ -79,38 +164,48 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Apply filters
-    if (status && status !== 'all') {
-      bills = bills.filter((b) => b.paymentStatus === status)
-    }
-
+    // Secondary search filter
     if (search.trim()) {
       const q = search.toLowerCase().trim()
       bills = bills.filter(
         (b) =>
           b.billNumber.toLowerCase().includes(q) ||
-          b.tableNumber.toLowerCase().includes(q) ||
+          (b.tableNumber && b.tableNumber.toLowerCase().includes(q)) ||
           (b.customerName || '').toLowerCase().includes(q) ||
-          (b.orderNumber || '').toLowerCase().includes(q)
+          (b.orderNumber || '').toLowerCase().includes(q) ||
+          (b.waiterName || '').toLowerCase().includes(q)
       )
     }
 
     // Calculate Sales Ledger Metrics
-    const totalRevenue = bills.reduce((sum, b) => sum + (b.totalAmount || 0), 0)
+    const totalRevenue = bills.reduce((sum, b) => sum + (b.grandTotal || b.totalAmount || 0), 0)
     const paidRevenue = bills
-      .filter((b) => b.paymentStatus === 'paid')
-      .reduce((sum, b) => sum + (b.totalAmount || 0), 0)
+      .filter((b) => b.status === 'PAID' || b.paymentStatus === 'completed' || b.paymentStatus === 'paid')
+      .reduce((sum, b) => sum + (b.grandTotal || b.totalAmount || 0), 0)
     const pendingRevenue = bills
-      .filter((b) => b.paymentStatus === 'pending')
-      .reduce((sum, b) => sum + (b.totalAmount || 0), 0)
+      .filter((b) => b.status !== 'PAID' && b.paymentStatus !== 'completed' && b.paymentStatus !== 'paid')
+      .reduce((sum, b) => sum + (b.grandTotal || b.totalAmount || 0), 0)
     const totalTaxCollected = bills.reduce((sum, b) => sum + (b.taxAmount || 0), 0)
+    const totalTipsCollected = bills.reduce((sum, b) => sum + (b.tipAmount || 0), 0)
+
+    // Tips collected by waiter breakdown
+    const waiterTipsMap: Record<string, { waiterName: string; totalTips: number; count: number }> = {}
+    for (const b of bills) {
+      if (b.tipAmount > 0 && b.waiterName) {
+        if (!waiterTipsMap[b.waiterName]) {
+          waiterTipsMap[b.waiterName] = { waiterName: b.waiterName, totalTips: 0, count: 0 }
+        }
+        waiterTipsMap[b.waiterName].totalTips += b.tipAmount
+        waiterTipsMap[b.waiterName].count += 1
+      }
+    }
 
     // Payment methods breakdown
     const paymentMethods = {
-      upi: bills.filter((b) => b.paymentMethod === 'upi').reduce((s, b) => s + b.totalAmount, 0),
-      cash: bills.filter((b) => b.paymentMethod === 'cash').reduce((s, b) => s + b.totalAmount, 0),
-      card: bills.filter((b) => b.paymentMethod === 'card').reduce((s, b) => s + b.totalAmount, 0),
-      credit: bills.filter((b) => b.paymentMethod === 'credit').reduce((s, b) => s + b.totalAmount, 0),
+      upi: bills.filter((b) => b.paymentMethod === 'upi').reduce((s, b) => s + (b.grandTotal || b.totalAmount), 0),
+      cash: bills.filter((b) => b.paymentMethod === 'cash').reduce((s, b) => s + (b.grandTotal || b.totalAmount), 0),
+      card: bills.filter((b) => b.paymentMethod === 'card').reduce((s, b) => s + (b.grandTotal || b.totalAmount), 0),
+      wallet: bills.filter((b) => b.paymentMethod === 'wallet').reduce((s, b) => s + (b.grandTotal || b.totalAmount), 0),
     }
 
     return NextResponse.json({
@@ -122,6 +217,8 @@ export async function GET(request: NextRequest) {
           paidRevenue,
           pendingRevenue,
           totalTaxCollected,
+          totalTipsCollected,
+          waiterTipsSummary: Object.values(waiterTipsMap),
           totalBills: bills.length,
           paymentMethods,
         },
@@ -195,10 +292,13 @@ export async function POST(request: NextRequest) {
       subtotal: calculatedSubtotal,
       discountAmount,
       taxAmount: totalTax,
+      tipAmount: 0,
       cgst,
       sgst,
       serviceCharge: 0,
+      grandTotal,
       totalAmount: grandTotal,
+      status: paymentStatus === 'paid' ? 'PAID' : 'GENERATED',
       paymentStatus,
       paymentMethod,
       upiPayload,

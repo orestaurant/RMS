@@ -20,8 +20,6 @@ import { OrderStatusEnum } from '@prisma/client'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export { invalidateLiveOrdersCache }
-
 export async function GET(request: NextRequest) {
   try {
     const branchIdParam = request.nextUrl.searchParams.get('branchId')
@@ -73,6 +71,9 @@ export async function GET(request: NextRequest) {
       'ready',
       'PENDING',
       'PREPARING',
+      'ACCEPTED' as any,
+      'READY' as any,
+      'accepted' as any,
     ]
 
     let formattedOrders: any[] = []

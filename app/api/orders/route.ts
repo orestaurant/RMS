@@ -27,9 +27,11 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const tableNumber = searchParams.get('table') || searchParams.get('tableNumber')
+    const tableId = searchParams.get('tableId')
     const status = searchParams.get('status')
+    const role = (searchParams.get('role') || '').toLowerCase().trim()
     const branchId = searchParams.get('branchId')
-    const limit = parseInt(searchParams.get('limit') || '20')
+    const limit = parseInt(searchParams.get('limit') || '30')
 
     const where: any = { deletedAt: null }
 
@@ -50,13 +52,103 @@ export async function GET(request: NextRequest) {
 
       where.OR = [
         { table: { tableNumber: { in: tableVariants } } },
+        ...(tableId ? [{ tableId }] : []),
         ...tableVariants.map((tv) => ({
           metadata: { path: ['tableNumber'], equals: tv },
         })),
       ]
+
+      // For customer table queries: only show active unserved orders OR orders created during current dining session (last 12h)
+      if (!role) {
+        const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
+        where.AND = [
+          {
+            OR: [
+              {
+                status: {
+                  in: [
+                    'pending',
+                    'PENDING',
+                    'accepted',
+                    'ACCEPTED',
+                    'confirmed',
+                    'CONFIRMED',
+                    'cooking',
+                    'preparing',
+                    'PREPARING',
+                    'ready',
+                    'READY',
+                  ],
+                },
+              },
+              { createdAt: { gte: sessionCutoff } },
+            ],
+          },
+        ]
+      }
+    } else if (tableId) {
+      where.tableId = tableId
+      if (!role) {
+        const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
+        where.AND = [
+          {
+            OR: [
+              {
+                status: {
+                  in: [
+                    'pending',
+                    'PENDING',
+                    'accepted',
+                    'ACCEPTED',
+                    'confirmed',
+                    'CONFIRMED',
+                    'cooking',
+                    'preparing',
+                    'PREPARING',
+                    'ready',
+                    'READY',
+                  ],
+                },
+              },
+              { createdAt: { gte: sessionCutoff } },
+            ],
+          },
+        ]
+      }
     }
 
-    if (status) {
+    // Role-based active queue filtering for Waiter and Chef dashboards
+    if (role === 'waiter') {
+      where.status = {
+        in: [
+          'pending',
+          'PENDING',
+          'accepted',
+          'ACCEPTED',
+          'confirmed',
+          'CONFIRMED',
+          'cooking',
+          'preparing',
+          'PREPARING',
+          'ready',
+          'READY',
+        ],
+      }
+    } else if (role === 'chef') {
+      where.status = {
+        in: [
+          'accepted',
+          'ACCEPTED',
+          'confirmed',
+          'CONFIRMED',
+          'cooking',
+          'preparing',
+          'PREPARING',
+          'ready',
+          'READY',
+        ],
+      }
+    } else if (status) {
       where.status = status
     }
 
@@ -92,6 +184,7 @@ export async function GET(request: NextRequest) {
       paymentStatus: o.paymentStatus,
       totalAmount: Number(o.totalAmount || o.total || 0),
       createdAt: o.createdAt,
+      notes: o.notes || (o.metadata as any)?.notes || null,
       isLocationLocked: Boolean(o.isLocationLocked ?? (o.metadata as any)?.isLocationLocked),
       vehicleNumber: o.vehicleNumber ?? (o.metadata as any)?.vehicleNumber ?? null,
       landmarkNote: o.landmarkNote ?? (o.metadata as any)?.landmarkNote ?? null,
@@ -106,6 +199,8 @@ export async function GET(request: NextRequest) {
         price: Number(i.basePrice || 0),
         quantity: i.quantity,
         total: Number(i.itemTotal || (i.basePrice * i.quantity) || 0),
+        notes: i.specialInstructions || null,
+        specialInstructions: i.specialInstructions || null,
       })),
     }))
 
@@ -127,6 +222,7 @@ export async function GET(request: NextRequest) {
             paymentStatus: 'pending',
             totalAmount: (fb.items || []).reduce((s: number, it: any) => s + (it.price || 150) * it.quantity, 0),
             createdAt: fb.createdAt || new Date().toISOString(),
+            notes: fb.specialNotes || fb.notes || null,
             isLocationLocked: Boolean(fb.isLocationLocked),
             vehicleNumber: fb.vehicleNumber || null,
             landmarkNote: fb.landmarkNote || null,
@@ -141,6 +237,8 @@ export async function GET(request: NextRequest) {
               price: it.price || 150,
               quantity: it.quantity,
               total: (it.price || 150) * it.quantity,
+              notes: it.notes || it.specialInstructions || null,
+              specialInstructions: it.specialInstructions || it.notes || null,
             })),
           })
         }
@@ -364,7 +462,9 @@ export async function POST(request: NextRequest) {
       const dbItem = menuItemMap.get(it.menuItemId)
       const qty = Math.max(1, parseInt(it.quantity || '1') || 1)
       const name = it.name || dbItem?.name || 'Menu Item'
-      const price = dbItem ? Number(dbItem.basePrice) : parseFloat(it.price || 0) || 0
+      const clientPrice = parseFloat(it.price || 0) || 0
+      const dbPrice = dbItem ? Number(dbItem.basePrice) : 0
+      const price = clientPrice > 0 ? clientPrice : dbPrice
       const itemTotal = price * qty
 
       calculatedSubtotal += itemTotal
