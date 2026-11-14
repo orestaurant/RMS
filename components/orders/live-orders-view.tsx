@@ -1015,14 +1015,22 @@ export function LiveOrdersView() {
       const res = await fetch(`/api/orders/${encodeURIComponent(targetId)}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'accepted' }),
+        body: JSON.stringify({
+          status: 'accepted',
+          fullId: fullId || targetId,
+          orderNumber: orderId,
+        }),
       })
 
       if (!res.ok) {
         await fetch(`/api/orders/${encodeURIComponent(targetId)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'accepted' }),
+          body: JSON.stringify({
+            status: 'accepted',
+            fullId: fullId || targetId,
+            orderNumber: orderId,
+          }),
         })
       }
       fetchLiveOrders(false)
@@ -1051,7 +1059,11 @@ export function LiveOrdersView() {
       await fetch(`/api/orders/${encodeURIComponent(targetId)}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'served' }),
+        body: JSON.stringify({
+          status: 'served',
+          fullId: fullId || targetId,
+          orderNumber: orderId,
+        }),
       })
       fetchLiveOrders(false)
     } catch (err) {

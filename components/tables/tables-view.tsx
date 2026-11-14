@@ -389,7 +389,7 @@ const statsItems: { key: TableStatus; label: string }[] = [
 export function TablesView() {
   const { auth } = useAuthContext()
   const branchId = auth?.branchId
-  const restaurantName = auth?.restaurantName || 'Spice Garden Restaurant'
+  const restaurantName = auth?.restaurantName || 'RestoSphere'
 
   const [tables, setTables] = useState<TableData[]>([])
   const [loading, setLoading] = useState(true)

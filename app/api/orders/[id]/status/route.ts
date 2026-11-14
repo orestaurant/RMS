@@ -90,9 +90,17 @@ export async function PATCH(
     const isUuid = (str: string) =>
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
 
-    const orClauses: any[] = [{ orderNumber: id }]
-    if (isUuid(id)) {
-      orClauses.push({ id })
+    const matchKeys = Array.from(
+      new Set([id, body?.fullId, body?.orderNumber].filter(Boolean))
+    ) as string[]
+
+    const orClauses: any[] = []
+    for (const k of matchKeys) {
+      orClauses.push({ orderNumber: k })
+      orClauses.push({ orderNumber: { equals: k, mode: 'insensitive' } })
+      if (isUuid(k)) {
+        orClauses.push({ id: k })
+      }
     }
 
     const existing = await prisma.order.findFirst({

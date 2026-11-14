@@ -3,7 +3,7 @@ import { CustomerMenu } from '@/components/menu/customer-menu'
 import { RefreshCw } from 'lucide-react'
 
 export const metadata = {
-  title: 'Digital Menu & Table Ordering | Spice Garden',
+  title: 'Digital Menu & Table Ordering | RestoSphere',
   description: 'Scan QR code, browse live restaurant menu, and place dine-in orders directly from your table.',
 }
 

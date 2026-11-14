@@ -355,7 +355,7 @@ export function MenuManagement() {
       <TableQRGenerator
         isOpen={qrGeneratorOpen}
         onClose={() => setQrGeneratorOpen(false)}
-        restaurantName="Spice Garden Restaurant"
+        restaurantName="RestoSphere"
       />
       {/* Toast Feedback Alert */}
       {feedback && (

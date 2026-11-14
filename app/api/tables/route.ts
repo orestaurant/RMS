@@ -46,7 +46,19 @@ export async function GET(request: NextRequest) {
         orders: {
           where: {
             status: {
-              in: ['pending', 'confirmed', 'preparing', 'ready', 'served'],
+              in: [
+                'pending',
+                'PENDING',
+                'accepted',
+                'ACCEPTED',
+                'confirmed',
+                'preparing',
+                'PREPARING',
+                'ready',
+                'READY',
+                'served',
+                'SERVED',
+              ],
             },
           },
           orderBy: { createdAt: 'desc' },

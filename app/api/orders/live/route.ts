@@ -29,25 +29,10 @@ export async function GET(request: NextRequest) {
     const isUuid = (val: string | null): boolean =>
       !!val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)
 
-    // 1. Resolve branchId consistently (with memory cache to avoid unnecessary DB queries)
-    let branchId = branchIdParam && isUuid(branchIdParam) ? branchIdParam : null
-    if (!branchId) {
-      const cachedBranch = getCachedBranchMeta()
-      if (cachedBranch && isUuid(cachedBranch.id)) {
-        branchId = cachedBranch.id
-      } else {
-        const defaultBranch = await prisma.branch.findFirst({
-          select: { id: true, organizationId: true, restaurantId: true, name: true },
-        })
-        branchId = defaultBranch?.id || null
-        if (defaultBranch) {
-          setCachedBranchMeta(defaultBranch)
-        }
-      }
-    }
-
-    const cacheKey = `${branchId || 'all'}_${statusFilter}`
-    const cachedData = getLiveOrdersCache(cacheKey, 3000)
+    // 1. Resolve branch filter
+    const explicitBranchFilter = branchIdParam && isUuid(branchIdParam) && branchIdParam !== 'all' ? branchIdParam : null
+    const cacheKey = `${explicitBranchFilter || 'all'}_${statusFilter}`
+    const cachedData = getLiveOrdersCache(cacheKey, 2500)
 
     // 2. High-speed in-memory cache check (< 5ms response)
     if (cachedData) {
@@ -66,14 +51,14 @@ export async function GET(request: NextRequest) {
     // Active in-progress order statuses matching OrderStatusEnum in Prisma
     const inProgressStatuses: OrderStatusEnum[] = [
       'pending',
+      'PENDING',
+      'accepted',
+      'ACCEPTED',
       'confirmed',
       'preparing',
-      'ready',
-      'PENDING',
       'PREPARING',
-      'ACCEPTED' as any,
-      'READY' as any,
-      'accepted' as any,
+      'ready',
+      'READY',
     ]
 
     let formattedOrders: any[] = []
@@ -82,17 +67,21 @@ export async function GET(request: NextRequest) {
       // 3. Fetch active orders OR orders created today with lean SELECT query
       const rawOrders = await prisma.order.findMany({
         where: {
-          ...(branchId ? { branchId } : {}),
           deletedAt: null,
           status: {
             notIn: ['cancelled', 'CANCELLED', 'refunded'],
           },
-          OR: [
-            { createdAt: { gte: todayStart } },
+          ...(explicitBranchFilter ? { branchId: explicitBranchFilter } : {}),
+          AND: [
             {
-              status: {
-                in: inProgressStatuses,
-              },
+              OR: [
+                { createdAt: { gte: todayStart } },
+                {
+                  status: {
+                    in: inProgressStatuses as any,
+                  },
+                },
+              ],
             },
           ],
         },

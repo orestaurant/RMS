@@ -32,7 +32,7 @@ export function TableQRGenerator({
   initialTable = '1',
   isOpen = true,
   onClose,
-  restaurantName = 'Spice Garden Restaurant',
+  restaurantName = 'RestoSphere',
 }: TableQRGeneratorProps) {
   const [mode, setMode] = useState<'single' | 'batch'>('single')
   const [tableNumber, setTableNumber] = useState<string>(String(initialTable))
@@ -70,7 +70,7 @@ export function TableQRGenerator({
   const getTargetUrl = (table: string | number) => {
     const cleanTable = String(table).trim()
     const base = hostUrl && hostUrl.trim() ? hostUrl.trim().replace(/\/$/, '') : 'http://localhost:3000'
-    return `${base}/menu?table=${encodeURIComponent(cleanTable)}`
+    return `${base}/menu?table=${encodeURIComponent(cleanTable)}&theme=light`
   }
 
   const formatTableBadge = (tbl: string | number) => {
@@ -407,21 +407,9 @@ function StickerCard({
         compact ? 'p-4 max-w-[260px]' : 'p-6 max-w-[340px] w-full'
       }`}
     >
-      {/* Decorative top accent */}
-      <div className="w-12 h-1 rounded-full bg-primary/40 mb-3" />
-
-      {/* Restaurant Header */}
-      <div className="flex items-center gap-2 mb-1.5">
-        <div className="size-6 rounded-md bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold shadow-sm">
-          <UtensilsCrossed className="size-3.5" />
-        </div>
-        <span className="font-bold text-sm tracking-tight text-foreground">
-          {restaurantName}
-        </span>
-      </div>
-
-      <div className="text-[11px] font-semibold text-primary uppercase tracking-wider mb-3">
-        Scan to View Menu & Order
+      <div className="text-xs font-black text-primary uppercase tracking-wider mb-3 mt-1 flex items-center justify-center gap-1.5">
+        <QrCode className="size-3.5" />
+        <span>Scan to View Menu & Order</span>
       </div>
 
       {/* QR Code Container with High Contrast & Framing */}

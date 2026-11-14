@@ -19,6 +19,11 @@ import {
   setCachedBranchMeta,
 } from '@/lib/dashboard-cache'
 
+// High-speed in-memory caches to eliminate redundant Neon DB round-trips over Singapore link
+const inMemoryTableCache = new Map<string, { id: string; tableNumber: string }>()
+const inMemoryMenuItemCache = new Map<string, { id: string; name: string; basePrice: number; isAvailable: boolean; categoryName?: string; cachedAt: number }>()
+const MENU_ITEM_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+
 /**
  * GET /api/orders
  * Query orders by tableNumber, status, or branchId
@@ -72,8 +77,6 @@ export async function GET(request: NextRequest) {
                     'accepted',
                     'ACCEPTED',
                     'confirmed',
-                    'CONFIRMED',
-                    'cooking',
                     'preparing',
                     'PREPARING',
                     'ready',
@@ -101,8 +104,6 @@ export async function GET(request: NextRequest) {
                     'accepted',
                     'ACCEPTED',
                     'confirmed',
-                    'CONFIRMED',
-                    'cooking',
                     'preparing',
                     'PREPARING',
                     'ready',
@@ -126,8 +127,6 @@ export async function GET(request: NextRequest) {
           'accepted',
           'ACCEPTED',
           'confirmed',
-          'CONFIRMED',
-          'cooking',
           'preparing',
           'PREPARING',
           'ready',
@@ -137,11 +136,11 @@ export async function GET(request: NextRequest) {
     } else if (role === 'chef') {
       where.status = {
         in: [
+          'pending',
+          'PENDING',
           'accepted',
           'ACCEPTED',
           'confirmed',
-          'CONFIRMED',
-          'cooking',
           'preparing',
           'PREPARING',
           'ready',
@@ -365,89 +364,131 @@ export async function POST(request: NextRequest) {
     const restaurantId = branch.restaurantId
     branchId = branch.id
 
-    // 4. Resolve or Associate Table (Fast lookup)
+    // 4. Resolve Table & 5. Fetch Menu Items concurrently (with high-speed memory caching)
     let tableId = providedTableId || null
     let finalTableNumber = resolvedTableNumber || '1'
 
+    let tablePromise: Promise<any> | null = null
+
     if (isDineIn) {
       if (tableId && !resolvedTableNumber) {
-        const existingTable = await prisma.restaurantTable.findUnique({
-          where: { id: tableId },
-          select: { tableNumber: true },
-        })
-        if (existingTable) {
-          finalTableNumber = existingTable.tableNumber
+        const cached = inMemoryTableCache.get(`${branchId}:id:${tableId}`)
+        if (cached) {
+          finalTableNumber = cached.tableNumber
+        } else {
+          tablePromise = prisma.restaurantTable.findUnique({
+            where: { id: tableId },
+            select: { id: true, tableNumber: true },
+          })
         }
       } else if (resolvedTableNumber && !tableId) {
-        let table = await prisma.restaurantTable.findFirst({
-          where: {
-            branchId,
-            tableNumber: resolvedTableNumber,
-            deletedAt: null,
-          },
-          select: { id: true, tableNumber: true },
-        })
-
-        if (!table) {
-          try {
-            table = await prisma.restaurantTable.create({
-              data: {
-                branchId,
-                restaurantId,
-                organizationId,
-                tableNumber: resolvedTableNumber,
-                capacity: 4,
-                section: 'dining',
-                status: 'occupied',
-              },
-              select: { id: true, tableNumber: true },
-            })
-          } catch (tblErr) {
-            console.warn('Could not create table record:', tblErr)
-          }
+        const tableCacheKey = `${branchId}:${resolvedTableNumber}`
+        const cached = inMemoryTableCache.get(tableCacheKey)
+        if (cached) {
+          tableId = cached.id
+          finalTableNumber = cached.tableNumber
+        } else {
+          tablePromise = prisma.restaurantTable.findFirst({
+            where: {
+              branchId,
+              tableNumber: resolvedTableNumber,
+              deletedAt: null,
+            },
+            select: { id: true, tableNumber: true },
+          })
         }
-        if (table) {
-          tableId = table.id
-        }
-      }
-
-      // Mark table occupied non-blockingly
-      if (tableId) {
-        prisma.restaurantTable.update({
-          where: { id: tableId },
-          data: { status: 'occupied' },
-        }).catch(() => {})
       }
     }
 
-    // 5. Fetch Menu Items with lean select for maximum speed
+    // Check memory cache for menu items
     const itemIds = items.map((i: any) => i.menuItemId).filter(Boolean)
-    const dbMenuItems = await prisma.menuItem.findMany({
-      where: {
-        id: { in: itemIds },
-        deletedAt: null,
-      },
-      select: {
-        id: true,
-        name: true,
-        basePrice: true,
-        isAvailable: true,
-        category: {
-          select: { name: true },
-        },
-      },
+    const nowMs = Date.now()
+    const uncachedItemIds = itemIds.filter((id: string) => {
+      const cached = inMemoryMenuItemCache.get(id)
+      return !cached || nowMs - cached.cachedAt > MENU_ITEM_CACHE_TTL
     })
 
-    const menuItemMap = new Map(dbMenuItems.map((m) => [m.id, m]))
+    const menuItemsPromise = uncachedItemIds.length > 0
+      ? prisma.menuItem.findMany({
+          where: {
+            id: { in: uncachedItemIds },
+            deletedAt: null,
+          },
+          select: {
+            id: true,
+            name: true,
+            basePrice: true,
+            isAvailable: true,
+            category: { select: { name: true } },
+          },
+        })
+      : Promise.resolve([])
 
-    // Check availability
+    // Run table lookup & missing menu items lookup in parallel!
+    const [resolvedTableData, freshMenuItems] = await Promise.all([
+      tablePromise || Promise.resolve(null),
+      menuItemsPromise,
+    ])
+
+    // Update in-memory menu items cache
+    if (freshMenuItems && Array.isArray(freshMenuItems)) {
+      for (const m of freshMenuItems) {
+        inMemoryMenuItemCache.set(m.id, {
+          id: m.id,
+          name: m.name,
+          basePrice: Number(m.basePrice),
+          isAvailable: m.isAvailable !== false,
+          categoryName: m.category?.name,
+          cachedAt: nowMs,
+        })
+      }
+    }
+
+    // Update in-memory table cache or create table if missing
+    if (resolvedTableData) {
+      tableId = resolvedTableData.id
+      finalTableNumber = resolvedTableData.tableNumber
+      inMemoryTableCache.set(`${branchId}:${finalTableNumber}`, resolvedTableData)
+      inMemoryTableCache.set(`${branchId}:id:${tableId}`, resolvedTableData)
+    } else if (isDineIn && resolvedTableNumber && !tableId) {
+      try {
+        const newTable = await prisma.restaurantTable.create({
+          data: {
+            branchId,
+            restaurantId,
+            organizationId,
+            tableNumber: resolvedTableNumber,
+            capacity: 4,
+            section: 'dining',
+            status: 'occupied',
+          },
+          select: { id: true, tableNumber: true },
+        })
+        tableId = newTable.id
+        finalTableNumber = newTable.tableNumber
+        inMemoryTableCache.set(`${branchId}:${finalTableNumber}`, newTable)
+        inMemoryTableCache.set(`${branchId}:id:${tableId}`, newTable)
+      } catch (tblErr) {
+        console.warn('Could not create table record:', tblErr)
+      }
+    }
+
+    // Mark table occupied non-blockingly
+    if (tableId) {
+      prisma.restaurantTable.update({
+        where: { id: tableId },
+        data: { status: 'occupied' },
+      }).catch(() => {})
+    }
+
+    // Check item availability
     for (const reqItem of items) {
-      const dbItem = menuItemMap.get(reqItem.menuItemId)
-      if (dbItem && dbItem.isAvailable === false) {
+      const cached = inMemoryMenuItemCache.get(reqItem.menuItemId)
+      if (cached && cached.isAvailable === false) {
         return NextResponse.json(
           {
             success: false,
-            message: `"${dbItem.name}" is currently out of stock and cannot be ordered.`,
+            message: `"${cached.name}" is currently out of stock and cannot be ordered.`,
           },
           { status: 400 }
         )
@@ -459,7 +500,7 @@ export async function POST(request: NextRequest) {
     const orderItemsCreateData: any[] = []
 
     for (const it of items) {
-      const dbItem = menuItemMap.get(it.menuItemId)
+      const dbItem = inMemoryMenuItemCache.get(it.menuItemId)
       const qty = Math.max(1, parseInt(it.quantity || '1') || 1)
       const name = it.name || dbItem?.name || 'Menu Item'
       const clientPrice = parseFloat(it.price || 0) || 0
@@ -580,14 +621,14 @@ export async function POST(request: NextRequest) {
         locationAccuracy: parsedAccuracy,
         locationCapturedAt: parsedCapturedAt ? parsedCapturedAt.toISOString() : null,
         items: orderItemsCreateData.map((i: any) => {
-          const dbItem = menuItemMap.get(i.menuItemId)
+          const dbItem = inMemoryMenuItemCache.get(i.menuItemId)
           return {
             id: i.menuItemId,
             name: i.itemName,
             quantity: i.quantity,
             station: getKitchenStation(
               i.itemName,
-              (dbItem as any)?.category?.name || (dbItem as any)?.categoryId
+              dbItem?.categoryName
             ),
             completed: false,
           }

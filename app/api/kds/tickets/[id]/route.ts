@@ -148,9 +148,8 @@ export async function PATCH(
       updateKDSCacheTicket(k, fallbackUpdate)
     }
 
-    if (normalizedKdsStatus === 'served') {
-      invalidateKDSCache()
-    }
+    // Invalidate both caches immediately on any status change for real-time reactivity
+    invalidateKDSCache()
     invalidateLiveOrdersCache()
 
     return NextResponse.json(

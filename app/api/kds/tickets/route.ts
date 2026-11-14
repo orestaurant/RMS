@@ -25,7 +25,9 @@ export async function GET(request: NextRequest) {
     if (cached) {
       let filteredTickets = cached.tickets
       if (statusFilter !== 'all') {
-        filteredTickets = filteredTickets.filter((t: any) => t.status === statusFilter)
+        filteredTickets = filteredTickets.filter((t: any) =>
+          t.status === statusFilter || normalizeKdsStatus(t.status) === statusFilter
+        )
       }
       if (stationFilter && stationFilter !== 'All') {
         filteredTickets = filteredTickets.filter((t: any) =>
@@ -54,21 +56,22 @@ export async function GET(request: NextRequest) {
 
     // 2. Fetch real active orders from PostgreSQL via Prisma using lean SELECT fields
     try {
-      const liveStatuses: any[] = [
+      const activeLiveStatuses: any[] = [
         'pending',
+        'PENDING',
+        'accepted',
+        'ACCEPTED',
         'confirmed',
         'preparing',
-        'ready',
-        'PENDING',
         'PREPARING',
-        'CONFIRMED',
+        'ready',
         'READY',
       ]
 
       const dbOrders = await prisma.order.findMany({
         where: {
-          status: { in: liveStatuses as any },
           deletedAt: null,
+          status: { in: activeLiveStatuses as any },
         },
         select: {
           id: true,
@@ -283,7 +286,9 @@ export async function GET(request: NextRequest) {
     // Filter tickets if station or status specified
     let filteredTickets = formattedTickets
     if (statusFilter !== 'all') {
-      filteredTickets = filteredTickets.filter((t) => t.status === statusFilter)
+      filteredTickets = filteredTickets.filter((t) =>
+        t.status === statusFilter || normalizeKdsStatus(t.status) === statusFilter
+      )
     }
     if (stationFilter && stationFilter !== 'All') {
       filteredTickets = filteredTickets.filter((t) =>

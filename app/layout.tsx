@@ -32,13 +32,13 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} dark bg-background`}
+      className={`${geistSans.variable} ${geistMono.variable} bg-background`}
       suppressHydrationWarning
     >
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('theme');if(t==='light'){document.documentElement.classList.remove('dark');document.documentElement.classList.add('light');}else{document.documentElement.classList.add('dark');document.documentElement.classList.remove('light');}}catch(e){}})();`,
+            __html: `(function(){try{var p=new URLSearchParams(window.location.search);var ut=p.get('theme');var t=ut||localStorage.getItem('theme');if(ut){try{localStorage.setItem('theme',ut);}catch(e){}}if(t==='dark'){document.documentElement.classList.add('dark');document.documentElement.classList.remove('light');}else{document.documentElement.classList.remove('dark');document.documentElement.classList.add('light');}}catch(e){}})();`,
           }}
         />
       </head>

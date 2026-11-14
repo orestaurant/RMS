@@ -32,6 +32,7 @@ import {
   Receipt,
 } from 'lucide-react'
 import { CustomerBillModal } from '@/components/billing/customer-bill-modal'
+import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -528,7 +529,9 @@ export function CustomerMenu() {
           o.status === 'pending' ||
           o.status === 'confirmed' ||
           o.status === 'PENDING' ||
-          o.status === 'CONFIRMED'
+          o.status === 'CONFIRMED' ||
+          o.status === 'accepted' ||
+          o.status === 'ACCEPTED'
       ),
     [tableOrders]
   )
@@ -689,9 +692,10 @@ export function CustomerMenu() {
       setCart({})
       setIsCartOpen(false)
       setOrderNotes('')
-      // Refresh table live orders and switch directly to Live Orders tracker view
-      fetchTableOrders()
+      // Instantly open live order tracker
       setShowOrdersModal(true)
+      // Background non-blocking table orders refresh
+      fetchTableOrders()
     } catch (err: any) {
       console.error('Order creation failed:', err)
       setOrderError(err.message || 'Network error occurred while sending order. Please try again.')
@@ -779,7 +783,7 @@ export function CustomerMenu() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="text-base font-black tracking-tight leading-none text-foreground truncate">
-                  Spice Garden
+                  RestoSphere
                 </h1>
                 <span className="hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary border border-primary/20 shrink-0">
                   Dine-in
@@ -867,6 +871,9 @@ export function CustomerMenu() {
                 </span>
               )}
             </Button>
+
+            {/* Mobile / Customer Light-Dark Theme Toggle */}
+            <ThemeToggle showLabel={false} className="h-9 w-9 p-0 rounded-xl" />
           </div>
         </div>
       </header>
