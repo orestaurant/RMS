@@ -4,7 +4,7 @@ import { KitchenDisplay } from '@/components/kitchen/kitchen-display'
 export default function KitchenPage() {
   return (
     <>
-      <TopNavbar title="Kitchen Display" subtitle="Live order queue · Kanban view" />
+      <TopNavbar title="Kitchen Display" subtitle="Live order queue · Kitchen display" />
       <KitchenDisplay />
     </>
   )

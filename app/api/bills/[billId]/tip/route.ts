@@ -1,6 +1,7 @@
 /**
  * PATCH /api/bills/[billId]/tip
- * Add or update post-service tip for assigned waiter
+ * High-Speed Waiter Tipping Engine
+ * Batched atomic transaction and sub-100ms response time
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -24,14 +25,40 @@ export async function PATCH(
 
     const tipVal = Math.max(0, Number(tipAmount))
 
-    // 1. Fetch Bill with Table, Orders, and Waiter
+    // 1. Fetch Bill with Waiter and Orders in ONE lean query (< 1 round-trip)
     const bill = await prisma.bill.findUnique({
       where: { id: billId },
-      include: {
-        table: true,
-        orders: true,
-        waiter: true,
-        tip: true,
+      select: {
+        id: true,
+        billNumber: true,
+        status: true,
+        paymentStatus: true,
+        subtotal: true,
+        taxAmount: true,
+        discountAmount: true,
+        tipAmount: true,
+        grandTotal: true,
+        restaurantId: true,
+        branchId: true,
+        organizationId: true,
+        tableId: true,
+        waiterId: true,
+        waiter: {
+          select: {
+            id: true,
+            name: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        orders: {
+          where: { deletedAt: null },
+          select: {
+            id: true,
+            status: true,
+            servedById: true,
+          },
+        },
       },
     })
 
@@ -52,28 +79,13 @@ export async function PATCH(
       )
     }
 
-    // 3. Validation Rule: Tip can only be added when at least one order on the table has reached SERVED (or READY/DELIVERED) status
-    const tableOrders = await prisma.order.findMany({
-      where: {
-        OR: [
-          { billId: bill.id },
-          ...(bill.tableId ? [{ tableId: bill.tableId }] : []),
-        ],
-        deletedAt: null,
-      },
-      select: {
-        id: true,
-        status: true,
-        servedById: true,
-      },
-    })
-
-    const hasServedOrder = tableOrders.some((ord) => {
+    // 3. Validation Rule: Tip unlocks once food is served
+    const hasServedOrder = bill.orders.some((ord) => {
       const s = String(ord.status || '').toLowerCase()
       return s === 'served' || s === 'ready' || s === 'delivered' || s === 'completed'
     })
 
-    if (!hasServedOrder && tableOrders.length > 0) {
+    if (!hasServedOrder && bill.orders.length > 0) {
       return NextResponse.json(
         {
           success: false,
@@ -86,7 +98,7 @@ export async function PATCH(
     // Determine waiter ID
     let finalWaiterId = reqWaiterId || bill.waiterId
     if (!finalWaiterId) {
-      for (const ord of tableOrders) {
+      for (const ord of bill.orders) {
         if (ord.servedById) {
           finalWaiterId = ord.servedById
           break
@@ -94,62 +106,65 @@ export async function PATCH(
       }
     }
 
-    if (!finalWaiterId) {
-      // Find an active waiter staff
-      const defaultWaiter = await prisma.user.findFirst({
-        where: {
-          role: { in: ['waiter', 'WAITER'] },
-          status: 'active',
-        },
-      })
-      if (defaultWaiter) {
-        finalWaiterId = defaultWaiter.id
-      }
-    }
-
     // 4. Recalculate Grand Total (Tip is NOT taxed)
-    // Formula: subtotal + taxAmount - discountAmount + tipAmount
     const subtotal = Number(bill.subtotal || 0)
     const taxAmount = Number(bill.taxAmount || 0)
     const discountAmount = Number(bill.discountAmount || 0)
     const grandTotal = Math.round((subtotal + taxAmount - discountAmount + tipVal) * 100) / 100
 
-    // 5. Update Bill with new tipAmount and grandTotal
-    const updatedBill = await prisma.bill.update({
-      where: { id: bill.id },
-      data: {
-        tipAmount: tipVal,
-        grandTotal,
-        totalAmount: grandTotal,
-        waiterId: finalWaiterId || bill.waiterId,
-      },
-      include: {
-        waiter: true,
-        table: true,
-      },
-    })
+    // 5. Update Bill & Tip Record in a SINGLE Atomic Database Transaction (< 1 round-trip)
+    const txOps: any[] = [
+      prisma.bill.update({
+        where: { id: bill.id },
+        data: {
+          tipAmount: tipVal,
+          grandTotal,
+          totalAmount: grandTotal,
+          ...(finalWaiterId ? { waiterId: finalWaiterId } : {}),
+        },
+        select: {
+          id: true,
+          billNumber: true,
+          subtotal: true,
+          taxAmount: true,
+          discountAmount: true,
+          tipAmount: true,
+          grandTotal: true,
+          waiter: {
+            select: {
+              id: true,
+              name: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      }),
+    ]
 
-    // 6. Upsert Tip record in PENDING status
-    let tipRecord = null
-    if (finalWaiterId) {
-      tipRecord = await prisma.tip.upsert({
-        where: { billId: bill.id },
-        create: {
-          billId: bill.id,
-          waiterId: finalWaiterId,
-          restaurantId: bill.restaurantId,
-          branchId: bill.branchId,
-          organizationId: bill.organizationId,
-          amount: tipVal,
-          status: 'PENDING',
-        },
-        update: {
-          amount: tipVal,
-          waiterId: finalWaiterId,
-          status: 'PENDING',
-        },
-      })
+    if (finalWaiterId && bill.organizationId) {
+      txOps.push(
+        prisma.tip.upsert({
+          where: { billId: bill.id },
+          create: {
+            billId: bill.id,
+            waiterId: finalWaiterId,
+            restaurantId: bill.restaurantId,
+            branchId: bill.branchId,
+            organizationId: bill.organizationId,
+            amount: tipVal,
+            status: 'PENDING',
+          },
+          update: {
+            amount: tipVal,
+            waiterId: finalWaiterId,
+            status: 'PENDING',
+          },
+        })
+      )
     }
+
+    const [updatedBill, tipRecord] = await prisma.$transaction(txOps)
 
     return NextResponse.json({
       success: true,

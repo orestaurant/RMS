@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma'
 import {
   getCachedMenuItems,
   setCachedMenuItems,
+  addCachedMenuItem,
   invalidateAllMenuCaches,
   CachedMenuItem,
 } from '@/lib/menu-cache'
@@ -28,9 +29,24 @@ export async function GET(request: NextRequest) {
 
     if (!allItems) {
       isHit = false
-      // 2. Fetch from DB using ultra-lean select query
+      // 2. Fetch from DB using ultra-lean select query (Strictly exclude raw inventory/warehouse items, while safely handling NULL descriptions)
       const dbItems = await prisma.menuItem.findMany({
-        where: { deletedAt: null },
+        where: {
+          deletedAt: null,
+          category: {
+            name: { not: 'Inventory' },
+          },
+          OR: [
+            { description: null },
+            {
+              NOT: {
+                description: {
+                  startsWith: 'SKU:',
+                },
+              },
+            },
+          ],
+        },
         select: {
           id: true,
           name: true,
@@ -65,31 +81,37 @@ export async function GET(request: NextRequest) {
         orderBy: { displayOrder: 'asc' },
       })
 
-      allItems = dbItems.map((item) => ({
-        id: item.id,
-        name: item.name,
-        description: item.description || '',
-        categoryId: item.categoryId,
-        restaurantId: item.restaurantId,
-        category: item.category?.name || 'Uncategorized',
-        price: Number(item.basePrice),
-        costPrice: item.costPrice ? Number(item.costPrice) : undefined,
-        image: item.imageUrl || '',
-        isVeg: item.isVegetarian,
-        isVegan: item.isVegan,
-        isSpicy: item.isSpicy,
-        spiceLevel: item.spiceLevel || 0,
-        isAvailable: item.isAvailable,
-        prepTime: item.preparationTimeMinutes || 15,
-        rating: 4.8,
-        tags: item.isSpicy ? ['spicy'] : [],
-        variants:
-          item.variants?.map((v) => ({
-            id: v.id,
-            name: v.name,
-            price: Number(v.priceModifier || 0),
-          })) || [],
-      }))
+      allItems = dbItems
+        .filter(
+          (item) =>
+            (item.category?.name || '').toLowerCase().trim() !== 'inventory' &&
+            (!item.description || !/^sku:\s*[^\s|]+\s*\|/i.test(item.description))
+        )
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          description: item.description || '',
+          categoryId: item.categoryId,
+          restaurantId: item.restaurantId,
+          category: item.category?.name || 'Uncategorized',
+          price: Number(item.basePrice),
+          costPrice: item.costPrice ? Number(item.costPrice) : undefined,
+          image: item.imageUrl || '',
+          isVeg: item.isVegetarian,
+          isVegan: item.isVegan,
+          isSpicy: item.isSpicy,
+          spiceLevel: item.spiceLevel || 0,
+          isAvailable: item.isAvailable,
+          prepTime: item.preparationTimeMinutes || 15,
+          rating: 4.8,
+          tags: item.isSpicy ? ['spicy'] : [],
+          variants:
+            item.variants?.map((v) => ({
+              id: v.id,
+              name: v.name,
+              price: Number(v.priceModifier || 0),
+            })) || [],
+        }))
 
       setCachedMenuItems(allItems)
     }
@@ -163,7 +185,7 @@ export async function GET(request: NextRequest) {
       },
       {
         headers: {
-          'Cache-Control': 'public, max-age=15, stale-while-revalidate=60',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
           'X-Menu-Cache': isHit ? 'HIT' : 'MISS',
         },
       }
@@ -262,27 +284,34 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // Invalidate caches immediately
-    invalidateAllMenuCaches()
+    const formattedItem: CachedMenuItem = {
+      id: newItem.id,
+      name: newItem.name,
+      description: newItem.description || '',
+      categoryId: newItem.categoryId,
+      restaurantId: newItem.restaurantId,
+      category: newItem.category?.name || 'Uncategorized',
+      price: Number(newItem.basePrice),
+      costPrice: newItem.costPrice ? Number(newItem.costPrice) : undefined,
+      image: newItem.imageUrl || '',
+      isVeg: newItem.isVegetarian,
+      isVegan: newItem.isVegan,
+      isSpicy: newItem.isSpicy,
+      spiceLevel: newItem.spiceLevel || 0,
+      isAvailable: newItem.isAvailable,
+      prepTime: newItem.preparationTimeMinutes || 15,
+      rating: 4.8,
+      tags: newItem.isSpicy ? ['spicy'] : [],
+      variants: [],
+    }
+
+    // Immediately cache newly added item so next GET call is 0ms HIT
+    addCachedMenuItem(formattedItem)
 
     return NextResponse.json({
       success: true,
       message: 'Menu item created successfully',
-      data: {
-        id: newItem.id,
-        name: newItem.name,
-        description: newItem.description || '',
-        categoryId: newItem.categoryId,
-        category: newItem.category?.name || 'Uncategorized',
-        price: Number(newItem.basePrice),
-        costPrice: newItem.costPrice ? Number(newItem.costPrice) : undefined,
-        image: newItem.imageUrl || '',
-        isVeg: newItem.isVegetarian,
-        isVegan: newItem.isVegan,
-        isSpicy: newItem.isSpicy,
-        isAvailable: newItem.isAvailable,
-        prepTime: newItem.preparationTimeMinutes || 15,
-      },
+      data: formattedItem,
     })
   } catch (error: any) {
     console.error('Error creating menu item:', error)

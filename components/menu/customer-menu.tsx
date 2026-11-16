@@ -30,7 +30,24 @@ import {
   SlidersHorizontal,
   Edit3,
   Receipt,
+  Car,
+  MapPin,
+  Navigation,
+  Compass,
+  ExternalLink,
 } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  CustomerLocationLock,
+  CustomerLocationData,
+  isValidCoord,
+} from '@/components/orders/CustomerLocationLock'
 import { CustomerBillModal } from '@/components/billing/customer-bill-modal'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { Button } from '@/components/ui/button'
@@ -176,6 +193,19 @@ export function CustomerMenu() {
   const [showTableModal, setShowTableModal] = useState<boolean>(false)
   const [manualTableInput, setManualTableInput] = useState<string>('')
 
+  // 1b. Order Mode & Highway Drive-In Delivery State
+  const [orderMode, setOrderMode] = useState<'dine_in' | 'drive_in'>('dine_in')
+  const [isDriveInModalOpen, setIsDriveInModalOpen] = useState<boolean>(false)
+  const [locationData, setLocationData] = useState<CustomerLocationData>({
+    isLocationLocked: false,
+    vehicleNumber: '',
+    landmarkNote: '',
+    customerLat: null,
+    customerLng: null,
+    locationAccuracy: null,
+    locationCapturedAt: null,
+  })
+
   // 2. Data State
   const [menuItems, setMenuItems] = useState<CustomerMenuItem[]>([])
   const [categories, setCategories] = useState<Array<{ id: string; name: string }>>([])
@@ -215,9 +245,52 @@ export function CustomerMenu() {
   const [confirmedOrder, setConfirmedOrder] = useState<OrderConfirmationData | null>(null)
   const [liveStatus, setLiveStatus] = useState<string>('pending')
 
-  // Initialize and persist table number from searchParams or localStorage
+  // Initialize and persist table number / drive-in vehicle info from searchParams or localStorage
   useEffect(() => {
     const urlTable = searchParams?.get('table') || searchParams?.get('tableNumber')
+    const urlMode = searchParams?.get('mode') || searchParams?.get('orderType')
+    const urlVehicle = searchParams?.get('vehicle') || searchParams?.get('vehicleNumber')
+    const urlLandmark = searchParams?.get('landmark') || searchParams?.get('spot')
+    const isDriveInParam =
+      urlMode === 'drive_in' ||
+      urlMode === 'car' ||
+      searchParams?.get('drive_in') === 'true' ||
+      Boolean(urlVehicle)
+
+    let initialMode: 'dine_in' | 'drive_in' = 'dine_in'
+    if (isDriveInParam) {
+      initialMode = 'drive_in'
+    } else if (typeof window !== 'undefined') {
+      const savedMode = localStorage.getItem('rms_customer_order_mode')
+      if (savedMode === 'drive_in') {
+        initialMode = 'drive_in'
+      }
+    }
+    setOrderMode(initialMode)
+
+    if (typeof window !== 'undefined') {
+      try {
+        const savedLoc = localStorage.getItem('rms_customer_location')
+        if (savedLoc) {
+          const parsed = JSON.parse(savedLoc)
+          setLocationData((prev) => ({
+            ...prev,
+            ...parsed,
+            vehicleNumber: urlVehicle ? String(urlVehicle).trim().toUpperCase() : parsed.vehicleNumber || '',
+            landmarkNote: urlLandmark ? String(urlLandmark).trim() : parsed.landmarkNote || '',
+          }))
+        } else if (urlVehicle || urlLandmark) {
+          setLocationData((prev) => ({
+            ...prev,
+            vehicleNumber: urlVehicle ? String(urlVehicle).trim().toUpperCase() : '',
+            landmarkNote: urlLandmark ? String(urlLandmark).trim() : '',
+          }))
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
     const savedTable = typeof window !== 'undefined' ? localStorage.getItem('rms_customer_table') : null
 
     if (urlTable && urlTable.trim()) {
@@ -228,7 +301,7 @@ export function CustomerMenu() {
     } else if (savedTable && savedTable.trim()) {
       setTableNumber(savedTable.trim())
       setIsTableLocked(true)
-    } else {
+    } else if (!isDriveInParam && initialMode !== 'drive_in') {
       setShowTableModal(true)
     }
   }, [searchParams])
@@ -248,9 +321,13 @@ export function CustomerMenu() {
       const catJson = await catRes.json()
 
       if (itemsJson.success && Array.isArray(itemsJson.data)) {
-        // Display all available menu items (isAvailable !== false)
+        // Display all available menu items (strictly excluding raw warehouse inventory items)
         const availableOnly = itemsJson.data.filter(
-          (item: CustomerMenuItem) => item.isAvailable !== false
+          (item: CustomerMenuItem) =>
+            item.isAvailable !== false &&
+            (item.category || '').toLowerCase().trim() !== 'inventory' &&
+            !/^sku:\s*[^\s|]+\s*\|/i.test(item.description || '') &&
+            (item as any).source !== 'inventory'
         )
         setMenuItems(availableOnly)
       } else {
@@ -258,7 +335,10 @@ export function CustomerMenu() {
       }
 
       if (catJson.success && Array.isArray(catJson.data)) {
-        setCategories(catJson.data)
+        const cleanCategories = catJson.data.filter(
+          (cat: any) => (cat.name || '').toLowerCase().trim() !== 'inventory'
+        )
+        setCategories(cleanCategories)
       }
     } catch (err: any) {
       console.error('Error loading menu:', err)
@@ -268,11 +348,21 @@ export function CustomerMenu() {
     }
   }, [])
 
+  // Active table / car delivery key for live orders polling
+  const activeTableKey = useMemo(() => {
+    if (orderMode === 'drive_in') {
+      return locationData.vehicleNumber
+        ? `🚗 ${locationData.vehicleNumber.trim().toUpperCase()}`
+        : '🚗 Car Delivery'
+    }
+    return tableNumber
+  }, [orderMode, locationData.vehicleNumber, tableNumber])
+
   // Poll active table orders so customer sees live queue & cooking updates in real time
   const fetchTableOrders = useCallback(async () => {
-    if (!tableNumber) return
+    if (!activeTableKey) return
     try {
-      const res = await fetch(`/api/orders?table=${encodeURIComponent(tableNumber)}`)
+      const res = await fetch(`/api/orders?table=${encodeURIComponent(activeTableKey)}`)
       if (res.ok) {
         const json = await res.json()
         if (json.success && Array.isArray(json.data)) {
@@ -282,7 +372,7 @@ export function CustomerMenu() {
     } catch (err) {
       console.warn('Error fetching live table orders:', err)
     }
-  }, [tableNumber])
+  }, [activeTableKey])
 
   useEffect(() => {
     loadMenu()
@@ -641,7 +731,13 @@ export function CustomerMenu() {
       return
     }
 
-    if (!tableNumber) {
+    if (orderMode === 'drive_in') {
+      if (!locationData.vehicleNumber && !locationData.landmarkNote && !isValidCoord(locationData.customerLat, locationData.customerLng)) {
+        setIsDriveInModalOpen(true)
+        setOrderError('Please enter your vehicle number or highway parking spot before placing order.')
+        return
+      }
+    } else if (!tableNumber) {
       setShowTableModal(true)
       return
     }
@@ -650,12 +746,22 @@ export function CustomerMenu() {
       setSubmitting(true)
       setOrderError(null)
 
+      const finalTable = orderMode === 'drive_in'
+        ? (locationData.vehicleNumber ? `🚗 ${locationData.vehicleNumber.trim().toUpperCase()}` : '🚗 Car Delivery')
+        : tableNumber
+
       const payload = {
-        tableNumber,
-        orderType: 'dine_in',
+        tableNumber: finalTable,
+        orderType: orderMode === 'drive_in' ? 'drive_in' : 'dine_in',
         status: 'pending',
         notes: orderNotes.trim() || undefined,
         totalAmount: cartGrandTotal,
+        vehicleNumber: orderMode === 'drive_in' ? (locationData.vehicleNumber?.trim().toUpperCase() || undefined) : undefined,
+        landmarkNote: orderMode === 'drive_in' ? (locationData.landmarkNote?.trim() || undefined) : undefined,
+        customerLat: orderMode === 'drive_in' ? locationData.customerLat : undefined,
+        customerLng: orderMode === 'drive_in' ? locationData.customerLng : undefined,
+        locationAccuracy: orderMode === 'drive_in' ? locationData.locationAccuracy : undefined,
+        isLocationLocked: orderMode === 'drive_in' ? true : undefined,
         items: cartItemList.map((ci) => ({
           menuItemId: ci.menuItem.id,
           name: ci.menuItem.name,
@@ -738,15 +844,21 @@ export function CustomerMenu() {
     return desc
   }
 
-  // Helper format table badge (e.g. T12, Table 01)
+  // Helper format table / vehicle badge (e.g. T12, Table 01, 🚗 DL 01 AB 1234)
   const displayTableBadge = useMemo(() => {
+    if (orderMode === 'drive_in') {
+      if (locationData.vehicleNumber) {
+        return `🚗 ${locationData.vehicleNumber.trim().toUpperCase()}`
+      }
+      return '🚗 Car Delivery'
+    }
     if (!tableNumber) return 'No Table'
     let s = String(tableNumber).trim()
     if (/^tt\d+/i.test(s)) s = s.replace(/^tt(\d+)/i, 'T$1')
     if (/^t\d+/i.test(s)) return s.toUpperCase()
     if (/^\d+$/.test(s)) return `Table ${s.padStart(2, '0')}`
     return s
-  }, [tableNumber])
+  }, [orderMode, locationData.vehicleNumber, tableNumber])
 
   // Active categories with available items only (hides empty 0-item categories)
   const activeCategories = useMemo(() => {
@@ -785,20 +897,34 @@ export function CustomerMenu() {
                 <h1 className="text-base font-black tracking-tight leading-none text-foreground truncate">
                   RestoSphere
                 </h1>
-                <span className="hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary border border-primary/20 shrink-0">
-                  Dine-in
+                <span className={cn(
+                  "hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border shrink-0",
+                  orderMode === 'drive_in'
+                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                    : "bg-primary/10 text-primary border-primary/20"
+                )}>
+                  {orderMode === 'drive_in' ? 'Car Drive-In' : 'Dine-in'}
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground font-medium mt-0.5 truncate">
-                Table Self-Ordering Menu
+                {orderMode === 'drive_in' ? 'Highway Food Cart / Car Ordering' : 'Table Self-Ordering Menu'}
               </p>
             </div>
           </div>
 
           {/* Right Header Actions: Table Badge + Live Orders + Cart */}
           <div className="flex items-center gap-2">
-            {/* Locked Table Number Badge */}
-            {tableNumber ? (
+            {/* Locked Table / Car Badge */}
+            {orderMode === 'drive_in' ? (
+              <button
+                type="button"
+                onClick={() => setIsDriveInModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 text-primary border border-primary/30 text-xs font-black shadow-xs cursor-pointer hover:bg-primary/20 transition-colors"
+                title="Click to view or edit Car & GPS Delivery spot"
+              >
+                <span>{displayTableBadge}</span>
+              </button>
+            ) : tableNumber ? (
               <div
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 text-xs font-black shadow-xs select-none"
                 title="Table locked for dine-in delivery"
@@ -817,6 +943,30 @@ export function CustomerMenu() {
                 Select Table
               </Button>
             )}
+
+            {/* Highway Car Drive-In Quick Button */}
+            <Button
+              variant={orderMode === 'drive_in' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => {
+                if (orderMode !== 'drive_in') {
+                  setOrderMode('drive_in')
+                  if (typeof window !== 'undefined') {
+                    localStorage.setItem('rms_customer_order_mode', 'drive_in')
+                  }
+                  if (!locationData.vehicleNumber && !locationData.landmarkNote) {
+                    setIsDriveInModalOpen(true)
+                  }
+                } else {
+                  setIsDriveInModalOpen(true)
+                }
+              }}
+              className="h-9 px-2.5 sm:px-3 rounded-xl text-xs font-bold gap-1.5 shadow-2xs cursor-pointer border-primary/30"
+              title="Highway & Food Cart Car Delivery"
+            >
+              <Car className="size-3.5" />
+              <span className="hidden sm:inline">Drive-In</span>
+            </Button>
 
             {/* Live Orders Button - Always prominent in header */}
             <Button
@@ -987,24 +1137,34 @@ export function CustomerMenu() {
         </div>
       )}
 
-      {/* 3. MISSING TABLE MODAL PROMPT */}
+      {/* 3. MISSING TABLE / DRIVE-IN SELECTION PROMPT */}
       {showTableModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="relative w-full max-w-sm bg-card border border-border shadow-2xl rounded-3xl p-6 text-center space-y-4">
+            <div className="flex justify-end absolute top-4 right-4">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowTableModal(false)}
+                className="size-7 rounded-full"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
             <div className="size-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto">
               <QrCode className="size-6" />
             </div>
             <div>
-              <h2 className="text-lg font-bold">Which table are you at?</h2>
+              <h2 className="text-lg font-bold">Select Dining or Car Spot</h2>
               <p className="text-xs text-muted-foreground mt-1">
-                Scan your table QR code sticker or enter your table number below to order.
+                Enter your table number or select Highway Car Drive-In for vehicle delivery.
               </p>
             </div>
 
             <form onSubmit={handleSetTable} className="space-y-3">
               <Input
                 type="text"
-                placeholder="e.g. 5, 12, or VIP-1"
+                placeholder="Table # (e.g. 5, 12, or VIP-1)"
                 value={manualTableInput}
                 onChange={(e) => setManualTableInput(e.target.value)}
                 autoFocus
@@ -1013,11 +1173,37 @@ export function CustomerMenu() {
               <Button
                 type="submit"
                 disabled={!manualTableInput.trim()}
-                className="w-full h-11 rounded-xl font-bold"
+                className="w-full h-11 rounded-xl font-bold cursor-pointer"
               >
                 Confirm Table
               </Button>
             </form>
+
+            <div className="relative my-2">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-border" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-card px-2 text-muted-foreground text-[10px] font-bold">OR</span>
+              </div>
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setShowTableModal(false)
+                setOrderMode('drive_in')
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('rms_customer_order_mode', 'drive_in')
+                }
+                setIsDriveInModalOpen(true)
+              }}
+              className="w-full h-11 rounded-xl font-bold text-xs gap-2 border-primary/40 text-primary hover:bg-primary/10 cursor-pointer"
+            >
+              <Car className="size-4" />
+              <span>🚗 Highway / Food Cart Drive-In</span>
+            </Button>
           </div>
         </div>
       )}
@@ -1199,6 +1385,36 @@ export function CustomerMenu() {
                           </span>
                         </div>
                       </div>
+
+                      {/* Car / Spot Delivery Badge in ticket */}
+                      {(ord.vehicleNumber || ord.landmarkNote || isValidCoord(ord.customerLat, ord.customerLng)) && (
+                        <div className="flex items-center justify-between p-2.5 rounded-xl bg-primary/10 border border-primary/25 text-xs">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Car className="size-4 text-primary shrink-0" />
+                            <div className="min-w-0">
+                              <span className="font-bold text-foreground block truncate">
+                                {ord.vehicleNumber ? `Car: ${ord.vehicleNumber}` : 'Highway Car Delivery'}
+                              </span>
+                              {ord.landmarkNote && (
+                                <span className="text-[11px] text-muted-foreground block truncate">
+                                  📍 Spot: {ord.landmarkNote}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {isValidCoord(ord.customerLat, ord.customerLng) && (
+                            <a
+                              href={`https://www.google.com/maps/dir/?api=1&destination=${ord.customerLat},${ord.customerLng}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[11px] text-primary hover:underline flex items-center gap-1 shrink-0 font-bold bg-background/80 px-2 py-1 rounded-lg border border-primary/20"
+                            >
+                              <Navigation className="size-3 text-primary" />
+                              <span>Map</span>
+                            </a>
+                          )}
+                        </div>
+                      )}
 
                       {/* Ordered Items List with Customization Details */}
                       <div className="space-y-2 pt-1 text-xs border-t border-border/50">
@@ -1517,44 +1733,6 @@ export function CustomerMenu() {
 
       {/* 5. MAIN CONTENT AREA */}
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 space-y-5 pb-28">
-        {/* Table Banner Notification if locked */}
-        {tableNumber && (
-          <div className="relative overflow-hidden rounded-2xl border border-primary/20 bg-card p-4 shadow-xs">
-            <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="size-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
-                  <UtensilsCrossed className="size-5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-extrabold text-sm text-foreground">
-                      Dining at <span className="text-primary">{displayTableBadge}</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
-                      <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      Dine-in Locked
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                    Dishes will be delivered directly to your table
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setManualTableInput(tableNumber)
-                  setShowTableModal(true)
-                }}
-                className="h-8 text-xs font-bold rounded-xl border-primary/30 text-primary hover:bg-primary/10 shrink-0 ml-auto sm:ml-0 cursor-pointer"
-              >
-                Change Table
-              </Button>
-            </div>
-          </div>
-        )}
-
         {/* Live Orders Status Quick Pill Banner */}
         {totalActiveOrders > 0 && (
           <div
@@ -2011,19 +2189,166 @@ export function CustomerMenu() {
               </Button>
             </div>
 
-            {/* Table Number Locked Status */}
-            <div className="p-4 bg-primary/5 border-b border-primary/10 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Lock className="size-4 text-emerald-600 dark:text-emerald-400" />
-                <div>
-                  <p className="text-[11px] text-muted-foreground font-medium">Ordering For</p>
-                  <p className="text-sm font-extrabold text-foreground">{displayTableBadge}</p>
+            {/* Mode Switcher: Table Dine-In vs Highway Car Drive-In */}
+            <div className="px-4 pt-3 pb-2 bg-muted/20 border-b border-border/50">
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-muted/50 rounded-xl border border-border/80">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOrderMode('dine_in')
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('rms_customer_order_mode', 'dine_in')
+                    }
+                  }}
+                  className={cn(
+                    'flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer',
+                    orderMode === 'dine_in'
+                      ? 'bg-background text-foreground shadow-xs'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <UtensilsCrossed className="size-3.5" />
+                  <span>Table Dine-In</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOrderMode('drive_in')
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('rms_customer_order_mode', 'drive_in')
+                    }
+                    if (!locationData.vehicleNumber && !locationData.landmarkNote) {
+                      setIsDriveInModalOpen(true)
+                    }
+                  }}
+                  className={cn(
+                    'flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer',
+                    orderMode === 'drive_in'
+                      ? 'bg-primary text-primary-foreground shadow-xs'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <Car className="size-3.5" />
+                  <span>🚗 Car Drive-In</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Table Number or Drive-In Spot Details */}
+            {orderMode === 'drive_in' ? (
+              <div className="p-4 bg-primary/10 border-b border-primary/20 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="size-8 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shrink-0 shadow-xs">
+                      <Car className="size-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] text-muted-foreground font-medium">Highway Delivery For</p>
+                      <p className="text-sm font-extrabold text-foreground truncate">
+                        {locationData.vehicleNumber ? `🚗 ${locationData.vehicleNumber}` : 'Car Spot Unset'}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsDriveInModalOpen(true)}
+                    className="h-7 text-xs font-bold px-2.5 gap-1.5 border-primary/40 text-primary hover:bg-primary/10 cursor-pointer shrink-0"
+                  >
+                    <Edit3 className="size-3" />
+                    <span>{locationData.vehicleNumber || locationData.landmarkNote ? 'Edit Spot' : 'Set Spot'}</span>
+                  </Button>
+                </div>
+
+                {/* Spot / Pre-set note point & GPS Status Badge */}
+                <div className="p-2.5 rounded-xl bg-card border border-border/80 space-y-1.5 text-[11px]">
+                  <div className="flex items-center justify-between gap-1 text-muted-foreground">
+                    <span className="flex items-center gap-1 font-semibold text-foreground">
+                      <MapPin className="size-3 text-primary shrink-0" />
+                      Local Note Point:
+                    </span>
+                    <span className="font-bold text-foreground text-right truncate max-w-[190px]">
+                      {locationData.landmarkNote || 'Not chosen (Tap Edit to choose)'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-1 text-muted-foreground">
+                    <span className="flex items-center gap-1 font-semibold text-foreground">
+                      <Compass className="size-3 text-primary shrink-0" />
+                      GPS Tracking:
+                    </span>
+                    {isValidCoord(locationData.customerLat, locationData.customerLng) ? (
+                      <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-extrabold">
+                        <CheckCircle2 className="size-3" />
+                        Acquired ({locationData.locationAccuracy ? `±${locationData.locationAccuracy}m` : 'Active'})
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground/70 italic">GPS optional (tap Edit to capture)</span>
+                    )}
+                  </div>
+
+                  <p className="text-[10px] text-muted-foreground/80 pt-1 border-t border-border/40">
+                    Waiters will deliver food directly to your vehicle outside.
+                  </p>
                 </div>
               </div>
-              <Badge variant="outline" className="text-[10px] bg-background text-muted-foreground">
-                Locked to Session
-              </Badge>
-            </div>
+            ) : (
+              <div className="p-4 bg-primary/5 border-b border-primary/10 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Lock className="size-4 text-emerald-600 dark:text-emerald-400" />
+                    <div>
+                      <p className="text-[11px] text-muted-foreground font-medium">Ordering For</p>
+                      <p className="text-sm font-extrabold text-foreground">{displayTableBadge}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Badge variant="outline" className="text-[10px] bg-background text-muted-foreground">
+                      Locked to Session
+                    </Badge>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setManualTableInput(tableNumber)
+                        setShowTableModal(true)
+                      }}
+                      className="h-6 text-[10px] px-2 text-primary hover:bg-primary/10"
+                    >
+                      Change
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Highway / Food Cart Drive-in Callout Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOrderMode('drive_in')
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('rms_customer_order_mode', 'drive_in')
+                    }
+                    setIsDriveInModalOpen(true)
+                  }}
+                  className="w-full text-left p-2.5 rounded-xl border border-dashed border-primary/40 bg-card hover:bg-primary/5 transition-all flex items-center justify-between gap-2 group cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="size-7 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0">
+                      <Car className="size-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold text-foreground group-hover:text-primary transition-colors truncate">
+                        Parked nearby in a Car or on Highway?
+                      </p>
+                      <p className="text-[10px] text-muted-foreground truncate">
+                        Click to enter Vehicle # & GPS spot for window delivery
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="size-4 text-primary shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                </button>
+              </div>
+            )}
 
             {/* Error banner inside drawer if any */}
             {orderError && (
@@ -2237,12 +2562,69 @@ export function CustomerMenu() {
       <CustomerBillModal
         open={showBillModal}
         onOpenChange={setShowBillModal}
-        tableNumber={tableNumber}
+        tableNumber={orderMode === 'drive_in' ? displayTableBadge : tableNumber}
         tableOrders={tableOrders}
         onSuccess={() => {
           fetchTableOrders()
         }}
       />
+
+      {/* 8. HIGHWAY / FOOD CART DRIVE-IN SPOT MODAL */}
+      <Dialog open={isDriveInModalOpen} onOpenChange={setIsDriveInModalOpen}>
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto rounded-3xl p-5 sm:p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2.5 text-base sm:text-lg font-black">
+              <div className="size-8 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shadow-xs">
+                <Car className="size-4.5" />
+              </div>
+              <span>Highway / Food Cart Drive-In</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Order remotely from cars parked nearby. Enter your vehicle number and select a pre-set local note point (or GPS) so waiters deliver directly to your vehicle window.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-2">
+            <CustomerLocationLock
+              data={locationData}
+              onChange={(updated) => {
+                setLocationData(updated)
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('rms_customer_location', JSON.stringify(updated))
+                }
+              }}
+              showToggle={false}
+              title="Vehicle Details & Parking Spot"
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-2 pt-3 border-t border-border">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsDriveInModalOpen(false)}
+              className="rounded-xl text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setOrderMode('drive_in')
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('rms_customer_order_mode', 'drive_in')
+                  localStorage.setItem('rms_customer_location', JSON.stringify(locationData))
+                }
+                setIsDriveInModalOpen(false)
+              }}
+              className="rounded-xl font-bold text-xs gap-1.5 shadow-sm cursor-pointer"
+            >
+              <Check className="size-3.5" />
+              <span>Confirm Vehicle & Spot</span>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

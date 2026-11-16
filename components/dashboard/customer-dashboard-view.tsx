@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   TableProperties,
   RefreshCw,
+  Car,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -377,6 +378,25 @@ export function CustomerDashboardView() {
               <CardDescription className="text-xs">Direct access to restaurant guest services</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2.5 pt-0">
+              {/* Highway / Car Drive-In Ordering */}
+              <Link
+                href="/menu?mode=drive_in"
+                className="flex items-center justify-between p-3 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 transition-colors group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="size-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shadow-xs">
+                    <Car className="size-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground group-hover:text-primary transition-colors">
+                      🚗 Highway Car Drive-In
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">Order remotely from parked car or food cart</p>
+                  </div>
+                </div>
+                <ArrowRight className="size-3.5 text-primary group-hover:translate-x-0.5 transition-transform" />
+              </Link>
+
               {/* Browse Menu */}
               <Link
                 href="/admin-menu"

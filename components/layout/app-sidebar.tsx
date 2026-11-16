@@ -201,12 +201,7 @@ export function AppSidebar() {
             badge: counts?.kitchenLive ? 'Live' : undefined,
           },
           { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
-          {
-            label: 'Inventory',
-            href: '/inventory',
-            icon: Package,
-            badge: counts?.inventoryAlerts ? String(counts.inventoryAlerts) : undefined,
-          },
+          { label: 'Inventory', href: '/inventory', icon: Package },
         ],
       },
       {

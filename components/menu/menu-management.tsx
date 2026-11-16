@@ -109,8 +109,8 @@ export function MenuManagement() {
     try {
       if (showLoading) setLoading(true)
       const [catRes, itemsRes] = await Promise.all([
-        fetch('/api/menu/categories'),
-        fetch('/api/menu/items'),
+        fetch('/api/menu/categories', { cache: 'no-store' }),
+        fetch('/api/menu/items', { cache: 'no-store' }),
       ])
       const [catJson, itemsJson] = await Promise.all([
         catRes.json(),
@@ -118,11 +118,17 @@ export function MenuManagement() {
       ])
 
       if (catJson.success && Array.isArray(catJson.data)) {
-        setCategories(catJson.data)
-        setCategoryId((prev) => prev || (catJson.data[0]?.id || ''))
+        const cleanCats = catJson.data.filter((c: any) => (c.name || '').toLowerCase().trim() !== 'inventory')
+        setCategories(cleanCats)
+        setCategoryId((prev) => prev || (cleanCats[0]?.id || ''))
       }
       if (itemsJson.success && Array.isArray(itemsJson.data)) {
-        setItems(itemsJson.data)
+        const cleanItems = itemsJson.data.filter(
+          (item: any) =>
+            (item.category || '').toLowerCase().trim() !== 'inventory' &&
+            !/^sku:\s*[^\s|]+\s*\|/i.test(item.description || '')
+        )
+        setItems(cleanItems)
       } else {
         setItems([])
       }
@@ -135,10 +141,11 @@ export function MenuManagement() {
 
   const fetchCategories = useCallback(async () => {
     try {
-      const res = await fetch('/api/menu/categories')
+      const res = await fetch('/api/menu/categories', { cache: 'no-store' })
       const json = await res.json()
       if (json.success && Array.isArray(json.data)) {
-        setCategories(json.data)
+        const cleanCats = json.data.filter((c: any) => (c.name || '').toLowerCase().trim() !== 'inventory')
+        setCategories(cleanCats)
       }
     } catch (err) {
       console.error('Failed to load menu categories:', err)

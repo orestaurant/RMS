@@ -74,130 +74,66 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 3. Ultra-fast parallel execution: Menu items & Inventory items in one concurrent trip
-    const [dbMenuItems, dbInventoryItems] = await Promise.all([
-      prisma.menuItem.findMany({
+    // 3. Fetch ONLY actual Restaurant Menu items (Inventory items are for stock management, never menu)
+    const dbMenuItems = await prisma.menuItem.findMany({
+      where: {
+        deletedAt: null,
+        ...(restaurantId ? { restaurantId } : {}),
+        category: {
+          name: { not: 'Inventory' },
+        },
+        OR: [
+          { description: null },
+          {
+            NOT: {
+              description: {
+                startsWith: 'SKU:',
+              },
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        basePrice: true,
+        imageUrl: true,
+        isVegetarian: true,
+        isAvailable: true,
+        isSpicy: true,
+        preparationTimeMinutes: true,
+        categoryId: true,
+        category: {
+          select: { id: true, name: true },
+        },
+      },
+      orderBy: { displayOrder: 'asc' },
+    })
+
+    // Background cleanup: soft-delete any legacy menu items mistakenly synced from inventory
+    try {
+      await prisma.menuItem.updateMany({
         where: {
           deletedAt: null,
-          ...(restaurantId ? { restaurantId } : {}),
+          OR: [
+            { description: { startsWith: 'SKU:' } },
+            { category: { name: { equals: 'Inventory', mode: 'insensitive' } } },
+          ],
         },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          basePrice: true,
-          imageUrl: true,
-          isVegetarian: true,
-          isAvailable: true,
-          isSpicy: true,
-          preparationTimeMinutes: true,
-          categoryId: true,
-          category: {
-            select: { id: true, name: true },
-          },
+        data: {
+          deletedAt: new Date(),
         },
-        orderBy: { displayOrder: 'asc' },
-      }),
-      prisma.inventoryItem.findMany({
-        where: { deletedAt: null },
-        select: {
-          id: true,
-          name: true,
-          category: true,
-          quantity: true,
-          unit: true,
-          unitPrice: true,
-          sku: true,
-        },
-        orderBy: { updatedAt: 'desc' },
-      }),
-    ])
-
-    const existingMenuItemNames = new Set(
-      dbMenuItems.map((m) => m.name.toLowerCase().trim())
-    )
-
-    // 4. Sync inventory items only if genuinely missing (non-blocking, batched)
-    const additionalMenuItems: any[] = []
-    const missingInventory = dbInventoryItems.filter(
-      (inv) => !existingMenuItemNames.has(inv.name.toLowerCase().trim())
-    )
-
-    if (missingInventory.length > 0 && restaurantId && organizationId) {
-      try {
-        const existingCategories = await prisma.menuCategory.findMany({
-          where: { restaurantId, deletedAt: null },
-          select: { id: true, name: true },
-        })
-        const categoryMap = new Map(
-          existingCategories.map((c) => [c.name.toLowerCase().trim(), c.id])
-        )
-
-        for (const inv of missingInventory) {
-          try {
-            const catName = inv.category?.trim() || 'Inventory'
-            const catKey = catName.toLowerCase().trim()
-            let categoryId = categoryMap.get(catKey)
-
-            if (!categoryId) {
-              const newCat = await prisma.menuCategory.create({
-                data: {
-                  restaurantId,
-                  organizationId,
-                  name: catName,
-                  displayOrder: 99,
-                },
-              })
-              categoryId = newCat.id
-              categoryMap.set(catKey, categoryId)
-            }
-
-            const newMenuItem = await prisma.menuItem.create({
-              data: {
-                restaurantId,
-                organizationId,
-                categoryId,
-                name: inv.name.trim(),
-                basePrice: Number(inv.unitPrice || 0),
-                isVegetarian: true,
-                isAvailable: (inv.quantity ?? 0) > 0,
-                preparationTimeMinutes: 10,
-                description: `SKU: ${inv.sku} | In Stock: ${inv.quantity} ${inv.unit}`,
-              },
-              select: {
-                id: true,
-                name: true,
-                description: true,
-                basePrice: true,
-                imageUrl: true,
-                isVegetarian: true,
-                isAvailable: true,
-                isSpicy: true,
-                preparationTimeMinutes: true,
-                categoryId: true,
-                category: {
-                  select: { id: true, name: true },
-                },
-              },
-            })
-
-            existingMenuItemNames.add(inv.name.toLowerCase().trim())
-            additionalMenuItems.push({
-              ...newMenuItem,
-              inventoryStock: inv.quantity,
-              inventoryUnit: inv.unit,
-              source: 'inventory',
-            })
-          } catch (syncErr) {
-            console.warn('Inventory sync to menu item skipped:', (syncErr as any)?.message)
-          }
-        }
-      } catch (catErr) {
-        console.warn('Category batch lookup skipped:', catErr)
-      }
+      })
+    } catch {
+      // Non-blocking cleanup
     }
 
-    const allCombined = [...dbMenuItems, ...additionalMenuItems]
+    const allCombined = dbMenuItems.filter(
+      (item) =>
+        (item.category?.name || '').toLowerCase().trim() !== 'inventory' &&
+        !/^sku:\s*[^\s|]+\s*\|/i.test(item.description || '')
+    )
 
     // 5. Build dynamic formatted items array
     const formattedItems = allCombined.map((item: any) => {

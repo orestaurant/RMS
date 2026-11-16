@@ -13,7 +13,6 @@ import {
   Volume2,
   VolumeX,
   Layers,
-  Kanban,
   ArrowRight,
   Check,
   UtensilsCrossed,
@@ -27,6 +26,8 @@ import {
   Phone,
   Send,
   X,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { getItemCuisine } from '@/lib/kds-utils'
 import { Badge } from '@/components/ui/badge'
@@ -609,14 +610,25 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
             Mark Served
           </Button>
         ) : currentStatus === 'pending' ? (
-          <Button
-            size="sm"
-            className="flex-1 h-10 text-sm font-bold tracking-wide bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm active:scale-[0.98] cursor-pointer"
-            onClick={() => onAdvance(ticket.id, 'accepted')}
-          >
-            Accept Order
-            <ArrowRight className="size-4 ml-1.5" />
-          </Button>
+          <div className="flex items-center gap-2 w-full">
+            <Button
+              size="sm"
+              className="flex-1 h-10 text-xs font-bold tracking-wide bg-chart-4 hover:bg-chart-4/90 text-white shadow-sm active:scale-[0.98] cursor-pointer"
+              onClick={() => onAdvance(ticket.id, 'cooking')}
+            >
+              <Flame className="size-3.5 mr-1 text-white animate-pulse" />
+              Start Preparing
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1 h-10 text-xs font-bold tracking-wide border-primary text-primary hover:bg-primary/10 active:scale-[0.98] cursor-pointer"
+              onClick={() => onAdvance(ticket.id, 'accepted')}
+            >
+              Accept Order
+              <ArrowRight className="size-3.5 ml-1" />
+            </Button>
+          </div>
         ) : (
           <Button
             size="sm"
@@ -638,7 +650,9 @@ export function KitchenDisplay() {
   const [batchItems, setBatchItems] = useState<BatchItem[]>([])
   const [stations, setStations] = useState<string[]>(['All', 'Grill & Tandoor', 'Main Kitchen', 'Beverages / Bar', 'Desserts'])
   const [activeStation, setActiveStation] = useState<string>('All')
-  const [viewMode, setViewMode] = useState<'kanban' | 'batch'>('kanban')
+  const [viewMode, setViewMode] = useState<'vertical' | 'batch'>('vertical')
+  const [upcomingFilter, setUpcomingFilter] = useState<'all' | 'pending' | 'accepted'>('all')
+  const [showReadySection, setShowReadySection] = useState<boolean>(true)
   const [search, setSearch] = useState('')
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -1029,6 +1043,78 @@ export function KitchenDisplay() {
     })
   }, [tickets, search])
 
+  // Split tickets for Vertical view
+  const beingPreparedTickets = useMemo(
+    () => filteredTickets.filter((t) => t.status === 'cooking'),
+    [filteredTickets]
+  )
+
+  const upcomingTickets = useMemo(
+    () => filteredTickets.filter((t) => t.status === 'pending' || t.status === 'accepted'),
+    [filteredTickets]
+  )
+
+  const filteredUpcomingTickets = useMemo(() => {
+    if (upcomingFilter === 'pending') return upcomingTickets.filter((t) => t.status === 'pending')
+    if (upcomingFilter === 'accepted') return upcomingTickets.filter((t) => t.status === 'accepted')
+    return upcomingTickets
+  }, [upcomingTickets, upcomingFilter])
+
+  const readyTickets = useMemo(
+    () => filteredTickets.filter((t) => t.status === 'ready'),
+    [filteredTickets]
+  )
+
+  // Aggregated dishes currently being prepared on stove/fire
+  const activePreparedDishes = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        name: string
+        totalQuantity: number
+        completedQuantity: number
+        station?: string
+        cuisine?: string
+        tables: string[]
+      }
+    >()
+
+    for (const t of beingPreparedTickets) {
+      const tableLabel =
+        typeof t.tableNumber === 'number' || !isNaN(Number(t.tableNumber))
+          ? `Table ${t.tableNumber}`
+          : String(t.tableNumber)
+
+      for (const item of t.items) {
+        const key = item.name.toLowerCase().trim()
+        const existing = map.get(key)
+        if (existing) {
+          existing.totalQuantity += item.quantity
+          if (item.completed) existing.completedQuantity += item.quantity
+          if (!existing.tables.includes(tableLabel)) {
+            existing.tables.push(tableLabel)
+          }
+        } else {
+          map.set(key, {
+            name: item.name,
+            totalQuantity: item.quantity,
+            completedQuantity: item.completed ? item.quantity : 0,
+            station: item.station,
+            cuisine: item.cuisine || getItemCuisine(item.name, item.station),
+            tables: [tableLabel],
+          })
+        }
+      }
+    }
+
+    return Array.from(map.values())
+  }, [beingPreparedTickets])
+
+  const totalCookingPortions = useMemo(
+    () => activePreparedDishes.reduce((acc, d) => acc + d.totalQuantity, 0),
+    [activePreparedDishes]
+  )
+
   return (
     <main className="flex h-[calc(100vh-56px)] flex-col gap-0 overflow-hidden bg-background">
       {/* ── Summary & Control Bar ──────────────────────────────── */}
@@ -1038,12 +1124,27 @@ export function KitchenDisplay() {
           {columns.map((col) => {
             const count = tickets.filter((o) => o.status === col.id).length
             return (
-              <div
+              <button
                 key={col.id}
+                onClick={() => {
+                  if (col.id === 'cooking') {
+                    setViewMode('vertical')
+                  } else if (col.id === 'pending') {
+                    setViewMode('vertical')
+                    setUpcomingFilter('pending')
+                  } else if (col.id === 'accepted') {
+                    setViewMode('vertical')
+                    setUpcomingFilter('accepted')
+                  } else if (col.id === 'ready') {
+                    setViewMode('vertical')
+                    setShowReadySection(true)
+                  }
+                }}
                 className={cn(
-                  'flex items-center gap-2 rounded-xl border px-3 py-1.5 transition-all',
+                  'flex items-center gap-2 rounded-xl border px-3 py-1.5 transition-all cursor-pointer hover:opacity-85 text-left',
                   col.badgeBg
                 )}
+                title={`Filter ${col.label}`}
               >
                 <col.icon className={cn('size-4 shrink-0', col.color)} />
                 <span className="text-xs font-semibold">{col.label}</span>
@@ -1053,7 +1154,7 @@ export function KitchenDisplay() {
                 >
                   {count}
                 </Badge>
-              </div>
+              </button>
             )
           })}
         </div>
@@ -1071,40 +1172,25 @@ export function KitchenDisplay() {
             />
           </div>
 
-          {/* View Mode Toggle: Kanban vs Batch Cooking */}
-          <div className="flex items-center rounded-lg border border-border bg-muted/30 p-0.5">
-            <button
-              onClick={() => setViewMode('kanban')}
-              className={cn(
-                'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all',
-                viewMode === 'kanban'
-                  ? 'bg-background text-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Kanban Board View"
-            >
-              <Kanban className="size-3.5" />
-              <span className="hidden sm:inline">Kanban</span>
-            </button>
-            <button
-              onClick={() => setViewMode('batch')}
-              className={cn(
-                'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all',
-                viewMode === 'batch'
-                  ? 'bg-background text-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Batch Cooking View (PRD Feature)"
-            >
-              <Layers className="size-3.5" />
-              <span className="hidden sm:inline">Batch Cooking</span>
-              {batchItems.length > 0 && (
-                <Badge variant="secondary" className="h-4 px-1 text-[10px]">
-                  {batchItems.length}
-                </Badge>
-              )}
-            </button>
-          </div>
+          {/* Batch Cooking View Toggle */}
+          <button
+            onClick={() => setViewMode((prev) => (prev === 'batch' ? 'vertical' : 'batch'))}
+            className={cn(
+              'flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all cursor-pointer',
+              viewMode === 'batch'
+                ? 'bg-primary text-primary-foreground border-primary shadow-xs font-bold'
+                : 'border-border bg-muted/30 text-muted-foreground hover:text-foreground'
+            )}
+            title="Batch Cooking Queue"
+          >
+            <Layers className="size-3.5" />
+            <span className="hidden sm:inline">Batch Cooking</span>
+            {batchItems.length > 0 && (
+              <Badge variant="secondary" className="h-4 px-1 text-[10px]">
+                {batchItems.length}
+              </Badge>
+            )}
+          </button>
 
           {/* Audio Chime Toggle */}
           <Button
@@ -1153,127 +1239,322 @@ export function KitchenDisplay() {
         </div>
       )}
 
-      {viewMode === 'kanban' ? (
-        /* Kanban Columns with full horizontal and vertical responsiveness */
-        <div className="flex flex-1 gap-0 overflow-x-auto overflow-y-hidden divide-x divide-border min-h-0 w-full">
-          {columns.map((col) => {
-            const colTickets = filteredTickets.filter((t) => t.status === col.id)
-            return (
-              <div
-                key={col.id}
-                className={cn(
-                  'flex flex-1 flex-col min-w-[280px] sm:min-w-[320px] max-w-[420px] h-full min-h-0',
-                  col.bg.split(' ')[1]
-                )}
-              >
-                {/* Column Header */}
-                <div
-                  className={cn(
-                    'flex items-center gap-2 px-4 py-3 border-b shrink-0 bg-background/50 backdrop-blur-xs',
-                    col.bg
-                  )}
-                >
-                  <col.icon className={cn('size-4 shrink-0', col.color)} />
-                  <span className={cn('text-sm font-bold', col.color)}>{col.label}</span>
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      'ml-auto h-6 min-w-6 px-1.5 text-xs font-bold',
-                      colTickets.length > 0 && col.color
-                    )}
-                  >
-                    {colTickets.length}
-                  </Badge>
+      {viewMode === 'vertical' ? (
+        <div className="flex-1 overflow-y-auto min-h-0 divide-y divide-border/60 bg-muted/5">
+          {/* ─────────────────────────────────────────────────────────────
+              TIER 1 (TOP): BEING PREPARED (NOW COOKING DISHES)
+             ───────────────────────────────────────────────────────────── */}
+          <section className="p-4 sm:p-6 bg-chart-4/[0.02]">
+            <div className="max-w-[1800px] mx-auto flex flex-col gap-4">
+              {/* Header */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="size-10 rounded-2xl bg-chart-4/15 text-chart-4 flex items-center justify-center border border-chart-4/30 shadow-xs">
+                    <Flame className="size-5 text-chart-4 animate-pulse" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-extrabold tracking-tight text-foreground">
+                        Being Prepared
+                      </h2>
+                      <Badge className="bg-chart-4 text-white text-xs font-bold px-2 py-0.5 shadow-xs">
+                        {beingPreparedTickets.length} Orders
+                      </Badge>
+                      {totalCookingPortions > 0 && (
+                        <Badge variant="outline" className="border-chart-4/40 text-chart-4 text-xs font-bold">
+                          {totalCookingPortions} Dishes on Stove
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Dishes actively cooking right now. Check off completed items or tap Mark Ready to dispatch.
+                    </p>
+                  </div>
                 </div>
 
-                {/* Column Cards Container - Native Smooth Scroll */}
-                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0">
-                  {/* Active 20-Second Cuisine Batch Countdown Card in Cooking Column */}
-                    {col.id === 'cooking' && Object.keys(cuisineBatches).length > 0 && (
-                      <div className="flex flex-col gap-2 mb-1 shrink-0">
-                        {Object.values(cuisineBatches).map((batch) => {
-                          const displayName = batch.cuisine.length > 20 ? 'Station' : batch.cuisine
-                          return (
-                            <div
-                              key={batch.cuisine}
-                              className={cn(
-                                'p-2.5 rounded-xl border flex flex-col gap-1.5 shadow-xs transition-all',
-                                !batch.isLocked
-                                  ? 'bg-amber-500/10 border-amber-500/40 text-amber-500'
-                                  : 'bg-muted/40 border-border text-muted-foreground'
-                              )}
-                            >
-                              <div className="flex items-center justify-between font-bold text-xs">
-                                <div className="flex items-center gap-1.5">
-                                  {!batch.isLocked ? (
-                                    <Timer className="size-3.5 animate-spin text-amber-500" style={{ animationDuration: '3s' }} />
-                                  ) : (
-                                    <Lock className="size-3.5 text-muted-foreground" />
-                                  )}
-                                  <span className="font-extrabold truncate max-w-[170px]">{displayName} Batch</span>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                  <Badge
-                                    className={cn(
-                                      'text-[10px] font-mono font-bold px-1.5 py-0',
-                                      !batch.isLocked ? 'bg-amber-500 text-black animate-pulse' : 'bg-secondary text-muted-foreground'
-                                    )}
-                                  >
-                                    {!batch.isLocked ? `${batch.remainingSeconds}s Window` : '20s Closed'}
-                                  </Badge>
-                                  <button
-                                    onClick={() => handleResetCuisineBatch(batch.cuisine)}
-                                    className="text-[10px] text-muted-foreground hover:text-foreground p-0.5"
-                                    title="Dismiss"
-                                  >
-                                    ✕
-                                  </button>
-                                </div>
-                              </div>
-
-                              {!batch.isLocked && (
-                                <div className="space-y-1">
-                                  <div className="w-full bg-amber-500/20 h-1.5 rounded-full overflow-hidden">
-                                    <div
-                                      className="bg-amber-500 h-full transition-all duration-1000 ease-linear rounded-full"
-                                      style={{ width: `${(batch.remainingSeconds / 20) * 100}%` }}
-                                    />
-                                  </div>
-                                  <p className="text-[10px] text-muted-foreground">
-                                    Chef selection window: Add queued orders before timer ends ({batch.remainingSeconds}s).
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-
-                    {colTickets.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-                        <div className="flex size-12 items-center justify-center rounded-2xl bg-muted/60 border border-border">
-                          <col.icon className="size-5 text-muted-foreground/60" />
+                {/* Active Cuisine Batch Countdown Timers */}
+                {Object.keys(cuisineBatches).length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {Object.values(cuisineBatches).map((batch) => {
+                      const displayName = batch.cuisine.length > 20 ? 'Station' : batch.cuisine
+                      return (
+                        <div
+                          key={batch.cuisine}
+                          className={cn(
+                            'flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs shadow-xs transition-all',
+                            !batch.isLocked
+                              ? 'bg-amber-500/10 border-amber-500/40 text-amber-500 font-bold'
+                              : 'bg-muted/40 border-border text-muted-foreground'
+                          )}
+                        >
+                          {!batch.isLocked ? (
+                            <Timer className="size-3.5 animate-spin text-amber-500" style={{ animationDuration: '3s' }} />
+                          ) : (
+                            <Lock className="size-3.5 text-muted-foreground" />
+                          )}
+                          <span>{displayName} Batch:</span>
+                          <Badge
+                            className={cn(
+                              'text-[10px] font-mono px-1.5 py-0 font-bold',
+                              !batch.isLocked ? 'bg-amber-500 text-black animate-pulse' : 'bg-secondary text-muted-foreground'
+                            )}
+                          >
+                            {!batch.isLocked ? `${batch.remainingSeconds}s Window` : '20s Locked'}
+                          </Badge>
+                          <button
+                            onClick={() => handleResetCuisineBatch(batch.cuisine)}
+                            className="text-xs text-muted-foreground hover:text-foreground ml-1"
+                            title="Dismiss"
+                          >
+                            ✕
+                          </button>
                         </div>
-                        <p className="text-xs font-medium text-muted-foreground">No orders in {col.label}</p>
-                      </div>
-                    ) : (
-                      colTickets.map((ticket) => (
-                        <KitchenOrderCard
-                          key={ticket.id}
-                          ticket={ticket}
-                          onAdvance={handleAdvance}
-                          onToggleItem={handleToggleItem}
-                          onReprioritize={handleReprioritize}
-                          cuisineBatches={cuisineBatches}
-                          onQuickAddBatch={handleQuickAddBatch}
-                        />
-                      ))
-                    )}
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Active Dishes on Stove (Quick Glance Summary Strip) */}
+              {activePreparedDishes.length > 0 && (
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 no-scrollbar">
+                  <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider shrink-0 flex items-center gap-1.5 pl-1">
+                    <UtensilsCrossed className="size-3.5 text-chart-4" /> Active on Stove:
+                  </span>
+                  {activePreparedDishes.map((dish) => (
+                    <div
+                      key={dish.name}
+                      className={cn(
+                        'flex items-center gap-2 px-3 py-1.5 rounded-xl bg-card border shadow-xs text-xs shrink-0 transition-all',
+                        dish.completedQuantity === dish.totalQuantity
+                          ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-600'
+                          : 'border-chart-4/30'
+                      )}
+                    >
+                      <span className="size-5 rounded-md bg-chart-4/15 text-chart-4 font-black flex items-center justify-center text-[11px]">
+                        {dish.totalQuantity}×
+                      </span>
+                      <span className="font-semibold text-foreground">{dish.name}</span>
+                      <span className="text-[10px] font-mono text-muted-foreground">
+                        ({dish.tables.join(', ')})
+                      </span>
+                      {dish.station && (
+                        <span className="text-[9px] px-1 py-0.2 rounded bg-muted text-muted-foreground border border-border">
+                          {dish.station}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Cooking Order Cards Grid */}
+              {beingPreparedTickets.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 px-4 text-center rounded-2xl border-2 border-dashed border-border/80 bg-card/40 my-1">
+                  <div className="size-12 rounded-2xl bg-chart-4/10 text-chart-4 flex items-center justify-center mb-2.5">
+                    <Flame className="size-6 text-chart-4/80" />
+                  </div>
+                  <h4 className="text-sm font-bold text-foreground">No Dishes Currently Being Prepared</h4>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-md">
+                    Kitchen stove is idle. Click <strong className="text-chart-4 font-semibold">"Start Preparing"</strong> on any upcoming order below to move it here and start cooking.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {beingPreparedTickets.map((ticket) => (
+                    <KitchenOrderCard
+                      key={ticket.id}
+                      ticket={ticket}
+                      onAdvance={handleAdvance}
+                      onToggleItem={handleToggleItem}
+                      onReprioritize={handleReprioritize}
+                      cuisineBatches={cuisineBatches}
+                      onQuickAddBatch={handleQuickAddBatch}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* ─────────────────────────────────────────────────────────────
+              TIER 2 (JUST BELOW): UPCOMING ORDERS & QUEUE
+             ───────────────────────────────────────────────────────────── */}
+          <section className="p-4 sm:p-6 bg-background">
+            <div className="max-w-[1800px] mx-auto flex flex-col gap-4">
+              {/* Header with Sub-Filter Pills */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="size-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center border border-primary/20 shadow-xs">
+                    <Clock className="size-5 text-primary" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-extrabold tracking-tight text-foreground">
+                        Upcoming Orders
+                      </h2>
+                      <Badge variant="outline" className="border-primary/40 text-primary text-xs font-bold px-2 py-0.5">
+                        {upcomingTickets.length} in Queue
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Incoming and accepted tickets waiting for line cook preparation.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Sub-Filters: All Upcoming / Incoming / Accepted & Station */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Status Pills */}
+                  <div className="flex items-center rounded-lg border border-border bg-muted/30 p-0.5">
+                    <button
+                      onClick={() => setUpcomingFilter('all')}
+                      className={cn(
+                        'rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer',
+                        upcomingFilter === 'all'
+                          ? 'bg-background text-foreground shadow-xs'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      All ({upcomingTickets.length})
+                    </button>
+                    <button
+                      onClick={() => setUpcomingFilter('pending')}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer',
+                        upcomingFilter === 'pending'
+                          ? 'bg-amber-500/15 text-amber-500 shadow-xs font-bold'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      <span className="size-1.5 rounded-full bg-amber-500" />
+                      Incoming ({upcomingTickets.filter((t) => t.status === 'pending').length})
+                    </button>
+                    <button
+                      onClick={() => setUpcomingFilter('accepted')}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer',
+                        upcomingFilter === 'accepted'
+                          ? 'bg-primary/15 text-primary shadow-xs font-bold'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      <span className="size-1.5 rounded-full bg-primary" />
+                      Accepted ({upcomingTickets.filter((t) => t.status === 'accepted').length})
+                    </button>
+                  </div>
+
+                  {/* Station Selector */}
+                  {stations.length > 1 && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-semibold text-muted-foreground">Station:</span>
+                      <select
+                        value={activeStation}
+                        onChange={(e) => setActiveStation(e.target.value)}
+                        className="h-7 text-xs rounded-lg border border-border bg-card px-2 font-medium text-foreground cursor-pointer"
+                      >
+                        {stations.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
               </div>
-            )
-          })}
+
+              {/* Upcoming Order Cards Grid */}
+              {filteredUpcomingTickets.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center rounded-2xl border-2 border-dashed border-border/80 bg-card/40 my-1">
+                  <div className="size-12 rounded-2xl bg-success/10 text-success flex items-center justify-center mb-2.5">
+                    <CheckCircle2 className="size-6 text-success/80" />
+                  </div>
+                  <h4 className="text-sm font-bold text-foreground">Upcoming Queue is Empty</h4>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-md">
+                    All upcoming orders have been moved to preparation or completed. New customer QR orders or POS tickets will appear here automatically.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {filteredUpcomingTickets.map((ticket) => (
+                    <KitchenOrderCard
+                      key={ticket.id}
+                      ticket={ticket}
+                      onAdvance={handleAdvance}
+                      onToggleItem={handleToggleItem}
+                      onReprioritize={handleReprioritize}
+                      cuisineBatches={cuisineBatches}
+                      onQuickAddBatch={handleQuickAddBatch}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* ─────────────────────────────────────────────────────────────
+              TIER 3 (READY FOR PICKUP ON PASS): EXPANDABLE TRAY
+             ───────────────────────────────────────────────────────────── */}
+          {readyTickets.length > 0 && (
+            <section className="p-4 sm:p-6 bg-emerald-500/[0.03] border-t border-emerald-500/20">
+              <div className="max-w-[1800px] mx-auto flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="size-10 rounded-2xl bg-emerald-500/15 text-emerald-600 flex items-center justify-center border border-emerald-500/30">
+                      <CheckCircle2 className="size-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-extrabold text-foreground">
+                          Ready for Table Pickup (On the Pass)
+                        </h3>
+                        <Badge className="bg-emerald-600 text-white text-xs font-bold px-2 py-0.5 shadow-xs">
+                          {readyTickets.length} Ready
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Dishes are plated and waiting for waitstaff delivery to dining tables. Click Mark Served once dispatched.
+                      </p>
+                    </div>
+                  </div>
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                    onClick={() => setShowReadySection((v) => !v)}
+                  >
+                    {showReadySection ? (
+                      <>
+                        <ChevronUp className="size-4 mr-1" /> Collapse
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="size-4 mr-1" /> Show ({readyTickets.length})
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                {showReadySection && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {readyTickets.map((ticket) => (
+                      <KitchenOrderCard
+                        key={ticket.id}
+                        ticket={ticket}
+                        onAdvance={handleAdvance}
+                        onToggleItem={handleToggleItem}
+                        onReprioritize={handleReprioritize}
+                        cuisineBatches={cuisineBatches}
+                        onQuickAddBatch={handleQuickAddBatch}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
         </div>
       ) : (
         /* ── Batch Cooking View (PRD Requirement) ─────────────── */

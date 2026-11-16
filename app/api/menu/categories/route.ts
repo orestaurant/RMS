@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
         },
         {
           headers: {
-            'Cache-Control': 'public, max-age=15, stale-while-revalidate=60',
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
             'X-Category-Cache': 'HIT',
           },
         }
@@ -33,6 +33,9 @@ export async function GET(request: NextRequest) {
 
     const where: any = {
       deletedAt: null,
+      name: {
+        not: 'Inventory',
+      },
     }
 
     if (restaurantId !== 'all') {
@@ -50,20 +53,38 @@ export async function GET(request: NextRequest) {
         isActive: true,
         status: true,
         _count: {
-          select: { items: { where: { deletedAt: null } } },
+          select: {
+            items: {
+              where: {
+                deletedAt: null,
+                OR: [
+                  { description: null },
+                  {
+                    NOT: {
+                      description: {
+                        startsWith: 'SKU:',
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
         },
       },
     })
 
-    const formatted: CachedCategory[] = categories.map((c) => ({
-      id: c.id,
-      name: c.name,
-      description: c.description || '',
-      displayOrder: c.displayOrder,
-      isActive: c.isActive,
-      status: c.status,
-      itemCount: c._count.items,
-    }))
+    const formatted: CachedCategory[] = categories
+      .filter((c) => (c.name || '').toLowerCase().trim() !== 'inventory')
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        description: c.description || '',
+        displayOrder: c.displayOrder,
+        isActive: c.isActive,
+        status: c.status,
+        itemCount: c._count.items,
+      }))
 
     setCachedCategories(restaurantId, formatted)
 
@@ -74,7 +95,7 @@ export async function GET(request: NextRequest) {
       },
       {
         headers: {
-          'Cache-Control': 'public, max-age=15, stale-while-revalidate=60',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
           'X-Category-Cache': 'MISS',
         },
       }

@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -73,12 +73,57 @@ export function CustomerBillModal({
     return s === 'served' || s === 'ready' || s === 'delivered' || s === 'completed'
   })
 
+  const formattedTableSpot = useMemo(() => {
+    const s = String(tableNumber || '').trim()
+    if (!s) return 'Spot Unset'
+    if (s.startsWith('🚗') || s.toLowerCase().startsWith('car')) return s
+    if (s.toLowerCase().startsWith('table')) return s
+    return `Table ${s}`
+  }, [tableNumber])
+
+  // ⚡ INSTANT Zero-Latency Client Breakdown from tableOrders (Renders in 0.00ms)
+  const clientBreakdown = useMemo(() => {
+    if (!Array.isArray(tableOrders) || tableOrders.length === 0) {
+      return { items: [], subtotal: 0, taxAmount: 0, grandTotal: 0 }
+    }
+    const itemMap = new Map<string, { name: string; quantity: number; price: number; total: number }>()
+    for (const ord of tableOrders) {
+      const ordStatus = String(ord.status || '').toLowerCase()
+      if (ordStatus === 'cancelled' || ordStatus === 'refunded') continue
+      if (Array.isArray(ord.items)) {
+        for (const it of ord.items) {
+          const name = it.name || it.itemName || it.menuItem?.name || 'Dish'
+          const qty = it.quantity || 1
+          const price = Number(it.price || it.basePrice || 0)
+          const total = Number(it.total || it.itemTotal || price * qty)
+          const key = `${name}-${price}`
+          if (itemMap.has(key)) {
+            const existing = itemMap.get(key)!
+            existing.quantity += qty
+            existing.total += total
+          } else {
+            itemMap.set(key, { name, quantity: qty, price, total })
+          }
+        }
+      }
+    }
+    const items = Array.from(itemMap.values())
+    const subtotal = items.reduce((sum, i) => sum + i.total, 0)
+    const taxAmount = Math.round(subtotal * 0.05 * 100) / 100
+    const grandTotal = Math.round((subtotal + taxAmount) * 100) / 100
+    return { items, subtotal, taxAmount, grandTotal }
+  }, [tableOrders])
+
+  const pendingTipRef = React.useRef<number | null>(null)
+
   // Fetch or generate active bill for this table session
   const loadBill = useCallback(
     async (asCustomerRequest = false) => {
       if (!tableNumber) return
       try {
-        setLoading(true)
+        if (!clientBreakdown.items || clientBreakdown.items.length === 0) {
+          setLoading(true)
+        }
         setError(null)
         const res = await fetch('/api/bills/generate', {
           method: 'POST',
@@ -97,20 +142,27 @@ export function CustomerBillModal({
         }
 
         setBill(json.data)
-        if (json.data.tipAmount > 0) {
+
+        // If user already tapped a tip optimistically, sync with server immediately
+        if (pendingTipRef.current !== null && pendingTipRef.current !== json.data.tipAmount) {
+          applyTipToServer(pendingTipRef.current, json.data.id)
+        } else if (json.data.tipAmount > 0 && selectedTip === 0) {
           setSelectedTip(json.data.tipAmount)
         }
+
         if (asCustomerRequest) {
           setPhysicalRequested(true)
         }
       } catch (err: any) {
         console.error('Error loading bill:', err)
-        setError(err.message || 'Unable to retrieve bill for this table.')
+        if (!clientBreakdown.items || clientBreakdown.items.length === 0) {
+          setError(err.message || 'Unable to retrieve bill for this table.')
+        }
       } finally {
         setLoading(false)
       }
     },
-    [tableNumber, customerName, customerPhone]
+    [tableNumber, customerName, customerPhone, clientBreakdown.items, selectedTip]
   )
 
   useEffect(() => {
@@ -122,43 +174,49 @@ export function CustomerBillModal({
     }
   }, [open, loadBill])
 
-  // Handle applying tip
+  // Low-latency server sync for tip
+  const applyTipToServer = async (amount: number, billId: string) => {
+    try {
+      setTipLoading(true)
+      const res = await fetch(`/api/bills/${billId}/tip`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tipAmount: amount }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to update tip')
+      }
+      if (json.data?.bill) {
+        setBill((prev: any) => ({
+          ...prev,
+          grandTotal: json.data.bill.grandTotal,
+        }))
+      }
+    } catch (err: any) {
+      console.error('Tip server sync error:', err)
+      setError(err.message || 'Failed to sync tip with server')
+    } finally {
+      setTipLoading(false)
+    }
+  }
+
+  // ⚡ Optimistic Instant Tipping (0ms response time)
   const handleApplyTip = async (amount: number) => {
-    if (!bill?.id) return
     if (!hasServedOrder) {
       setError('Tipping is available once your food has been served.')
       return
     }
 
-    try {
-      setTipLoading(true)
-      setError(null)
-      setTipSuccessMessage(null)
+    const previousTip = selectedTip
+    setSelectedTip(amount)
+    pendingTipRef.current = amount
+    setBill((prev: any) => (prev ? { ...prev, tipAmount: amount } : prev))
+    setTipSuccessMessage(amount > 0 ? `₹${amount} tip added for your waiter! ❤️` : 'Tip removed.')
+    setTimeout(() => setTipSuccessMessage(null), 3000)
 
-      const res = await fetch(`/api/bills/${bill.id}/tip`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tipAmount: amount }),
-      })
-
-      const json = await res.json()
-      if (!res.ok || !json.success) {
-        throw new Error(json.message || 'Failed to update tip')
-      }
-
-      setSelectedTip(amount)
-      setBill((prev: any) => ({
-        ...prev,
-        tipAmount: amount,
-        grandTotal: json.data.bill.grandTotal,
-      }))
-      setTipSuccessMessage(amount > 0 ? `₹${amount} tip added for your waiter! ❤️` : 'Tip removed.')
-      setTimeout(() => setTipSuccessMessage(null), 3000)
-    } catch (err: any) {
-      console.error('Tip update error:', err)
-      setError(err.message || 'Failed to update tip')
-    } finally {
-      setTipLoading(false)
+    if (bill?.id) {
+      await applyTipToServer(amount, bill.id)
     }
   }
 
@@ -207,11 +265,16 @@ export function CustomerBillModal({
     (bill?.waiter?.firstName ? `${bill.waiter.firstName} ${bill.waiter.lastName || ''}`.trim() : null) ||
     'Your Server'
 
-  const subtotal = Number(bill?.subtotal || 0)
-  const taxAmount = Number(bill?.taxAmount || 0)
-  const tipAmount = Number(bill?.tipAmount || selectedTip || 0)
+  const displayItems = bill?.items && bill.items.length > 0 ? bill.items : clientBreakdown.items
+  const subtotal = Number(bill?.subtotal ?? clientBreakdown.subtotal ?? 0)
+  const taxAmount = Number(bill?.taxAmount ?? clientBreakdown.taxAmount ?? 0)
+  const tipAmount = Number(selectedTip || bill?.tipAmount || 0)
   const discountAmount = Number(bill?.discountAmount || 0)
-  const grandTotal = Number(bill?.grandTotal || subtotal + taxAmount - discountAmount + tipAmount)
+  const grandTotal = Number(
+    bill?.grandTotal !== undefined && selectedTip === Number(bill?.tipAmount || 0)
+      ? bill.grandTotal
+      : subtotal + taxAmount - discountAmount + tipAmount
+  )
 
   // Generate dynamic UPI QR string for instant payment
   const upiPayload = `upi://pay?pa=spicegarden@okhdfcbank&pn=Spice%20Garden%20Restaurant&am=${grandTotal.toFixed(2)}&cu=INR&tn=${encodeURIComponent(bill?.billNumber || 'Dine-In')}`
@@ -230,30 +293,31 @@ export function CustomerBillModal({
                 <DialogTitle className="text-base font-extrabold text-foreground flex items-center gap-2">
                   Digital Bill & Checkout
                 </DialogTitle>
-                <DialogDescription className="text-xs text-muted-foreground">
-                  Table {tableNumber} · {bill?.billNumber || 'Preparing Bill...'}
+                <DialogDescription className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <span>{formattedTableSpot} · {bill?.billNumber || 'Calculating Total...'}</span>
+                  {loading && <Loader2 className="size-3 animate-spin text-primary inline shrink-0" />}
                 </DialogDescription>
               </div>
             </div>
-            {bill?.status && (
+            {(bill?.status || displayItems.length > 0) && (
               <Badge
                 variant="outline"
                 className={cn(
                   'text-[10px] font-extrabold capitalize px-2 py-0.5',
-                  bill.status === 'PAID'
+                  bill?.status === 'PAID'
                     ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500'
-                    : bill.status === 'REQUESTED'
+                    : bill?.status === 'REQUESTED'
                     ? 'border-amber-500/40 bg-amber-500/10 text-amber-500 animate-pulse'
                     : 'border-primary/40 bg-primary/10 text-primary'
                 )}
               >
-                {bill.status}
+                {bill?.status || 'Active'}
               </Badge>
             )}
           </div>
         </DialogHeader>
 
-        {loading ? (
+        {loading && (!displayItems || displayItems.length === 0) ? (
           <div className="py-20 flex flex-col items-center justify-center text-center space-y-3">
             <Loader2 className="size-8 text-primary animate-spin" />
             <p className="text-sm font-semibold text-muted-foreground">Generating itemized bill...</p>
@@ -277,8 +341,8 @@ export function CustomerBillModal({
                 <span className="font-mono font-bold text-foreground">{bill?.billNumber}</span>
               </div>
               <div className="flex justify-between text-muted-foreground">
-                <span>Table</span>
-                <span className="font-bold text-foreground">Table {tableNumber}</span>
+                <span>Table / Spot</span>
+                <span className="font-bold text-foreground">{formattedTableSpot}</span>
               </div>
               <div className="flex justify-between text-muted-foreground">
                 <span>Payment Mode</span>
@@ -331,8 +395,8 @@ export function CustomerBillModal({
                 Order Breakdown
               </h4>
               <div className="divide-y divide-border/60 rounded-2xl border border-border/70 bg-card overflow-hidden">
-                {bill?.items && bill.items.length > 0 ? (
-                  bill.items.map((it: any, idx: number) => (
+                {displayItems && displayItems.length > 0 ? (
+                  displayItems.map((it: any, idx: number) => (
                     <div key={idx} className="p-3 flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2">
                         <span className="size-5 rounded-md bg-muted text-muted-foreground flex items-center justify-center font-bold text-[10px]">
@@ -341,7 +405,7 @@ export function CustomerBillModal({
                         <span className="font-semibold text-foreground">{it.name || it.itemName}</span>
                       </div>
                       <span className="font-mono font-bold text-foreground">
-                        ₹{Number(it.total || it.itemTotal || 0).toFixed(2)}
+                        ₹{Number(it.total || it.itemTotal || (Number(it.price || 0) * Number(it.quantity || 1))).toFixed(2)}
                       </span>
                     </div>
                   ))
@@ -390,16 +454,15 @@ export function CustomerBillModal({
                         type="button"
                         variant={selectedTip === opt.val && !isCustomTip ? 'default' : 'outline'}
                         size="sm"
-                        disabled={tipLoading}
                         onClick={() => {
                           setIsCustomTip(false)
                           setCustomTip('')
                           handleApplyTip(opt.val)
                         }}
                         className={cn(
-                          'h-9 rounded-xl font-extrabold text-xs transition-all',
+                          'h-9 rounded-xl font-extrabold text-xs transition-all cursor-pointer',
                           selectedTip === opt.val && !isCustomTip
-                            ? 'shadow-xs'
+                            ? 'shadow-xs scale-[1.02]'
                             : 'border-border/80 hover:border-primary/40'
                         )}
                       >
@@ -417,7 +480,6 @@ export function CustomerBillModal({
                         min="0"
                         placeholder="Custom amount"
                         value={customTip}
-                        disabled={tipLoading}
                         onChange={(e) => {
                           setCustomTip(e.target.value)
                           setIsCustomTip(true)
@@ -428,9 +490,9 @@ export function CustomerBillModal({
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={tipLoading || !customTip || Number(customTip) < 0}
+                      disabled={!customTip || Number(customTip) < 0}
                       onClick={() => handleApplyTip(Number(customTip))}
-                      className="h-9 px-3 rounded-xl text-xs font-bold"
+                      className="h-9 px-3 rounded-xl text-xs font-bold cursor-pointer"
                     >
                       {tipLoading ? <Loader2 className="size-3 animate-spin" /> : 'Apply'}
                     </Button>

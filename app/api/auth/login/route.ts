@@ -18,10 +18,19 @@ export async function POST(request: NextRequest) {
     const email = String(body.email).trim().toLowerCase()
     const password = String(body.password)
 
-    // Query user by email from PostgreSQL via Prisma
-    const user = await prisma.user.findUnique({
-      where: { email },
-    })
+    // Query user by email from PostgreSQL via Prisma (with retry for Neon cold-starts)
+    let user = null
+    try {
+      user = await prisma.user.findUnique({
+        where: { email },
+      })
+    } catch (dbErr: any) {
+      console.warn('First DB attempt failed, retrying once...', dbErr?.message || dbErr)
+      await new Promise((r) => setTimeout(r, 400))
+      user = await prisma.user.findUnique({
+        where: { email },
+      })
+    }
 
     if (!user || user.deletedAt) {
       return NextResponse.json(

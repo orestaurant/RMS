@@ -53,10 +53,14 @@ export interface CustomerLocationLockProps {
 
 export const PRESET_LANDMARKS = [
   'Under Banyan Tree',
-  'Near Liquor Shop',
+  'Near Highway ATM',
+  'Near Tree / Shade',
+  'Food Cart Front',
   'Main Road Side',
   'Opposite Gate',
   'Corner Parking',
+  'Near Liquor Shop',
+  'Near Petrol Pump',
 ]
 
 /**

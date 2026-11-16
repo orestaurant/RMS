@@ -123,6 +123,34 @@ export function updateCachedItemAvailability(itemId: string, isAvailable: boolea
 }
 
 /**
+ * Optimistically prepend a newly created menu item to cache for instant sub-millisecond retrieval
+ */
+export function addCachedMenuItem(item: CachedMenuItem): void {
+  if (menuItemsCache?.data) {
+    menuItemsCache.data = [item, ...menuItemsCache.data.filter((i) => i.id !== item.id)]
+    menuItemsCache.timestamp = Date.now()
+    if (item.id && item.category) {
+      itemIdToCategoryMap.set(item.id, item.category)
+    }
+  }
+  categoriesCacheMap.clear()
+  invalidatePOSMenuCache()
+}
+
+/**
+ * Optimistically remove a deleted menu item from cache
+ */
+export function removeCachedMenuItem(itemId: string): void {
+  if (menuItemsCache?.data) {
+    menuItemsCache.data = menuItemsCache.data.filter((i) => i.id !== itemId)
+    menuItemsCache.timestamp = Date.now()
+    itemIdToCategoryMap.delete(itemId)
+  }
+  categoriesCacheMap.clear()
+  invalidatePOSMenuCache()
+}
+
+/**
  * Invalidate all menu-related caches on create/update/delete mutations
  */
 export function invalidateAllMenuCaches(): void {

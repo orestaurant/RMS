@@ -49,10 +49,16 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       })
 
-      const data = await res.json()
+      let data: any = null
+      const text = await res.text()
+      try {
+        data = text ? JSON.parse(text) : null
+      } catch {
+        data = null
+      }
 
-      if (!res.ok || !data.success) {
-        setError(data.message || 'Invalid email or password.')
+      if (!res.ok || !data?.success) {
+        setError(data?.message || 'Invalid email or password. Please try again.')
         setLoading(false)
         return
       }
@@ -61,7 +67,9 @@ export default function LoginPage() {
       const targetUrl = data.redirect || '/dashboard'
       window.location.href = targetUrl
     } catch (err: any) {
-      setError(err?.message || 'An unexpected network error occurred.')
+      const rawMsg = err?.message || ''
+      const isHtmlError = rawMsg.includes('<!DOCTYPE') || rawMsg.includes('<html') || rawMsg.includes('Unexpected token')
+      setError(isHtmlError ? 'Server is starting up or temporarily busy. Please try again.' : (rawMsg || 'An unexpected network error occurred.'))
       setLoading(false)
     }
   }

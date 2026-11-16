@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma'
 import {
   invalidateAllMenuCaches,
   updateCachedItemAvailability,
+  removeCachedMenuItem,
 } from '@/lib/menu-cache'
 
 export async function GET(
@@ -112,7 +113,8 @@ export async function PATCH(
     if (body.isAvailable !== undefined && Object.keys(data).length === 1) {
       updateCachedItemAvailability(id, Boolean(body.isAvailable))
     } else {
-      invalidateAllMenuCaches()
+      removeCachedMenuItem(id)
+    invalidateAllMenuCaches()
     }
 
     return NextResponse.json({
@@ -171,6 +173,7 @@ export async function DELETE(
       },
     })
 
+    removeCachedMenuItem(id)
     invalidateAllMenuCaches()
 
     return NextResponse.json({
