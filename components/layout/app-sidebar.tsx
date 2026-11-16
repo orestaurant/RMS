@@ -42,7 +42,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu'
-import { useAuthContext } from '@/hooks/useAuthContext'
+import { useAuthContext, clearAuthCache } from '@/hooks/useAuthContext'
 import { useSidebarCounts } from '@/hooks/useSidebarCounts'
 
 export function AppSidebar() {
@@ -67,6 +67,7 @@ export function AppSidebar() {
   const handleLogout = async () => {
     try {
       setLoggingOut(true)
+      clearAuthCache()
       if (isCustomer) {
         await Promise.allSettled([
           fetch('/api/customer/auth/logout', { method: 'POST' }),

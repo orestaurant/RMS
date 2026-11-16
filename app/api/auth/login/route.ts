@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma'
 import { signJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { CUSTOMER_SESSION_COOKIE } from '@/lib/customer-auth'
 import { invalidateAdminAuthCache } from '@/lib/admin-auth'
+import { invalidateAuthMeCache } from '@/lib/dashboard-cache'
 
 export async function POST(request: NextRequest) {
   try {
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
 
     // Invalidate existing cached admin sessions to ensure fresh auth state
     invalidateAdminAuthCache()
+    invalidateAuthMeCache(user.id)
 
     // Sign JWT token
     const token = await signJWT({

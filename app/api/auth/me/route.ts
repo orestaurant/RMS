@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { verifyCustomerToken, CUSTOMER_SESSION_COOKIE } from '@/lib/customer-auth'
+import { getCachedAuthMe, setCachedAuthMe } from '@/lib/dashboard-cache'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -28,15 +29,42 @@ export async function GET(request: NextRequest) {
     if (adminSessionCookie) {
       const payload = await verifyJWT(adminSessionCookie)
       if (payload && payload.userId) {
+        // Ultra-fast in-memory cache hit (< 1ms)
+        const cached = getCachedAuthMe(payload.userId)
+        if (cached) {
+          return NextResponse.json(cached, {
+            headers: {
+              ...NO_CACHE_HEADERS,
+              'X-Auth-Cache': 'HIT',
+            },
+          })
+        }
+
         const user = await prisma.user.findUnique({
           where: { id: payload.userId },
-          include: {
-            staffProfile: true,
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            firstName: true,
+            lastName: true,
+            role: true,
+            organizationId: true,
             organization: {
-              include: {
+              select: {
+                id: true,
                 restaurants: {
-                  include: {
-                    branches: true,
+                  take: 1,
+                  select: {
+                    id: true,
+                    name: true,
+                    branches: {
+                      take: 1,
+                      select: {
+                        id: true,
+                        name: true,
+                      },
+                    },
                   },
                 },
               },
@@ -66,19 +94,25 @@ export async function GET(request: NextRequest) {
             branchName,
           }
 
-          return NextResponse.json(
-            {
-              success: true,
-              user: {
-                id: user.id,
-                email: user.email,
-                name: userData.name,
-                role: user.role,
-              },
-              data: userData,
+          const responsePayload = {
+            success: true,
+            user: {
+              id: user.id,
+              email: user.email,
+              name: userData.name,
+              role: user.role,
             },
-            { headers: NO_CACHE_HEADERS }
-          )
+            data: userData,
+          }
+
+          setCachedAuthMe(payload.userId, responsePayload)
+
+          return NextResponse.json(responsePayload, {
+            headers: {
+              ...NO_CACHE_HEADERS,
+              'X-Auth-Cache': 'MISS',
+            },
+          })
         }
       }
     }
@@ -87,14 +121,38 @@ export async function GET(request: NextRequest) {
     if (customerSessionCookie) {
       const payload = await verifyCustomerToken(customerSessionCookie)
       if (payload && payload.customerId) {
+        const cached = getCachedAuthMe(payload.customerId)
+        if (cached) {
+          return NextResponse.json(cached, {
+            headers: {
+              ...NO_CACHE_HEADERS,
+              'X-Auth-Cache': 'HIT',
+            },
+          })
+        }
+
         const customer = await prisma.customer.findUnique({
           where: { id: payload.customerId },
-          include: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            organizationId: true,
             organization: {
-              include: {
+              select: {
+                id: true,
                 restaurants: {
-                  include: {
-                    branches: true,
+                  take: 1,
+                  select: {
+                    id: true,
+                    name: true,
+                    branches: {
+                      take: 1,
+                      select: {
+                        id: true,
+                        name: true,
+                      },
+                    },
                   },
                 },
               },
@@ -108,7 +166,15 @@ export async function GET(request: NextRequest) {
 
           if (!firstRestaurant) {
             firstRestaurant = await prisma.restaurant.findFirst({
-              include: { branches: true },
+              take: 1,
+              select: {
+                id: true,
+                name: true,
+                branches: {
+                  take: 1,
+                  select: { id: true, name: true },
+                },
+              },
             }) ?? undefined
             firstBranch = firstRestaurant?.branches?.[0]
           }
@@ -131,19 +197,25 @@ export async function GET(request: NextRequest) {
             branchName,
           }
 
-          return NextResponse.json(
-            {
-              success: true,
-              user: {
-                id: customer.id,
-                email: customer.email,
-                name: customerData.name,
-                role: 'CUSTOMER',
-              },
-              data: customerData,
+          const responsePayload = {
+            success: true,
+            user: {
+              id: customer.id,
+              email: customer.email,
+              name: customerData.name,
+              role: 'CUSTOMER',
             },
-            { headers: NO_CACHE_HEADERS }
-          )
+            data: customerData,
+          }
+
+          setCachedAuthMe(payload.customerId, responsePayload)
+
+          return NextResponse.json(responsePayload, {
+            headers: {
+              ...NO_CACHE_HEADERS,
+              'X-Auth-Cache': 'MISS',
+            },
+          })
         }
       }
     }

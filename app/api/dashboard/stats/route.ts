@@ -48,7 +48,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
             include: { restaurant: true },
           })
 
-      if (branch && !branchIdParam) {
+      if (branch) {
         setCachedBranchMeta(branch)
       }
     }

@@ -1,6 +1,6 @@
 /**
  * useTables Hook
- * Fetches tables for a branch
+ * Fetches tables for a branch with instant in-memory cache
  */
 
 'use client'
@@ -23,26 +23,31 @@ interface UseTablesReturn {
   refetch: () => Promise<void>
 }
 
+const clientTablesCache: Record<string, Table[]> = {}
+
 export function useTables(branchId: string | null): UseTablesReturn {
-  const [data, setData] = useState<Table[] | null>(null)
-  const [loading, setLoading] = useState(!branchId)
+  const targetBranch = branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
+  const cached = clientTablesCache[targetBranch] || null
+
+  const [data, setData] = useState<Table[] | null>(cached)
+  const [loading, setLoading] = useState(!cached)
   const [error, setError] = useState<Error | null>(null)
 
   const refetch = useCallback(async () => {
-    if (!branchId) return
-
-    setLoading(true)
-    setError(null)
     try {
-      const tables = await getTables(branchId)
+      if (!clientTablesCache[targetBranch]) {
+        setLoading(true)
+      }
+      setError(null)
+      const tables = await getTables(targetBranch)
+      clientTablesCache[targetBranch] = tables
       setData(tables)
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch tables'))
-      setData(null)
     } finally {
       setLoading(false)
     }
-  }, [branchId])
+  }, [targetBranch])
 
   useEffect(() => {
     refetch()

@@ -1,6 +1,6 @@
 /**
  * GET /api/dashboard/sidebar-counts?branchId=<id>
- * Get sidebar badge counts from PostgreSQL via Prisma
+ * Get sidebar badge counts from PostgreSQL via Prisma - High Performance Parallelized & Cached
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -8,97 +8,125 @@ import prisma from '@/lib/prisma'
 import { startOfDay, endOfDay } from 'date-fns'
 import type { SidebarCounts } from '@/types/dashboard'
 import { successResponse, errorResponse, ApiResponse } from '@/api/utils/responses'
+import {
+  getCachedSidebarCounts,
+  setCachedSidebarCounts,
+  getCachedBranchMeta,
+  setCachedBranchMeta,
+} from '@/lib/dashboard-cache'
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<SidebarCounts>>> {
   try {
     const url = new URL(request.url)
-    let branchId = url.searchParams.get('branchId')
+    const branchIdParam = url.searchParams.get('branchId')
+    const cacheKey = branchIdParam || 'default'
 
-    // Find default branch if not provided
+    // 1. Ultra-fast in-memory cache hit (< 1ms)
+    const cached = getCachedSidebarCounts(cacheKey)
+    if (cached) {
+      return NextResponse.json(
+        successResponse(cached, 'Sidebar counts retrieved from cache'),
+        {
+          headers: {
+            'X-Cache': 'HIT',
+            'Cache-Control': 'private, max-age=5, stale-while-revalidate=10',
+          },
+        }
+      )
+    }
+
+    // 2. Resolve branch (with in-memory branch meta cache)
+    let branchId = branchIdParam
     if (!branchId) {
-      const defaultBranch = await prisma.branch.findFirst({
-        select: { id: true, organizationId: true },
-      })
-      branchId = defaultBranch?.id || null
+      const cachedBranch = getCachedBranchMeta(null)
+      if (cachedBranch) {
+        branchId = cachedBranch.id
+      } else {
+        const defaultBranch = await prisma.branch.findFirst({
+          select: { id: true, organizationId: true },
+        })
+        if (defaultBranch) {
+          branchId = defaultBranch.id
+          setCachedBranchMeta(defaultBranch)
+        }
+      }
     }
 
     const today = new Date()
     const todayStart = startOfDay(today)
     const todayEnd = endOfDay(today)
 
-    // 1. Reservations count: Pending/confirmed reservations for today
-    const reservationsCount = await prisma.reservation.count({
-      where: {
-        ...(branchId ? { branchId } : {}),
-        reservationDate: {
-          gte: todayStart,
-          lte: todayEnd,
-        },
-        status: {
-          in: ['pending', 'confirmed'],
-        },
-        deletedAt: null,
-      },
-    })
-
-    // 2. Live Orders count: Orders created today or active in-progress (matching Live Orders view & Total Orders)
-    const liveOrdersCount = await prisma.order.count({
-      where: {
-        ...(branchId ? { branchId } : {}),
-        deletedAt: null,
-        status: {
-          notIn: ['cancelled', 'CANCELLED', 'refunded'],
-        },
-        OR: [
-          { createdAt: { gte: todayStart } },
-          {
-            status: {
-              in: ['pending', 'confirmed', 'preparing', 'ready', 'PENDING', 'PREPARING'],
+    // 3. Ultra-fast concurrent batch execution via Promise.all
+    const [reservationsCount, liveOrdersCount, lowStockCount, posSession, kitchenTickets] =
+      await Promise.all([
+        // 1. Reservations count
+        prisma.reservation.count({
+          where: {
+            ...(branchId ? { branchId } : {}),
+            reservationDate: {
+              gte: todayStart,
+              lte: todayEnd,
             },
+            status: {
+              in: ['pending', 'confirmed'],
+            },
+            deletedAt: null,
           },
-        ],
-      },
-    })
+        }).catch(() => 0),
 
-    // 3. Inventory count: Items where current_stock <= min_stock
-    const inventoryItems = await prisma.inventoryItem.findMany({
-      select: {
-        quantity: true,
-        minStock: true,
-      },
-    })
+        // 2. Live Orders count
+        prisma.order.count({
+          where: {
+            ...(branchId ? { branchId } : {}),
+            deletedAt: null,
+            status: {
+              notIn: ['cancelled', 'CANCELLED', 'refunded'],
+            },
+            OR: [
+              { createdAt: { gte: todayStart } },
+              {
+                status: {
+                  in: ['pending', 'confirmed', 'preparing', 'ready', 'PENDING', 'PREPARING'],
+                },
+              },
+            ],
+          },
+        }).catch(() => 0),
 
-    let lowStockCount = inventoryItems.filter(
-      (item) => Number(item.quantity) <= Number(item.minStock)
-    ).length
+        // 3. Inventory low stock count
+        prisma.lowStockAlert.count({
+          where: {
+            alertStatus: 'active',
+            ...(branchId ? { branchId } : {}),
+          },
+        }).catch(async () => {
+          const items = await prisma.inventoryItem.findMany({
+            select: { quantity: true, minStock: true },
+            take: 200,
+          }).catch(() => [])
+          return items.filter((i) => Number(i.quantity) <= Number(i.minStock)).length
+        }),
 
-    if (lowStockCount === 0) {
-      lowStockCount = await prisma.lowStockAlert.count({
-        where: {
-          alertStatus: 'active',
-          ...(branchId ? { branchId } : {}),
-        },
-      })
-    }
+        // 4. POS open session
+        prisma.cashRegisterSession.findFirst({
+          where: {
+            ...(branchId ? { cashRegister: { branchId } } : {}),
+            status: 'open',
+          },
+          select: { id: true },
+        }).catch(() => null),
 
-    // 4. Check if POS is live (open cash register session)
-    const posSession = await prisma.cashRegisterSession.findFirst({
-      where: {
-        ...(branchId ? { cashRegister: { branchId } } : {}),
-        status: 'open',
-      },
-    })
-
-    // 5. Check if kitchen is live (active kitchen tickets or active kitchen orders)
-    const kitchenTickets = await prisma.kitchenTicket.count({
-      where: {
-        ...(branchId ? { branchId } : {}),
-        status: {
-          in: ['pending', 'preparing'],
-        },
-        deletedAt: null,
-      },
-    })
+        // 5. Kitchen active tickets
+        prisma.kitchenTicket.count({
+          where: {
+            ...(branchId ? { branchId } : {}),
+            status: {
+              in: ['pending', 'preparing'],
+            },
+            deletedAt: null,
+          },
+        }).catch(() => 0),
+      ])
 
     const counts: SidebarCounts = {
       reservations: reservationsCount,
@@ -108,7 +136,18 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       kitchenLive: kitchenTickets > 0 || liveOrdersCount > 0,
     }
 
-    return NextResponse.json(successResponse(counts, 'Sidebar counts retrieved successfully'))
+    // Save to in-memory cache
+    setCachedSidebarCounts(cacheKey, counts)
+
+    return NextResponse.json(
+      successResponse(counts, 'Sidebar counts retrieved successfully'),
+      {
+        headers: {
+          'X-Cache': 'MISS',
+          'Cache-Control': 'private, max-age=5, stale-while-revalidate=10',
+        },
+      }
+    )
   } catch (error: any) {
     console.error('Error fetching sidebar counts:', error)
     return NextResponse.json(

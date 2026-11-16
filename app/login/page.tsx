@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { seedAuthCache } from '@/hooks/useAuthContext'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -63,7 +64,12 @@ export default function LoginPage() {
         return
       }
 
-      // Success: full navigation to clear all prior in-memory session and cache states
+      // Pre-seed auth cache for instant 0ms dashboard load
+      if (data.user) {
+        seedAuthCache(data.user)
+      }
+
+      // Success: full navigation to dashboard
       const targetUrl = data.redirect || '/dashboard'
       window.location.href = targetUrl
     } catch (err: any) {

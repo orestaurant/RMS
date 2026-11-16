@@ -68,26 +68,33 @@ export function DashboardOverview() {
   return <AdminDashboardOverview auth={auth} />
 }
 
+let clientTopDishesCache: TopDish[] = []
+let clientAlertsCache: InventoryAlert[] = []
+
 function AdminDashboardOverview({ auth }: { auth: any }) {
   const activeBranchId = auth?.branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
 
   // Dynamic dashboard stats from PostgreSQL via Prisma
   const { data: stats, loading: statsLoading } = useDashboardStats(activeBranchId)
 
-  const [topDishes, setTopDishes] = useState<TopDish[]>([])
-  const [inventoryAlerts, setInventoryAlerts] = useState<InventoryAlert[]>([])
-  const [alertsLoading, setAlertsLoading] = useState(true)
+  const [topDishes, setTopDishes] = useState<TopDish[]>(clientTopDishesCache)
+  const [inventoryAlerts, setInventoryAlerts] = useState<InventoryAlert[]>(clientAlertsCache)
+  const [alertsLoading, setAlertsLoading] = useState(clientTopDishesCache.length === 0 && clientAlertsCache.length === 0)
 
   useEffect(() => {
     let isMounted = true
     const fetchData = async () => {
       try {
-        setAlertsLoading(true)
+        if (clientTopDishesCache.length === 0 && clientAlertsCache.length === 0) {
+          setAlertsLoading(true)
+        }
         const [dishes, alerts] = await Promise.all([
           getTopDishes(activeBranchId).catch(() => []),
           getInventoryAlerts(activeBranchId).catch(() => []),
         ])
         if (isMounted) {
+          clientTopDishesCache = dishes
+          clientAlertsCache = alerts
           setTopDishes(dishes)
           setInventoryAlerts(alerts)
         }

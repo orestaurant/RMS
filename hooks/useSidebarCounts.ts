@@ -1,6 +1,6 @@
 /**
  * useSidebarCounts Hook
- * Fetches sidebar badge counts
+ * Fetches sidebar badge counts with instant in-memory cache and SWR revalidation
  */
 
 'use client'
@@ -16,22 +16,26 @@ interface UseSidebarCountsReturn {
   refetch: () => Promise<void>
 }
 
+// Client-side cache for instant sidebar badge rendering
+let clientSidebarCache: SidebarCounts | null = null
+
 export function useSidebarCounts(branchId: string | null): UseSidebarCountsReturn {
-  const [data, setData] = useState<SidebarCounts | null>(null)
-  const [loading, setLoading] = useState(!branchId)
+  const [data, setData] = useState<SidebarCounts | null>(clientSidebarCache)
+  const [loading, setLoading] = useState(!clientSidebarCache)
   const [error, setError] = useState<Error | null>(null)
 
   const refetch = useCallback(async () => {
-    if (!branchId) return
-
-    setLoading(true)
-    setError(null)
     try {
-      const counts = await getSidebarCounts(branchId)
+      if (!clientSidebarCache) {
+        setLoading(true)
+      }
+      setError(null)
+      const targetBranch = branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
+      const counts = await getSidebarCounts(targetBranch)
+      clientSidebarCache = counts
       setData(counts)
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch sidebar counts'))
-      setData(null)
     } finally {
       setLoading(false)
     }

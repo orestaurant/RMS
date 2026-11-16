@@ -6,6 +6,12 @@
 import prisma from '@/lib/prisma'
 import { startOfDay, endOfDay } from 'date-fns'
 import { TenantContext } from '@/api/middleware/tenant'
+import {
+  getCachedTopDishes,
+  setCachedTopDishes,
+  getCachedInventoryAlerts,
+  setCachedInventoryAlerts,
+} from '@/lib/dashboard-cache'
 
 export interface DashboardSummary {
   todayRevenue: number
@@ -454,6 +460,10 @@ export const getTopDishes = async (
   branchId: string,
   tenantContext: TenantContext
 ): Promise<TopDish[]> => {
+  const cacheKey = branchId || 'default'
+  const cached = getCachedTopDishes(cacheKey)
+  if (cached) return cached
+
   const today = new Date()
   const todayStart = startOfDay(today)
   const todayEnd = endOfDay(today)
@@ -474,9 +484,19 @@ export const getTopDishes = async (
         },
         deletedAt: null,
       },
-      include: {
-        menuItem: true,
+      select: {
+        menuItemId: true,
+        itemName: true,
+        quantity: true,
+        itemTotal: true,
+        menuItem: {
+          select: {
+            name: true,
+            isVegetarian: true,
+          },
+        },
       },
+      take: 100,
     })
 
     const dishMap = new Map<
@@ -497,13 +517,16 @@ export const getTopDishes = async (
       dishMap.set(item.menuItemId, existing)
     })
 
-    return Array.from(dishMap.values())
+    const result = Array.from(dishMap.values())
       .sort((a, b) => b.orders - a.orders)
       .slice(0, 5)
       .map((d) => ({
         ...d,
         trend: '+0%',
       }))
+
+    setCachedTopDishes(cacheKey, result)
+    return result
   } catch (error) {
     console.error('Error fetching top dishes:', error)
     return []
@@ -517,6 +540,10 @@ export const getInventoryAlerts = async (
   branchId: string,
   tenantContext: TenantContext
 ): Promise<InventoryAlert[]> => {
+  const cacheKey = branchId || 'default'
+  const cached = getCachedInventoryAlerts(cacheKey)
+  if (cached) return cached
+
   try {
     const lowStockItems = await prisma.inventoryItem.findMany({
       where: {
@@ -524,10 +551,17 @@ export const getInventoryAlerts = async (
           { quantity: { lte: 10 } }
         ]
       },
+      select: {
+        id: true,
+        name: true,
+        quantity: true,
+        unit: true,
+        criticalStock: true,
+      },
       take: 5,
     })
 
-    return lowStockItems.map((item) => {
+    const result: InventoryAlert[] = lowStockItems.map((item) => {
       const current = Number(item.quantity)
       const status: 'critical' | 'low' =
         current <= Number(item.criticalStock) ? 'critical' : 'low'
@@ -540,6 +574,9 @@ export const getInventoryAlerts = async (
         status,
       }
     })
+
+    setCachedInventoryAlerts(cacheKey, result)
+    return result
   } catch (error) {
     console.error('Error fetching inventory alerts:', error)
     return []
