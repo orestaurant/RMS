@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Loader2,
   UtensilsCrossed,
+  Trash2,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -124,9 +125,13 @@ const timeSlots = [
 function ReservationCard({
   reservation,
   onUpdateStatus,
+  onDeleteReservation,
+  isDeleting = false,
 }: {
   reservation: ReservationItem
   onUpdateStatus: (id: string, status: ReservationStatus) => Promise<void>
+  onDeleteReservation: (id: string) => Promise<void>
+  isDeleting?: boolean
 }) {
   const normStatus: ReservationStatus = statusConfig[reservation.status]
     ? reservation.status
@@ -169,6 +174,25 @@ function ReservationCard({
                 <StatusIcon className="size-2.5 mr-1" />
                 {cfg.label}
               </Badge>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                title="Delete reservation"
+                aria-label={`Delete reservation for ${reservation.guestName}`}
+                disabled={isDeleting}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDeleteReservation(reservation.id)
+                }}
+                className="size-6 text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors"
+              >
+                {isDeleting ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3" />
+                )}
+              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
@@ -203,6 +227,15 @@ function ReservationCard({
                       </DropdownMenuItem>
                     </>
                   )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => onDeleteReservation(reservation.id)}
+                    className="text-destructive focus:text-destructive focus:bg-destructive/10"
+                    disabled={isDeleting}
+                  >
+                    <Trash2 className="size-3.5 mr-2" />
+                    Delete Reservation
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -307,6 +340,7 @@ export function ReservationsView() {
   const [notes, setNotes] = useState('')
   const [createLoading, setCreateLoading] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
 
   // Fetch reservations from real DB API
   const fetchReservations = useCallback(async () => {
@@ -367,11 +401,56 @@ export function ReservationsView() {
     }
   }
 
+  // Fast & optimized delete reservation with optimistic UI update
+  const handleDeleteReservation = async (id: string) => {
+    const target = reservations.find((r) => r.id === id)
+    const guestLabel = target?.guestName ? ` for ${target.guestName}` : ''
+
+    // Lightweight confirmation check before deletion
+    if (!window.confirm(`Are you sure you want to delete the reservation${guestLabel}?`)) {
+      return
+    }
+
+    if (deletingIds.has(id)) return
+
+    // Immediately remove from local React state (optimistic update)
+    const previousReservations = reservations
+    setReservations((prev) => prev.filter((r) => r.id !== id))
+    setDeletingIds((prev) => new Set(prev).add(id))
+
+    try {
+      const res = await fetch(`/api/reservations/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      })
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}))
+        throw new Error(errorData.error || errorData.message || 'Failed to delete reservation')
+      }
+    } catch (err: any) {
+      console.error('Error deleting reservation:', err)
+      // Rollback state on network failure
+      setReservations(previousReservations)
+      alert(`Could not delete reservation: ${err.message || 'Network error'}`)
+    } finally {
+      setDeletingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
   // Handle Create Reservation
   const handleCreateReservation = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!guestName.trim() || !guestPhone.trim()) {
       setCreateError('Guest name and phone number are required')
+      return
+    }
+
+    if (!selectedTableId || !selectedTableId.trim()) {
+      setCreateError('Table assignment is required')
       return
     }
 
@@ -386,7 +465,7 @@ export function ReservationsView() {
         reservationDate: resDate,
         reservationTime: resTime,
         numberOfGuests: parseInt(guestCount) || 2,
-        tableId: selectedTableId || undefined,
+        tableId: selectedTableId.trim(),
         branchId: branchId || undefined,
         notes: notes.trim() || undefined,
         status: 'confirmed',
@@ -400,7 +479,7 @@ export function ReservationsView() {
 
       const json = await res.json()
       if (!res.ok || !json.success) {
-        throw new Error(json.message || 'Failed to create reservation')
+        throw new Error(json.error || json.message || 'Failed to create reservation')
       }
 
       setIsNewOpen(false)
@@ -487,7 +566,7 @@ export function ReservationsView() {
           <DialogHeader>
             <DialogTitle>New Reservation</DialogTitle>
             <DialogDescription>
-              Book a table for a guest. Saved directly to PostgreSQL.
+              Book a table for a guest.
             </DialogDescription>
           </DialogHeader>
 
@@ -568,14 +647,15 @@ export function ReservationsView() {
             </div>
 
             <div className="space-y-1">
-              <Label htmlFor="tableSelect">Assign Table (optional)</Label>
+              <Label htmlFor="tableSelect">Assign Table *</Label>
               <select
                 id="tableSelect"
                 value={selectedTableId}
                 onChange={(e) => setSelectedTableId(e.target.value)}
+                required
                 className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               >
-                <option value="">Auto-assign or Unassigned</option>
+                <option value="" disabled>Select a table</option>
                 {tables.map((t) => (
                   <option key={t.id} value={t.id}>
                     Table {t.tableNumber} ({t.section || 'Indoor'}, Seats {t.capacity}) - {t.status}
@@ -720,6 +800,8 @@ export function ReservationsView() {
                     key={r.id}
                     reservation={r}
                     onUpdateStatus={handleUpdateStatus}
+                    onDeleteReservation={handleDeleteReservation}
+                    isDeleting={deletingIds.has(r.id)}
                   />
                 ))
               )}

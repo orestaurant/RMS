@@ -134,6 +134,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (!tableId || typeof tableId !== 'string' || !tableId.trim()) {
+      return NextResponse.json({ error: 'Table assignment is required' }, { status: 400 })
+    }
+
     const authContext = getMockAuthContext()
     const tenantContext = extractTenantContext(authContext)
     let activeBranchId = branchId || tenantContext.branchId
@@ -273,5 +277,92 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json(errorResponse(error.message, error.code), { status: 400 })
     }
     return NextResponse.json(errorResponse(error.message, 'RESERVATION_UPDATE_ERROR'), { status: 500 })
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const idParam = request.nextUrl.searchParams.get('id')
+    let id = idParam
+    if (!id) {
+      const body = await request.json().catch(() => ({}))
+      id = body?.id
+    }
+
+    if (!id || typeof id !== 'string') {
+      throw new ValidationError('Reservation ID is required')
+    }
+
+    const reservation = await prisma.reservation.findUnique({
+      where: { id },
+      select: { id: true, tableId: true, status: true },
+    })
+
+    if (!reservation) {
+      return NextResponse.json(errorResponse('Reservation not found', 'NOT_FOUND'), { status: 404 })
+    }
+
+    try {
+      if (reservation.tableId) {
+        await prisma.$transaction([
+          prisma.reservation.delete({
+            where: { id },
+          }),
+          prisma.restaurantTable.updateMany({
+            where: {
+              id: reservation.tableId,
+              status: 'reserved',
+            },
+            data: {
+              status: 'available',
+            },
+          }),
+        ])
+      } else {
+        await prisma.reservation.delete({
+          where: { id },
+        })
+      }
+    } catch {
+      if (reservation.tableId) {
+        await prisma.$transaction([
+          prisma.reservation.update({
+            where: { id },
+            data: {
+              deletedAt: new Date(),
+              status: 'cancelled',
+            },
+          }),
+          prisma.restaurantTable.updateMany({
+            where: {
+              id: reservation.tableId,
+              status: 'reserved',
+            },
+            data: {
+              status: 'available',
+            },
+          }),
+        ])
+      } else {
+        await prisma.reservation.update({
+          where: { id },
+          data: {
+            deletedAt: new Date(),
+            status: 'cancelled',
+          },
+        })
+      }
+    }
+
+    return NextResponse.json(
+      successResponse(null, 'Reservation deleted successfully'),
+      { status: 200 }
+    )
+  } catch (error: any) {
+    console.error('Error deleting reservation:', error)
+    if (error instanceof ValidationError) {
+      return NextResponse.json(errorResponse(error.message, error.code), { status: 400 })
+    }
+    return NextResponse.json(errorResponse(error.message, 'RESERVATION_DELETE_ERROR'), { status: 500 })
   }
 }

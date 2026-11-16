@@ -511,17 +511,9 @@ export default function HomePage() {
               <div className="absolute inset-0 rounded-2xl bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity" />
               <UtensilsCrossed className="w-6 h-6 text-white stroke-[2.2]" />
             </div>
-            <div className="flex flex-col">
-              <span className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-slate-950 via-slate-800 to-slate-700 dark:from-white dark:via-slate-100 dark:to-slate-400 bg-clip-text text-transparent flex items-center gap-1.5">
-                Resto<span className="text-orange-600 dark:text-orange-400">Sphere</span>
-                <span className="inline-block px-1.5 py-0.2 text-[9px] font-black rounded-md bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/30 tracking-widest uppercase">
-                  OS
-                </span>
-              </span>
-              <span className="text-[10px] font-semibold tracking-wider text-orange-600 dark:text-orange-400/90 uppercase -mt-0.5">
-                Next-Gen Restaurant OS
-              </span>
-            </div>
+            <span className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-slate-950 via-slate-800 to-slate-700 dark:from-white dark:via-slate-100 dark:to-slate-400 bg-clip-text text-transparent">
+              Resto<span className="text-orange-600 dark:text-orange-400">Sphere</span>
+            </span>
           </Link>
 
           {/* Desktop Nav Links */}
