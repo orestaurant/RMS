@@ -42,7 +42,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import type { LiveBatch } from '@/lib/live-batch-manager'
 
 export type KanbanStatus = 'pending' | 'accepted' | 'cooking' | 'ready' | 'served'
 export type PriorityLevel = 'normal' | 'high' | 'urgent'
@@ -739,11 +748,72 @@ export function KitchenDisplay() {
 
   // Active 20-second cuisine batch timers state
   const [cuisineBatches, setCuisineBatches] = useState<Record<string, CuisineBatch>>({})
+  const [serverBatches, setServerBatches] = useState<LiveBatch[]>([])
+  const [serverTimeDelta, setServerTimeDelta] = useState<number>(0)
+  const [pulsingBatchIds, setPulsingBatchIds] = useState<string[]>([])
+  const lastQuantityMap = useRef<Record<string, number>>({})
+  const [distributionModalData, setDistributionModalData] = useState<{
+    dishName: string
+    totalQuantity: number
+    distributions: Array<{
+      allocationId: string
+      orderNumber: string
+      tableNumber: string | number
+      customerName: string
+      quantityAllocated: number
+      distributedAt: number
+    }>
+  } | null>(null)
   const [batchLockAlert, setBatchLockAlert] = useState<{
     open: boolean
     cuisine: string
     message: string
   } | null>(null)
+
+  // Fetch server synchronized live batches
+  const fetchServerBatches = useCallback(async () => {
+    try {
+      const res = await fetch('/api/kds/batches', { cache: 'no-store' })
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.success && Array.isArray(data.batches)) {
+        if (typeof data.serverTime === 'number') {
+          setServerTimeDelta(data.serverTime - Date.now())
+        }
+
+        // Detect live add-on +1 updates and trigger visual pulse highlight
+        const newPulsing: string[] = []
+        for (const b of data.batches as LiveBatch[]) {
+          const prevQty = lastQuantityMap.current[b.id]
+          if (prevQty !== undefined && b.totalQuantity > prevQty) {
+            newPulsing.push(b.id)
+            if (soundEnabled) {
+              playLockChime()
+            }
+          }
+          lastQuantityMap.current[b.id] = b.totalQuantity
+        }
+
+        if (newPulsing.length > 0) {
+          setPulsingBatchIds((curr) => Array.from(new Set([...curr, ...newPulsing])))
+          setTimeout(() => {
+            setPulsingBatchIds((curr) => curr.filter((id) => !newPulsing.includes(id)))
+          }, 3500)
+        }
+
+        setServerBatches(data.batches)
+      }
+    } catch (e) {
+      // background polling error suppression
+    }
+  }, [soundEnabled])
+
+  // Poll server batches every 2.5s for real-time live sync
+  useEffect(() => {
+    fetchServerBatches()
+    const timer = setInterval(fetchServerBatches, 2500)
+    return () => clearInterval(timer)
+  }, [fetchServerBatches])
 
   // Order Prepared Notification State (Sound + Toast + WhatsApp/SMS Dispatch)
   const [orderPreparedAlert, setOrderPreparedAlert] = useState<{
@@ -811,6 +881,33 @@ export function KitchenDisplay() {
     })
   }
 
+  // Mark server synchronized batch as Ready (Executing fair FIFO distribution)
+  const handleMarkBatchReady = async (batchId: string) => {
+    try {
+      const res = await fetch('/api/kds/batches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'ready', batchId }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        if (soundEnabled) {
+          playOrderPreparedChime()
+        }
+        if (data.distributions && data.distributions.length > 0) {
+          setDistributionModalData({
+            dishName: data.batch?.dishName || 'Batch Item',
+            totalQuantity: data.batch?.totalQuantity || data.distributions.length,
+            distributions: data.distributions,
+          })
+        }
+        await Promise.all([fetchTickets(false), fetchServerBatches()])
+      }
+    } catch (e) {
+      console.warn('Failed to mark batch ready:', e)
+    }
+  }
+
   // Quick add queued order to existing active batch
   const handleQuickAddBatch = (ticketId: string, cuisine: string) => {
     const batch = cuisineBatches[cuisine]
@@ -835,6 +932,31 @@ export function KitchenDisplay() {
       const ticketCuisines = targetTicket.cuisines || Array.from(
         new Set(targetTicket.items.map((it) => it.cuisine || getItemCuisine(it.name, it.station)))
       )
+
+      // Synchronize 20-second live add-on window with server
+      const leadItem = targetTicket.items[0]
+      const totalQty = targetTicket.items.reduce((s, it) => s + it.quantity, 0)
+      fetch('/api/kds/batches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'start',
+          ticketId: targetTicket.id,
+          orderId: targetTicket.fullId,
+          orderNumber: targetTicket.orderNumber || targetTicket.id,
+          tableNumber: targetTicket.tableNumber,
+          customerName: targetTicket.customerName,
+          dishName: leadItem?.name || 'Chef Special',
+          quantity: totalQty,
+          station: leadItem?.station || activeStation,
+          cuisine: ticketCuisines[0] || 'Chef Special',
+        }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) fetchServerBatches()
+        })
+        .catch(console.warn)
 
       // Initialize or start fresh 20-second batch timer for each cuisine
       setCuisineBatches((prev) => {
@@ -887,6 +1009,18 @@ export function KitchenDisplay() {
           customerName: targetTicket.customerName || 'Valued Guest',
           itemsSummary,
         })
+
+        // Check if this ticket belongs to an active live batch and execute fair distribution
+        const matchingBatch = serverBatches.find((b) =>
+          b.allocations.some(
+            (a) =>
+              a.orderNumber === targetOrderNumber ||
+              (targetTicket.fullId && a.orderId === targetTicket.fullId)
+          )
+        )
+        if (matchingBatch) {
+          handleMarkBatchReady(matchingBatch.id)
+        }
 
         // Auto-dismiss notification after 7 seconds
         setTimeout(() => {
@@ -1348,6 +1482,141 @@ export function KitchenDisplay() {
                 </div>
               )}
 
+              {/* ── 20-Second Live Batch Add-on & Distribution System Banner (Chef View) ── */}
+              {serverBatches.filter((b) => b.status === 'PREPARING_LOCK_WINDOW' || b.status === 'IN_KITCHEN_LOCKED').length > 0 && (
+                <div className="rounded-2xl border-2 border-amber-500/40 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-card p-4 shadow-sm space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="size-9 rounded-xl bg-amber-500 text-black flex items-center justify-center font-bold shadow-sm">
+                        <Flame className="size-5 animate-pulse" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-black text-foreground">
+                            ⚡ 20s Live Add-on Batches Active
+                          </h3>
+                          <Badge className="bg-amber-500 text-black font-extrabold text-[10px] px-2 py-0.5 animate-pulse">
+                            Customer Live Add-ons Enabled
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Customers have 20 seconds from start to tap +1 into these active batches before the cooking batch locks.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {serverBatches
+                      .filter((b) => b.status === 'PREPARING_LOCK_WINDOW' || b.status === 'IN_KITCHEN_LOCKED')
+                      .map((batch) => {
+                        const nowMs = Date.now() + serverTimeDelta
+                        const remainingMs = Math.max(0, batch.timerExpiresAt - nowMs)
+                        const remainingSeconds = Math.ceil(remainingMs / 1000)
+                        const isLocked = remainingSeconds <= 0 || batch.status !== 'PREPARING_LOCK_WINDOW'
+                        const isPulsing = pulsingBatchIds.includes(batch.id)
+
+                        return (
+                          <div
+                            key={batch.id}
+                            className={cn(
+                              'relative rounded-xl border p-3.5 space-y-2.5 transition-all shadow-xs bg-card',
+                              isPulsing
+                                ? 'border-amber-500 ring-4 ring-amber-500/30 scale-[1.01] duration-150'
+                                : !isLocked
+                                ? 'border-amber-500/40 ring-1 ring-amber-500/20'
+                                : 'border-border/70 text-muted-foreground'
+                            )}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-extrabold text-sm text-foreground">
+                                  {batch.dishName}
+                                </span>
+                                <p className="text-[11px] text-muted-foreground">
+                                  Lead Table: {batch.leadTableNumber} (#{batch.leadOrderNumber})
+                                </p>
+                              </div>
+
+                              {!isLocked ? (
+                                <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-600 dark:text-amber-400 font-mono font-bold text-xs">
+                                  <Clock className="size-3 animate-spin" />
+                                  <span>00:{remainingSeconds.toString().padStart(2, '0')}</span>
+                                </div>
+                              ) : (
+                                <Badge variant="outline" className="border-border text-muted-foreground text-[10px]">
+                                  <Lock className="size-3 mr-1" /> Cooking Locked
+                                </Badge>
+                              )}
+                            </div>
+
+                            {/* Batch Total Counter with Live Pulse Badge */}
+                            <div className="flex items-center justify-between p-2 rounded-lg bg-muted/40 border border-border/60">
+                              <span className="text-xs font-semibold text-muted-foreground">
+                                Total Cooking Batch:
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={cn(
+                                    'font-mono font-black text-base px-2 py-0.5 rounded-md',
+                                    isPulsing
+                                      ? 'bg-amber-500 text-black scale-110 transition-transform'
+                                      : 'bg-primary/10 text-primary'
+                                  )}
+                                >
+                                  {batch.totalQuantity} portions
+                                </span>
+                                {isPulsing && (
+                                  <Badge className="bg-emerald-600 text-white text-[9px] animate-bounce px-1 py-0">
+                                    +1 Added Live!
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Allocations breakdown */}
+                            <div className="space-y-1 text-xs">
+                              <div className="flex items-center justify-between text-[10px] font-bold text-muted-foreground uppercase">
+                                <span>Table / Customer Split</span>
+                                <span>Qty</span>
+                              </div>
+                              <div className="divide-y divide-border/40 max-h-24 overflow-y-auto">
+                                {batch.allocations.map((a) => (
+                                  <div
+                                    key={a.id}
+                                    className={cn(
+                                      'flex items-center justify-between py-1 text-[11px]',
+                                      a.isAddon && 'text-amber-600 dark:text-amber-400 font-bold'
+                                    )}
+                                  >
+                                    <span>
+                                      {typeof a.tableNumber === 'number' || !isNaN(Number(a.tableNumber))
+                                        ? `Table ${a.tableNumber}`
+                                        : a.tableNumber}{' '}
+                                      {a.isAddon ? '(+1 Add-on)' : '(Lead)'}
+                                    </span>
+                                    <span className="font-mono font-bold">{a.quantity}x</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Chef Mark Ready Action */}
+                            <Button
+                              size="sm"
+                              className="w-full h-8 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer"
+                              onClick={() => handleMarkBatchReady(batch.id)}
+                            >
+                              <CheckCircle2 className="size-3.5 mr-1" />
+                              Mark Ready & Auto-Distribute
+                            </Button>
+                          </div>
+                        )
+                      })}
+                  </div>
+                </div>
+              )}
+
               {/* Cooking Order Cards Grid */}
               {beingPreparedTickets.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10 px-4 text-center rounded-2xl border-2 border-dashed border-border/80 bg-card/40 my-1">
@@ -1709,6 +1978,72 @@ export function KitchenDisplay() {
           </div>
         </div>
       )}
+      {/* ── Fair Batch Distribution Modal ── */}
+      <Dialog
+        open={!!distributionModalData}
+        onOpenChange={(open) => {
+          if (!open) setDistributionModalData(null)
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="size-12 rounded-2xl bg-emerald-500/15 text-emerald-600 flex items-center justify-center mx-auto mb-2">
+              <CheckCircle2 className="size-6" />
+            </div>
+            <DialogTitle className="text-center text-lg font-bold">
+              Fair Batch Distribution Executed
+            </DialogTitle>
+            <DialogDescription className="text-center text-xs text-muted-foreground">
+              {distributionModalData?.totalQuantity}x {distributionModalData?.dishName} prepared and distributed fairly (FIFO) across {distributionModalData?.distributions.length} table(s):
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 py-3">
+            <div className="rounded-xl border border-border/70 divide-y divide-border/60 bg-muted/20">
+              {distributionModalData?.distributions.map((dist, idx) => (
+                <div key={idx} className="flex items-center justify-between p-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-foreground">
+                      {typeof dist.tableNumber === 'number' || !isNaN(Number(dist.tableNumber))
+                        ? `Table ${dist.tableNumber}`
+                        : dist.tableNumber}
+                    </span>
+                    <span className="text-muted-foreground">({dist.customerName})</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-sm text-foreground">
+                      {dist.quantityAllocated}x
+                    </span>
+                    <Badge variant="outline" className="border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-[10px]">
+                      Ready to Serve
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-xs text-emerald-600 dark:text-emerald-400 space-y-1">
+            <div className="flex items-center gap-1.5 font-bold">
+              <Check className="size-3.5" />
+              <span>Waiter Screen updated with table-wise split</span>
+            </div>
+            <div className="flex items-center gap-1.5 font-bold">
+              <Check className="size-3.5" />
+              <span>Customer Screen updated to &quot;Prepared / Out for delivery&quot;</span>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              className="w-full font-bold"
+              onClick={() => setDistributionModalData(null)}
+            >
+              Done & Continue Cooking
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   )
 }

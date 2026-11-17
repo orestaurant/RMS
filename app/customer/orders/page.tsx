@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
+import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 
 interface CustomerProfile {
   id: string
@@ -257,6 +258,13 @@ export default function CustomerOrdersPage() {
             </button>
           </div>
         )}
+
+        {/* ── 20-Second Live Chef Preparation Add-on Banner ───────── */}
+        <LiveBatchAddonBanner
+          currentTableNumber="Table 1"
+          customerName={profile?.name || 'Customer'}
+          onOrderPlaced={loadData}
+        />
 
         {/* ── Customer Profile Card ─────────────────────────── */}
         <Card className="border-border/60 bg-card/90 shadow-sm overflow-hidden">

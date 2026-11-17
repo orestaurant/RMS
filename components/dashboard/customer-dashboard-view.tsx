@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import { cn } from '@/lib/utils'
+import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 
 interface CustomerProfile {
   id: string
@@ -73,10 +74,35 @@ export function CustomerDashboardView() {
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
   const [loading, setLoading] = useState(true)
+  const [quickOrdering, setQuickOrdering] = useState(false)
+  const [orderNotice, setOrderNotice] = useState<string | null>(null)
 
   const customerName = auth?.name || profile?.name || 'Customer'
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+
+  const handleQuickPlaceOrder = async () => {
+    try {
+      setQuickOrdering(true)
+      setOrderNotice(null)
+      const res = await fetch('/api/customer/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tableNumber: 'Table 1' }),
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setOrderNotice(`Order #${data.order.orderNumber} placed successfully! Visible to staff in kitchen.`)
+        await fetchCustomerData()
+      } else {
+        setOrderNotice(data.message || 'Failed to place order. Please try from Menu.')
+      }
+    } catch (e: any) {
+      setOrderNotice('Network error placing order.')
+    } finally {
+      setQuickOrdering(false)
+    }
+  }
 
   const fetchCustomerData = useCallback(async () => {
     try {
@@ -148,14 +174,43 @@ export function CustomerDashboardView() {
             <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
             <span>Refresh</span>
           </Button>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={handleQuickPlaceOrder}
+            disabled={quickOrdering}
+            className="h-8 gap-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+          >
+            <Sparkles className="size-3.5" />
+            <span>{quickOrdering ? 'Placing Order...' : 'Quick Place Order'}</span>
+          </Button>
           <Link href="/customer/orders">
-            <Button size="sm" className="h-8 gap-1.5 text-xs font-semibold shadow-sm">
+            <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs font-semibold shadow-sm">
               <Receipt className="size-3.5" />
               <span>My Orders & History</span>
             </Button>
           </Link>
         </div>
       </div>
+
+      {orderNotice && (
+        <div className="p-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-medium flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="size-4 shrink-0" />
+            <span>{orderNotice}</span>
+          </div>
+          <Button size="sm" variant="ghost" onClick={() => setOrderNotice(null)} className="h-6 px-2 text-xs">
+            Dismiss
+          </Button>
+        </div>
+      )}
+
+      {/* ── 20-Second Live Chef Preparation Add-on Banner ───────── */}
+      <LiveBatchAddonBanner
+        currentTableNumber="Table 1"
+        customerName={customerName}
+        onOrderPlaced={fetchCustomerData}
+      />
 
       {/* ── Customer Metric Cards (Zero Admin/Revenue Numbers) ── */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -215,7 +270,7 @@ export function CustomerDashboardView() {
             </p>
           </div>
         </div>
-        <Link href="/admin-menu">
+        <Link href="/menu">
           <Button size="sm" className="h-8.5 gap-1.5 text-xs font-semibold">
             <UtensilsCrossed className="size-3.5" />
             <span>Browse Full Menu</span>
@@ -263,7 +318,7 @@ export function CustomerDashboardView() {
                   <p className="text-xs text-muted-foreground max-w-sm mt-1">
                     Ready to dine? Explore our menu, view current table availability, or reorder your favorites.
                   </p>
-                  <Link href="/admin-menu" className="mt-4">
+                  <Link href="/menu" className="mt-4">
                     <Button size="sm" className="gap-2 text-xs">
                       <Sparkles className="size-3.5" />
                       <span>Order from Menu</span>
@@ -399,7 +454,7 @@ export function CustomerDashboardView() {
 
               {/* Browse Menu */}
               <Link
-                href="/admin-menu"
+                href="/menu"
                 className="flex items-center justify-between p-3 rounded-lg border border-border/70 hover:bg-muted/40 transition-colors group"
               >
                 <div className="flex items-center gap-3">

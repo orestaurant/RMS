@@ -151,14 +151,19 @@ export function AppSidebar() {
           label: 'OPERATIONS',
           items: [
             {
+              label: 'Customer Dashboard',
+              href: '/dashboard',
+              icon: LayoutDashboard,
+            },
+            {
               label: 'Live Orders',
               href: '/orders',
               icon: Zap,
               badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
             },
             {
-              label: 'Menu Management',
-              href: '/admin-menu',
+              label: 'Digital Menu',
+              href: '/menu',
               icon: UtensilsCrossed,
             },
           ],

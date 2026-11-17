@@ -55,6 +55,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { CustomerLocationLock, CustomerLocationData, isValidCoord } from '@/components/orders/CustomerLocationLock'
 import { useAuthContext } from '@/hooks/useAuthContext'
+import { WaiterLiveBatchesFeed } from '@/components/orders/WaiterLiveBatchesFeed'
 
 export type OrderStatus = 'pending' | 'accepted' | 'cooking' | 'ready' | 'served'
 
@@ -1306,6 +1307,11 @@ export function LiveOrdersView() {
           </Card>
         ))}
       </div>
+
+      {/* ── Waiter Real-Time Active Batches & Fair Table Distribution ── */}
+      {!isCustomer && (
+        <WaiterLiveBatchesFeed onOrdersRefresh={() => fetchLiveOrders(false)} />
+      )}
 
       {/* ── New / Pending Requests Section (Waiter Order Acceptance) ── */}
       {!isCustomer && pendingOrders.length > 0 && (

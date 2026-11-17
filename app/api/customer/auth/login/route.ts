@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
 import prisma from '@/lib/prisma'
 import { signCustomerToken, CUSTOMER_SESSION_COOKIE } from '@/lib/customer-auth'
-import { SESSION_COOKIE_NAME, verifyJWT } from '@/lib/auth'
+import { SESSION_COOKIE_NAME } from '@/lib/auth'
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,27 +17,7 @@ export async function POST(request: NextRequest) {
     const email = String(body.email).trim().toLowerCase()
     const password = String(body.password)
 
-    // 1. Session-based role check: Block if incoming request already carries an active admin/staff session
-    const adminToken = request.cookies.get(SESSION_COOKIE_NAME)?.value
-    if (adminToken) {
-      try {
-        const adminPayload = await verifyJWT(adminToken)
-        if (adminPayload && String(adminPayload.role || '').toUpperCase() !== 'CUSTOMER') {
-          return NextResponse.json(
-            {
-              success: false,
-              code: 'ADMIN_STAFF_ACCOUNT',
-              message: 'Admin or staff accounts cannot log in through the Customer Portal. Please use the Staff & Admin Sign In.',
-            },
-            { status: 403 }
-          )
-        }
-      } catch {
-        // Silently proceed if existing admin token is expired or malformed
-      }
-    }
-
-    // 2. Database-based role check: Block if this email belongs to an ADMIN, OWNER, MANAGER, or STAFF role in User table
+    // 1. Database-based role check: Block if this email belongs to an ADMIN, OWNER, MANAGER, or STAFF role in User table
     const staffUser = await prisma.user.findUnique({
       where: { email },
       select: { id: true, role: true, deletedAt: true },
@@ -108,7 +88,7 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         message: 'Logged in successfully',
-        redirect: '/orders',
+        redirect: '/dashboard',
         customer: {
           id: customer.id,
           name: customer.name,

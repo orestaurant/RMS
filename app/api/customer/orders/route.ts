@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getCustomerSession } from '@/lib/customer-auth'
-import { registerActiveLiveOrder, getKitchenStation } from '@/lib/kds-utils'
+import {
+  registerActiveLiveOrder,
+  getKitchenStation,
+  invalidateKDSCache,
+  invalidateLiveOrdersCache,
+} from '@/lib/kds-utils'
+import { invalidateDashboardStatsCache } from '@/lib/dashboard-cache'
 
 /**
  * GET /api/customer/orders
@@ -92,6 +98,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const body = await request.json().catch(() => ({}))
+    const requestedTable = body.tableNumber ? String(body.tableNumber).trim() : 'Table 1'
+
     // 1. Resolve restaurant and branch
     let branch = await prisma.branch.findFirst({
       include: { restaurant: true },
@@ -104,7 +113,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 2. Fetch or ensure menu items for test order
+    // 2. Fetch or ensure menu items for order
     let menuItems = await prisma.menuItem.findMany({
       where: { restaurantId: branch.restaurantId },
       take: 2,
@@ -171,6 +180,10 @@ export async function POST(request: NextRequest) {
         totalAmount: totalCalculated,
         total: totalCalculated,
         paymentStatus: 'pending',
+        metadata: {
+          tableNumber: requestedTable,
+          customerName: session.name || 'Customer',
+        },
         items: {
           create: itemsToCreate,
         },
@@ -196,10 +209,10 @@ export async function POST(request: NextRequest) {
     registerActiveLiveOrder({
       id: order.orderNumber,
       fullId: order.id,
-      tableNumber: 'Table 1',
+      tableNumber: requestedTable,
       source: 'qr_order',
       waiter: 'Online',
-      customerName: (order.customer as any)?.name || 'Customer',
+      customerName: (order.customer as any)?.name || session.name || 'Customer',
       status: 'pending',
       priority: 'normal',
       createdAt: order.createdAt.toISOString(),
@@ -212,12 +225,18 @@ export async function POST(request: NextRequest) {
       })),
     })
 
+    // 6. Invalidate all caches so Admin and Staff see this order immediately
+    invalidateDashboardStatsCache(branch.id)
+    invalidateKDSCache()
+    invalidateLiveOrdersCache()
+
     return NextResponse.json({
       success: true,
-      message: 'Order placed successfully',
+      message: 'Order placed successfully and dispatched to Kitchen & Staff!',
       order: {
         id: order.id,
         orderNumber: order.orderNumber,
+        tableNumber: requestedTable,
         total: Number(order.total),
         status: order.status,
         source: order.source,

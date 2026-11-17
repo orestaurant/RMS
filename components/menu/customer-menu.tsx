@@ -56,6 +56,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 
 export interface CustomerMenuItem {
   id: string
@@ -1733,6 +1734,12 @@ export function CustomerMenu() {
 
       {/* 5. MAIN CONTENT AREA */}
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 space-y-5 pb-28">
+        {/* Live 20-Second Chef Preparation & Batch Add-on Banner */}
+        <LiveBatchAddonBanner
+          currentTableNumber={tableNumber || 'Table 1'}
+          customerName="Menu Guest"
+          onOrderPlaced={fetchTableOrders}
+        />
         {/* Live Orders Status Quick Pill Banner */}
         {totalActiveOrders > 0 && (
           <div
