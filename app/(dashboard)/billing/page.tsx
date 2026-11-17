@@ -1,3 +1,4 @@
+import { TopNavbar } from '@/components/layout/top-navbar'
 import { BillingManagementView } from '@/components/billing/billing-management-view'
 
 export const metadata = {
@@ -6,6 +7,10 @@ export const metadata = {
 }
 
 export default function BillingPage() {
-  return <BillingManagementView />
+  return (
+    <>
+      <TopNavbar title="Billing & Invoices" subtitle="Table billing · Discounts · Settlements · Tips" />
+      <BillingManagementView />
+    </>
+  )
 }
-

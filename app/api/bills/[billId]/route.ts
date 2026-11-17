@@ -1,10 +1,12 @@
 /**
- * GET & PATCH /api/bills/[billId]
- * Retrieve full itemized bill & update discounts/notes prior to settlement
+ * GET, PATCH & DELETE /api/bills/[billId]
+ * Retrieve full itemized bill, update discounts/notes, and soft-delete/cancel invoice
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { removeFallbackOrder, updateFallbackOrder, invalidateLiveOrdersCache, invalidateKDSCache } from '@/lib/kds-utils'
+import { removeMemoryBill } from '@/app/api/bills/route'
 
 export async function GET(
   request: NextRequest,
@@ -156,6 +158,185 @@ export async function PATCH(
     console.error('Error updating bill:', error)
     return NextResponse.json(
       { success: false, message: error?.message || 'Failed to update bill' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ billId: string }> }
+) {
+  try {
+    const { billId } = await params
+
+    if (!billId) {
+      return NextResponse.json({ success: false, message: 'Bill identifier is required' }, { status: 400 })
+    }
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(billId)
+    let billDeleted = false
+    let orderDeleted = false
+
+    // 1. Instantly purge from memory structures & live KDS caches
+    try {
+      removeMemoryBill(billId)
+      removeFallbackOrder(billId)
+      updateFallbackOrder(billId, { status: 'cancelled' })
+      invalidateLiveOrdersCache()
+      invalidateKDSCache()
+    } catch (cacheErr) {
+      console.warn('Cache purge note:', cacheErr)
+    }
+
+    // 2. Look up and soft-delete in Prisma Bill
+    try {
+      const billConditions: any[] = [{ billNumber: billId }]
+      if (isUuid) {
+        billConditions.push({ id: billId })
+      }
+
+      const existingBill = await prisma.bill.findFirst({
+        where: {
+          OR: billConditions,
+          deletedAt: null,
+        },
+      })
+
+      if (existingBill) {
+        await prisma.bill.update({
+          where: { id: existingBill.id },
+          data: {
+            deletedAt: new Date(),
+            billStatus: 'cancelled',
+            status: 'CANCELLED',
+            cancelledAt: new Date(),
+            cancellationReason: 'Deleted from Billing Ledger',
+          },
+        })
+        billDeleted = true
+
+        // Soft-delete linked order if present
+        if (existingBill.orderId) {
+          try {
+            await prisma.order.update({
+              where: { id: existingBill.orderId },
+              data: {
+                deletedAt: new Date(),
+                status: 'cancelled',
+                isBilled: false,
+              },
+            })
+            orderDeleted = true
+          } catch (ordErr) {
+            console.warn('Prisma order link update note:', ordErr)
+          }
+        }
+
+        // Release table if no other active bills/orders remain
+        if (existingBill.tableId) {
+          try {
+            const activeOrders = await prisma.order.count({
+              where: {
+                tableId: existingBill.tableId,
+                deletedAt: null,
+                status: { notIn: ['cancelled', 'CANCELLED', 'served', 'SERVED'] },
+              },
+            })
+            if (activeOrders === 0) {
+              await prisma.restaurantTable.update({
+                where: { id: existingBill.tableId },
+                data: { status: 'available' },
+              })
+            }
+          } catch (tblErr) {
+            console.warn('Table status update note:', tblErr)
+          }
+        }
+      }
+    } catch (billDbErr) {
+      console.warn('Prisma bill delete note:', billDbErr)
+    }
+
+    // 3. If no bill was found, check if billId is a live Order ID
+    if (!billDeleted) {
+      try {
+        const orderConditions: any[] = [{ orderNumber: billId }]
+        if (isUuid) {
+          orderConditions.push({ id: billId })
+        }
+
+        const existingOrder = await prisma.order.findFirst({
+          where: {
+            OR: orderConditions,
+            deletedAt: null,
+          },
+          include: { bill: true },
+        })
+
+        if (existingOrder) {
+          await prisma.order.update({
+            where: { id: existingOrder.id },
+            data: {
+              deletedAt: new Date(),
+              status: 'cancelled',
+            },
+          })
+          orderDeleted = true
+
+          const associatedBillId = existingOrder.billId || existingOrder.bill?.id
+          if (associatedBillId) {
+            await prisma.bill.update({
+              where: { id: associatedBillId },
+              data: {
+                deletedAt: new Date(),
+                billStatus: 'cancelled',
+                status: 'CANCELLED',
+                cancelledAt: new Date(),
+              },
+            })
+            billDeleted = true
+          }
+
+          // Release table if no active orders remain
+          if (existingOrder.tableId) {
+            try {
+              const activeOrders = await prisma.order.count({
+                where: {
+                  tableId: existingOrder.tableId,
+                  deletedAt: null,
+                  status: { notIn: ['cancelled', 'CANCELLED', 'served', 'SERVED'] },
+                },
+              })
+              if (activeOrders === 0) {
+                await prisma.restaurantTable.update({
+                  where: { id: existingOrder.tableId },
+                  data: { status: 'available' },
+                })
+              }
+            } catch (tblErr) {
+              console.warn('Table status update note:', tblErr)
+            }
+          }
+        }
+      } catch (ordDbErr) {
+        console.warn('Prisma order lookup note:', ordDbErr)
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'Deleted successfully',
+      data: {
+        id: billId,
+        billDeleted,
+        orderDeleted,
+      },
+    })
+  } catch (error: any) {
+    console.error('Error in DELETE /api/bills/[billId]:', error)
+    return NextResponse.json(
+      { success: false, message: error?.message || 'Failed to delete bill' },
       { status: 500 }
     )
   }

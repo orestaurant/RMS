@@ -390,6 +390,7 @@ export function TablesView() {
   const { auth } = useAuthContext()
   const branchId = auth?.branchId
   const restaurantName = auth?.restaurantName || 'RestoSphere'
+  const isWaiter = (auth?.role || '').toLowerCase() === 'waiter'
 
   const [tables, setTables] = useState<TableData[]>([])
   const [loading, setLoading] = useState(true)
@@ -598,8 +599,8 @@ export function TablesView() {
 
   return (
     <main className="flex flex-col gap-6 p-6">
-      {/* Waiter Tip Tracker Widget */}
-      <WaiterTipTracker />
+      {/* Waiter Tip Tracker Widget - Only visible to Waiter staff */}
+      {isWaiter && <WaiterTipTracker waiterId={auth?.id} />}
       {/* QR Code Generator Modal */}
       <TableQRGenerator
         isOpen={qrOpen}

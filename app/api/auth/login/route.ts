@@ -19,38 +19,21 @@ export async function POST(request: NextRequest) {
     const email = String(body.email).trim().toLowerCase()
     const password = String(body.password)
 
-    // 1. Immediate Customer check: Block any customer account from logging into Staff & Admin portal
-    const customerAccount = await prisma.customer.findFirst({
-      where: {
-        email: {
-          equals: email,
-          mode: 'insensitive',
-        },
-      },
-      select: { id: true, email: true, role: true },
-    })
-
-    if (customerAccount) {
-      return NextResponse.json(
-        { success: false, message: 'Customer accounts do not have access to the Staff & Admin portal. Please use the Customer & Guest Portal.' },
-        { status: 403 }
-      )
-    }
-
-    // Query user by email from PostgreSQL via Prisma (with retry for Neon cold-starts)
+    // 1. Query staff user from PostgreSQL via Prisma (with retry for Neon cold-starts)
     let user = null
     try {
-      user = await prisma.user.findUnique({
-        where: { email },
+      user = await prisma.user.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } },
       })
     } catch (dbErr: any) {
       console.warn('First DB attempt failed, retrying once...', dbErr?.message || dbErr)
       await new Promise((r) => setTimeout(r, 400))
-      user = await prisma.user.findUnique({
-        where: { email },
+      user = await prisma.user.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } },
       })
     }
 
+    // 2. If staff user exists in User table
     if (user && !user.deletedAt) {
       const roleUpper = String(user.role || '').toUpperCase()
       if (roleUpper === 'CUSTOMER') {
@@ -59,27 +42,43 @@ export async function POST(request: NextRequest) {
           { status: 403 }
         )
       }
-    }
 
-    if (!user || user.deletedAt) {
-      return NextResponse.json(
-        { success: false, message: 'Invalid email or password' },
-        { status: 401 }
-      )
-    }
+      if (user.status === 'inactive') {
+        return NextResponse.json(
+          { success: false, message: 'Your account is deactivated. Please contact an administrator.' },
+          { status: 403 }
+        )
+      }
 
-    if (user.status === 'inactive') {
-      return NextResponse.json(
-        { success: false, message: 'Your account is deactivated. Please contact an administrator.' },
-        { status: 403 }
-      )
-    }
+      // Compare password
+      const passwordToCompare = user.password || user.passwordHash || ''
+      const isPasswordValid = await bcrypt.compare(password, passwordToCompare)
 
-    // Compare with password or passwordHash
-    const passwordToCompare = user.password || user.passwordHash || ''
-    const isPasswordValid = await bcrypt.compare(password, passwordToCompare)
+      if (!isPasswordValid) {
+        return NextResponse.json(
+          { success: false, message: 'Invalid email or password' },
+          { status: 401 }
+        )
+      }
 
-    if (!isPasswordValid) {
+      // Clean up any conflicting customer record with this staff email if one was created during tests
+      prisma.customer.deleteMany({
+        where: { email: { equals: email, mode: 'insensitive' } },
+      }).catch(() => {})
+    } else {
+      // 3. User was not found in staff table: Check if this is a Customer trying to log in
+      const customerAccount = await prisma.customer.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } },
+        select: { id: true, email: true },
+      })
+
+      if (customerAccount) {
+        return NextResponse.json(
+          { success: false, message: 'Customer accounts do not have access to the Staff & Admin portal. Please use the Customer & Guest Portal.' },
+          { status: 403 }
+        )
+      }
+
       return NextResponse.json(
         { success: false, message: 'Invalid email or password' },
         { status: 401 }

@@ -8,6 +8,8 @@ import {
   Filter,
   RefreshCw,
   Printer,
+  Trash2,
+  Loader2,
   CheckCircle2,
   Clock,
   Heart,
@@ -27,6 +29,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { BillSettlementModal } from '@/components/billing/bill-settlement-modal'
 import { cn } from '@/lib/utils'
 
@@ -34,6 +44,8 @@ interface BillRecord {
   id: string
   billNumber: string
   orderNumber: string
+  orderId?: string
+  isLiveOrder?: boolean
   tableId?: string
   tableNumber: string
   customerName: string
@@ -94,6 +106,72 @@ export function BillingManagementView() {
   // Selected Bill for Settle / View Modal
   const [selectedBill, setSelectedBill] = useState<BillRecord | null>(null)
   const [printableBill, setPrintableBill] = useState<BillRecord | null>(null)
+
+  // Delete bill state
+  const [billToDelete, setBillToDelete] = useState<BillRecord | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const handleDeleteBill = useCallback(
+    async (bill: BillRecord) => {
+      const targetId = bill.id
+      const previousBills = bills
+      const previousSummary = summary
+
+      // Fast Optimistic Update: Instantly remove row from UI (0ms delay)
+      setBills((prev) => prev.filter((b) => b.id !== targetId))
+
+      // Fast Optimistic Update: Instantly adjust sales ledger metrics
+      if (summary) {
+        const isPaid = bill.status === 'PAID' || bill.paymentStatus === 'completed'
+        const billTotal = bill.grandTotal || 0
+        const billTax = bill.taxAmount || 0
+        const billTip = bill.tipAmount || 0
+
+        setSummary((prev) => {
+          if (!prev) return null
+          return {
+            ...prev,
+            totalBills: Math.max(0, prev.totalBills - 1),
+            totalRevenue: Math.max(0, prev.totalRevenue - billTotal),
+            paidRevenue: isPaid ? Math.max(0, prev.paidRevenue - billTotal) : prev.paidRevenue,
+            pendingRevenue: !isPaid ? Math.max(0, prev.pendingRevenue - billTotal) : prev.pendingRevenue,
+            totalTaxCollected: Math.max(0, prev.totalTaxCollected - billTax),
+            totalTipsCollected: Math.max(0, prev.totalTipsCollected - billTip),
+          }
+        })
+      }
+
+      // Close modal immediately for lightning-fast responsiveness
+      setBillToDelete(null)
+      setDeletingId(targetId)
+
+      try {
+        const res = await fetch(`/api/bills/${encodeURIComponent(targetId)}`, {
+          method: 'DELETE',
+        })
+        const data = await res.json().catch(() => null)
+
+        if (!res.ok || (data && data.success === false)) {
+          // If bill endpoint didn't find it (e.g. raw order), attempt order delete
+          const orderRes = await fetch(`/api/orders/${encodeURIComponent(bill.orderId || targetId)}`, {
+            method: 'DELETE',
+          })
+          if (!orderRes.ok) {
+            throw new Error(data?.message || 'Failed to delete record')
+          }
+        }
+      } catch (err: any) {
+        console.error('Delete invoice failed, rolling back:', err)
+        // Rollback state if server error occurs
+        setBills(previousBills)
+        setSummary(previousSummary)
+        alert('Could not delete invoice: ' + (err.message || 'Server error'))
+      } finally {
+        setDeletingId(null)
+      }
+    },
+    [bills, summary]
+  )
 
   const fetchBills = useCallback(async () => {
     try {
@@ -379,7 +457,14 @@ export function BillingManagementView() {
                   return (
                     <tr key={b.id} className="hover:bg-muted/15 transition-colors">
                       <td className="py-3.5 px-4 font-mono font-bold text-foreground">
-                        {b.billNumber}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{b.billNumber}</span>
+                          {b.isLiveOrder && (
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 font-bold">
+                              Live
+                            </Badge>
+                          )}
+                        </div>
                         <span className="block text-[10px] text-muted-foreground font-sans font-normal">
                           {new Date(b.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
@@ -446,6 +531,29 @@ export function BillingManagementView() {
 
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setPrintableBill(b)}
+                            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                            title="Print / View Receipt"
+                          >
+                            <Printer className="size-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setBillToDelete(b)}
+                            disabled={deletingId === b.id}
+                            className="h-7 px-2 text-xs text-rose-500/80 hover:text-rose-600 hover:bg-rose-500/10 cursor-pointer transition-colors"
+                            title="Delete Bill / Order"
+                          >
+                            {deletingId === b.id ? (
+                              <Loader2 className="size-3 animate-spin text-rose-500" />
+                            ) : (
+                              <Trash2 className="size-3" />
+                            )}
+                          </Button>
                           {!isPaid ? (
                             <Button
                               size="sm"
@@ -460,9 +568,8 @@ export function BillingManagementView() {
                               variant="outline"
                               size="sm"
                               onClick={() => setPrintableBill(b)}
-                              className="h-7 px-2 text-xs font-semibold gap-1"
+                              className="h-7 px-2 text-xs font-semibold gap-1 text-emerald-600 border-emerald-500/30"
                             >
-                              <Printer className="size-3" />
                               Receipt
                             </Button>
                           )}
@@ -487,6 +594,7 @@ export function BillingManagementView() {
           tableId={selectedBill.tableId}
           tableNumber={selectedBill.tableNumber}
           waiterName={selectedBill.waiterName}
+          orderId={selectedBill.orderId || selectedBill.id}
           onSuccess={() => {
             fetchBills()
           }}
@@ -581,6 +689,45 @@ export function BillingManagementView() {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!billToDelete} onOpenChange={(open) => !open && setBillToDelete(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2 text-destructive">
+              <Trash2 className="size-4" /> Delete Bill / Order?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground mt-1">
+              Are you sure you want to delete invoice{' '}
+              <strong className="text-foreground">{billToDelete?.billNumber}</strong> ({billToDelete?.tableNumber}) for{' '}
+              <strong className="text-foreground">₹{billToDelete?.grandTotal.toFixed(2)}</strong>?
+              <span className="block mt-1 text-[11px] text-muted-foreground">
+                This will remove it from active billing and cancel any linked order.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2 mt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBillToDelete(null)}
+              className="text-xs h-8 cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              autoFocus
+              onClick={() => billToDelete && handleDeleteBill(billToDelete)}
+              className="gap-1.5 text-xs h-8 font-bold cursor-pointer"
+            >
+              <Trash2 className="size-3.5" />
+              Confirm Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   )
 }

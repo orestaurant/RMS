@@ -30,10 +30,21 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeCustomer, setActiveCustomer] = useState<{ email?: string } | null>(null)
 
   useEffect(() => {
     // Clear any lingering auth session cache when navigating to the Staff & Admin login page
     clearAuthCache()
+
+    // Detect if user is already signed in as a customer
+    fetch('/api/customer/auth/me')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.customer) {
+          setActiveCustomer({ email: data.customer.email })
+        }
+      })
+      .catch(() => {})
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -128,6 +139,30 @@ export default function LoginPage() {
           </CardHeader>
 
           <CardContent className="space-y-4 pt-0">
+            {/* Active Customer Session Alert */}
+            {activeCustomer && (
+              <div className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="size-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                  <div>
+                    <span className="font-semibold block">Signed in as Customer ({activeCustomer.email})</span>
+                    <span className="text-[11px] text-muted-foreground block mt-0.5">
+                      Customer accounts cannot access the Staff & Admin dashboard. To access Admin controls, sign in with staff credentials or return to your Customer Portal.
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 pt-1 pl-6">
+                  <Link
+                    href="/customer-dashboard"
+                    className="font-semibold underline underline-offset-2 hover:opacity-80 inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"
+                  >
+                    <span>Go to Customer Portal</span>
+                    <ArrowRight className="size-3" />
+                  </Link>
+                </div>
+              </div>
+            )}
+
             {/* Inline Error Alert Box */}
             {error && (
               <div

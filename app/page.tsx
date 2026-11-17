@@ -684,7 +684,7 @@ export default function HomePage() {
 
                   {/* Customer & Guest Login */}
                   <Link
-                    href="/customer/register"
+                    href="/customer/login"
                     onClick={() => setMobileMenuOpen(false)}
                     className="group block p-4 sm:p-5 rounded-2xl bg-slate-50/80 dark:bg-gradient-to-b dark:from-slate-900/90 dark:to-slate-900/60 border border-rose-500/20 dark:border-rose-500/30 hover:border-rose-500 transition-all hover:shadow-lg hover:shadow-rose-500/10"
                   >

@@ -192,6 +192,9 @@ export function CustomerBillModal({
           ...prev,
           grandTotal: json.data.bill.grandTotal,
         }))
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('waiter-tip-updated'))
+        }
       }
     } catch (err: any) {
       console.error('Tip server sync error:', err)

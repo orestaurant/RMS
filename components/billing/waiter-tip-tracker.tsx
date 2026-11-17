@@ -64,8 +64,19 @@ export function WaiterTipTracker({ waiterId, className }: WaiterTipTrackerProps)
 
   useEffect(() => {
     fetchTips()
-    const interval = setInterval(fetchTips, 15000)
-    return () => clearInterval(interval)
+    const interval = setInterval(fetchTips, 10000)
+
+    const handleTipUpdate = () => {
+      fetchTips()
+    }
+    window.addEventListener('waiter-tip-updated', handleTipUpdate)
+    window.addEventListener('bill-settled', handleTipUpdate)
+
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('waiter-tip-updated', handleTipUpdate)
+      window.removeEventListener('bill-settled', handleTipUpdate)
+    }
   }, [fetchTips])
 
   const todayTips = data?.todayTipsTotal || 0
@@ -73,6 +84,11 @@ export function WaiterTipTracker({ waiterId, className }: WaiterTipTrackerProps)
   const pendingTips = data?.pendingTipsTotal || 0
   const waiterName = data?.waiter?.name || 'Staff'
   const recentList = data?.recentTips || []
+
+  // If not a waiter or no data, do not render widget
+  if (!data || !data.waiter) {
+    return null
+  }
 
   return (
     <Card

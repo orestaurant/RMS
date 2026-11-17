@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 
 export async function PATCH(
   request: NextRequest,
@@ -103,6 +104,29 @@ export async function PATCH(
           finalWaiterId = ord.servedById
           break
         }
+      }
+    }
+    if (!finalWaiterId) {
+      const sessionToken = request.cookies.get(SESSION_COOKIE_NAME)?.value
+      if (sessionToken) {
+        const payload = await verifyJWT(sessionToken)
+        if (payload?.userId) {
+          finalWaiterId = payload.userId
+        }
+      }
+    }
+    if (!finalWaiterId) {
+      const activeWaiter = await prisma.user.findFirst({
+        where: {
+          role: { in: ['waiter', 'WAITER'] },
+          status: 'active',
+          ...(bill.organizationId ? { organizationId: bill.organizationId } : {}),
+        },
+        orderBy: { updatedAt: 'desc' },
+        select: { id: true },
+      })
+      if (activeWaiter) {
+        finalWaiterId = activeWaiter.id
       }
     }
 

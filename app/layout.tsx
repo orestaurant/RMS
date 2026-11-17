@@ -38,7 +38,7 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var p=new URLSearchParams(window.location.search);var ut=p.get('theme');var t=ut||localStorage.getItem('theme');if(ut){try{localStorage.setItem('theme',ut);}catch(e){}}if(t==='dark'){document.documentElement.classList.add('dark');document.documentElement.classList.remove('light');}else{document.documentElement.classList.remove('dark');document.documentElement.classList.add('light');}}catch(e){}})();`,
+            __html: `(function(){try{var p=new URLSearchParams(window.location.search);var ut=p.get('theme');var t=ut||localStorage.getItem('theme');if(ut){try{localStorage.setItem('theme',ut);}catch(e){}}if(t==='dark'){document.documentElement.classList.add('dark');document.documentElement.classList.remove('light');}else if(t==='light'){document.documentElement.classList.remove('dark');document.documentElement.classList.add('light');}else{var prefersDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;if(prefersDark){document.documentElement.classList.add('dark');document.documentElement.classList.remove('light');}else{document.documentElement.classList.remove('dark');document.documentElement.classList.add('light');}}}catch(e){}})();`,
           }}
         />
       </head>

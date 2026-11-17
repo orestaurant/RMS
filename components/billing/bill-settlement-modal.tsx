@@ -36,6 +36,7 @@ interface BillSettlementModalProps {
   tableId?: string
   tableNumber: string | number
   waiterName?: string
+  orderId?: string
   onSuccess?: () => void
 }
 
@@ -45,6 +46,7 @@ export function BillSettlementModal({
   tableId,
   tableNumber,
   waiterName,
+  orderId,
   onSuccess,
 }: BillSettlementModalProps) {
   const [loading, setLoading] = useState(false)
@@ -65,7 +67,7 @@ export function BillSettlementModal({
 
   // Fetch or generate the bill
   const loadBill = useCallback(async () => {
-    if (!tableNumber && !tableId) return
+    if (!tableNumber && !tableId && !orderId) return
     try {
       setLoading(true)
       setError(null)
@@ -73,8 +75,9 @@ export function BillSettlementModal({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          orderId,
           tableId,
-          tableNumber: String(tableNumber),
+          tableNumber: String(tableNumber || ''),
           source: 'waiter',
         }),
       })
@@ -100,7 +103,7 @@ export function BillSettlementModal({
     } finally {
       setLoading(false)
     }
-  }, [tableId, tableNumber])
+  }, [tableId, tableNumber, orderId])
 
   useEffect(() => {
     if (open) {
@@ -164,6 +167,10 @@ export function BillSettlementModal({
       setBill(json.data.bill)
       setSettledMethod(method)
       setPaySuccess(true)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('waiter-tip-updated'))
+        window.dispatchEvent(new CustomEvent('bill-settled'))
+      }
       onSuccess?.()
     } catch (err: any) {
       console.error('Settlement error:', err)

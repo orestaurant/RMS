@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         message: 'Registration successful',
-        redirect: '/orders',
+        redirect: '/customer-dashboard',
         customer: {
           id: customer.id,
           name: customer.name,

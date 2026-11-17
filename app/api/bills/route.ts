@@ -10,6 +10,12 @@ import { addNotification } from '@/lib/notifications-store'
 // Real bills store fallback
 let memoryBills: any[] = []
 
+export function removeMemoryBill(idOrNumber: string) {
+  memoryBills = memoryBills.filter(
+    (b) => b.id !== idOrNumber && b.billNumber !== idOrNumber && b.orderNumber !== idOrNumber
+  )
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -53,7 +59,10 @@ export async function GET(request: NextRequest) {
         if (dateParam === 'today') {
           const startOfToday = new Date()
           startOfToday.setHours(0, 0, 0, 0)
-          where.createdAt = { gte: startOfToday }
+          const startUtcToday = new Date()
+          startUtcToday.setUTCHours(0, 0, 0, 0)
+          const cutoff = startOfToday < startUtcToday ? startOfToday : startUtcToday
+          where.createdAt = { gte: cutoff }
         } else {
           const parsed = new Date(dateParam)
           if (!isNaN(parsed.getTime())) {
@@ -149,6 +158,143 @@ export async function GET(request: NextRequest) {
           }
         })
       }
+
+      // Fetch live orders and include as active/live invoices
+      const existingBilledOrderIds = new Set<string>()
+      const existingBillNumbers = new Set<string>()
+      for (const b of bills) {
+        if (b.orderNumber) existingBilledOrderIds.add(b.orderNumber)
+        if (b.billNumber) existingBillNumbers.add(b.billNumber)
+      }
+
+      const orderWhere: any = {
+        deletedAt: null,
+        status: { notIn: ['cancelled', 'CANCELLED'] },
+      }
+      if (restaurantId) orderWhere.restaurantId = restaurantId
+      if (tableId) orderWhere.tableId = tableId
+
+      if (dateParam) {
+        if (dateParam === 'today') {
+          const startOfToday = new Date()
+          startOfToday.setHours(0, 0, 0, 0)
+          const startUtcToday = new Date()
+          startUtcToday.setUTCHours(0, 0, 0, 0)
+          const cutoff = startOfToday < startUtcToday ? startOfToday : startUtcToday
+          orderWhere.createdAt = { gte: cutoff }
+        } else {
+          const parsed = new Date(dateParam)
+          if (!isNaN(parsed.getTime())) {
+            const startOfDay = new Date(parsed)
+            startOfDay.setHours(0, 0, 0, 0)
+            const endOfDay = new Date(parsed)
+            endOfDay.setHours(23, 59, 59, 999)
+            orderWhere.createdAt = { gte: startOfDay, lte: endOfDay }
+          }
+        }
+      }
+
+      const dbOrders = await prisma.order.findMany({
+        where: orderWhere,
+        include: {
+          items: true,
+          table: true,
+          customer: true,
+          bill: true,
+          servedBy: {
+            select: { id: true, name: true, firstName: true, lastName: true, phone: true },
+          },
+          createdBy: {
+            select: { id: true, name: true, firstName: true, lastName: true, phone: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 150,
+      })
+
+      for (const ord of dbOrders) {
+        // Skip if this order already has a generated bill in the bills array
+        if (
+          existingBilledOrderIds.has(ord.orderNumber) ||
+          existingBillNumbers.has(ord.orderNumber) ||
+          (ord.bill && existingBillNumbers.has(ord.bill.billNumber)) ||
+          (ord.billId && bills.some((b) => b.id === ord.billId))
+        ) {
+          continue
+        }
+
+        const calculatedSubtotal =
+          Number(ord.subtotal || 0) ||
+          ord.items.reduce((s, it) => s + Number(it.itemTotal || 0), 0) ||
+          Math.round((Number(ord.totalAmount || 0) / 1.05) * 100) / 100
+
+        const taxAmount =
+          Number(ord.taxAmount || 0) ||
+          Math.round((Number(ord.totalAmount || 0) - calculatedSubtotal) * 100) / 100
+
+        const grandTotal = Number(ord.totalAmount || 0) || calculatedSubtotal + taxAmount
+
+        const isPaid = ord.paymentStatus === 'completed' || ord.status === 'completed'
+        const isRequested = ord.status === 'ready' || ord.status === 'served' || ord.isBilled
+
+        const waiterUser = ord.servedBy || ord.createdBy
+        const waiterDisplayName = waiterUser
+          ? waiterUser.name || `${waiterUser.firstName || ''} ${waiterUser.lastName || ''}`.trim() || 'Staff'
+          : 'Staff'
+
+        const tableDisplay = ord.table?.tableNumber
+          ? (ord.table.tableNumber.toLowerCase().startsWith('table') ? ord.table.tableNumber : `Table ${ord.table.tableNumber}`)
+          : (ord.vehicleNumber ? `Spot (${ord.vehicleNumber})` : (ord.orderType === 'takeaway' ? 'Takeaway' : 'Dine-In'))
+
+        const rawPaymentMethod = (ord.bill?.paymentMethod || (ord.metadata as Record<string, unknown> | null)?.paymentMethod || 'cash') as string
+
+        bills.push({
+          id: ord.id,
+          billNumber: ord.orderNumber,
+          orderNumber: ord.orderNumber,
+          orderId: ord.id,
+          tableId: ord.tableId,
+          tableNumber: tableDisplay,
+          customerName: ord.customer?.name || (ord.vehicleNumber ? `Guest (${ord.vehicleNumber})` : 'Walk-in Guest'),
+          customerPhone: ord.customer?.phone || '',
+          subtotal: Math.round(calculatedSubtotal * 100) / 100,
+          discountAmount: Number(ord.discountAmount || 0),
+          taxAmount: Math.round(taxAmount * 100) / 100,
+          tipAmount: 0,
+          grandTotal: Math.round(grandTotal * 100) / 100,
+          cgst: Math.round((taxAmount / 2) * 100) / 100,
+          sgst: Math.round((taxAmount / 2) * 100) / 100,
+          serviceCharge: Number(ord.serviceCharge || 0),
+          totalAmount: Math.round(grandTotal * 100) / 100,
+          status: isPaid ? 'PAID' : (isRequested ? 'REQUESTED' : 'GENERATED'),
+          billStatus: isPaid ? 'settled' : 'open',
+          paymentStatus: isPaid ? 'completed' : 'pending',
+          paymentMethod: rawPaymentMethod.toLowerCase(),
+          paidAt: isPaid ? ord.updatedAt.toISOString() : null,
+          createdAt: ord.createdAt.toISOString(),
+          waiterId: waiterUser?.id || null,
+          waiterName: waiterDisplayName,
+          waiter: waiterUser
+            ? {
+                id: waiterUser.id,
+                name: waiterDisplayName,
+                phone: waiterUser.phone || '',
+              }
+            : null,
+          tip: null,
+          items: ord.items.map((i) => ({
+            id: i.id,
+            name: i.itemName,
+            quantity: i.quantity,
+            price: Number(i.basePrice),
+            total: Number(i.itemTotal),
+          })),
+          isLiveOrder: true,
+        })
+      }
+
+      // Sort by createdAt desc
+      bills.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     } catch (dbErr) {
       console.warn('Bills DB lookup fallback to memory:', dbErr)
     }

@@ -947,7 +947,7 @@ export function LiveOrdersView() {
   const [filterMode, setFilterMode] = useState<'all' | 'car'>('all')
   const [urgentOnly, setUrgentOnly] = useState<boolean>(false)
   const [orders, setOrders] = useState<LiveOrder[]>([])
-  const [settlementTable, setSettlementTable] = useState<{ id?: string; tableNumber: string | number; waiter?: string } | null>(null)
+  const [settlementTable, setSettlementTable] = useState<{ id?: string; tableNumber: string | number; waiter?: string; orderId?: string } | null>(null)
   const [counts, setCounts] = useState({
     all: 0,
     pending: 0,
@@ -1646,6 +1646,7 @@ export function LiveOrdersView() {
                       id: ord.tableId,
                       tableNumber: ord.tableNumber,
                       waiter: ord.waiter,
+                      orderId: ord.id || ord.fullId,
                     })
                   }
                 />
@@ -1665,6 +1666,7 @@ export function LiveOrdersView() {
           tableId={settlementTable.id}
           tableNumber={settlementTable.tableNumber}
           waiterName={settlementTable.waiter}
+          orderId={settlementTable.orderId}
           onSuccess={() => {
             fetchLiveOrders()
           }}

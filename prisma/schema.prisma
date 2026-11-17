@@ -278,6 +278,8 @@ model User {
   waiterBills            Bill[]                 @relation("waiter_bills")
   waiterTips             Tip[]                  @relation("waiter_tips")
   organization           Organization?          @relation(fields: [organizationId], references: [id])
+  vendorRawMaterials     RawMaterial[]          @relation("RawMaterialVendor")
+  recipientNotifications DashboardNotification[] @relation("RecipientNotifications")
 
   @@index([organizationId])
   @@index([email])
@@ -1797,4 +1799,46 @@ enum BillTypeEnum {
   takeaway
   delivery
   aggregator
+}
+
+model RawMaterial {
+  id                    String                  @id @default(uuid()) @db.Uuid
+  name                  String                  @db.VarChar(255)
+  sku                   String                  @unique @db.VarChar(100)
+  quantity              Float                   @default(0)
+  weight                Float                   @default(0)
+  weightUnit            String                  @default("kg") @db.VarChar(20)
+  location              String                  @db.VarChar(255)
+  minThreshold          Float                   @default(10)
+  qrCodeData            String?                 @db.Text
+  vendorId              String?                 @db.Uuid
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  vendor                User?                   @relation("RawMaterialVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+  dashboardNotifications DashboardNotification[]
+
+  @@index([vendorId])
+  @@index([sku])
+}
+
+model DashboardNotification {
+  id            String       @id @default(uuid()) @db.Uuid
+  recipientId   String?      @db.Uuid
+  recipientRole String       @db.VarChar(50) // 'INVENTORY_MANAGER' | 'VENDOR'
+  type          String       @default("LOW_STOCK_ALERT") @db.VarChar(50)
+  title         String       @db.VarChar(255)
+  message       String       @db.Text
+  rawMaterialId String?      @db.Uuid
+  metadata      Json         @default("{}")
+  status        String       @default("PENDING") @db.VarChar(50) // 'PENDING' | 'ACKNOWLEDGED' | 'RESTOCK_INITIATED'
+  isRead        Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @default(now()) @updatedAt
+  rawMaterial   RawMaterial? @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+  recipient     User?        @relation("RecipientNotifications", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId])
+  @@index([recipientRole])
+  @@index([rawMaterialId])
+  @@index([isRead])
 }

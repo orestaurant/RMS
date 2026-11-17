@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTheme } from '@/hooks/useTheme'
 import {
   Search,
   Bell,
@@ -45,7 +46,7 @@ interface NotificationItem {
 
 export function TopNavbar({ title, subtitle }: TopNavbarProps) {
   const [commandOpen, setCommandOpen] = useState(false)
-  const [darkMode, setDarkMode] = useState(true)
+  const { theme, toggleTheme } = useTheme()
   const [liveNotifications, setLiveNotifications] = useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
 
@@ -100,11 +101,6 @@ export function TopNavbar({ title, subtitle }: TopNavbarProps) {
     }
   }
 
-  const toggleTheme = () => {
-    setDarkMode((d) => !d)
-    document.documentElement.classList.toggle('dark')
-    document.documentElement.classList.toggle('light')
-  }
 
   return (
     <>
@@ -244,9 +240,19 @@ export function TopNavbar({ title, subtitle }: TopNavbarProps) {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Theme Toggle Icon */}
-        <Button variant="ghost" size="icon" className="size-8" onClick={toggleTheme} aria-label="Toggle theme">
-          {darkMode ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        {/* Theme Toggle Button */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 text-muted-foreground hover:text-foreground relative flex items-center justify-center cursor-pointer transition-colors"
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to Light theme' : 'Switch to Dark theme'}
+          title={theme === 'dark' ? 'Switch to Light theme' : 'Switch to Dark theme'}
+        >
+          <div className="relative size-4 flex items-center justify-center shrink-0">
+            <Sun className="size-4 text-amber-500 transition-all duration-300 transform rotate-0 scale-100 opacity-100 dark:-rotate-90 dark:scale-0 dark:opacity-0" />
+            <Moon className="size-4 text-orange-400 absolute transition-all duration-300 transform rotate-90 scale-0 opacity-0 dark:rotate-0 dark:scale-100 dark:opacity-100" />
+          </div>
         </Button>
       </header>
     </>

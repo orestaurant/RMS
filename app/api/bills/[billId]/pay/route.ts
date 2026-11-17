@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { addNotification } from '@/lib/notifications-store'
 import { logCommunication } from '@/lib/communication-ledger'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 
 export async function POST(
   request: NextRequest,
@@ -58,6 +59,32 @@ export async function POST(
     const now = new Date()
     const methodStr = String(paymentMethod).toUpperCase()
 
+    // Determine waiter to credit tip to
+    let finalWaiterId = existing.waiterId
+    if (!finalWaiterId && tipAmount > 0) {
+      const sessionToken = request.cookies.get(SESSION_COOKIE_NAME)?.value
+      if (sessionToken) {
+        const payload = await verifyJWT(sessionToken)
+        if (payload?.userId) {
+          finalWaiterId = payload.userId
+        }
+      }
+      if (!finalWaiterId) {
+        const activeWaiter = await prisma.user.findFirst({
+          where: {
+            role: { in: ['waiter', 'WAITER'] },
+            status: 'active',
+            ...(existing.organizationId ? { organizationId: existing.organizationId } : {}),
+          },
+          orderBy: { updatedAt: 'desc' },
+          select: { id: true },
+        })
+        if (activeWaiter) {
+          finalWaiterId = activeWaiter.id
+        }
+      }
+    }
+
     // Map to PaymentMethodEnum if applicable
     let mappedMethodEnum: any = 'cash'
     if (methodStr === 'UPI' || methodStr === 'WHATSAPP_LINK') mappedMethodEnum = 'upi'
@@ -83,6 +110,7 @@ export async function POST(
           settledAt: now,
           customerPhone: customerPhone || existing.customerPhone,
           customerName: customerName || existing.customerName,
+          ...(finalWaiterId ? { waiterId: finalWaiterId } : {}),
         },
         include: {
           table: true,
@@ -110,13 +138,13 @@ export async function POST(
       }),
 
       // 3. Settle Tip record if waiter exists and tip > 0
-      ...(tipAmount > 0 && existing.waiterId
+      ...(tipAmount > 0 && finalWaiterId
         ? [
             prisma.tip.upsert({
               where: { billId: existing.id },
               create: {
                 billId: existing.id,
-                waiterId: existing.waiterId,
+                waiterId: finalWaiterId,
                 restaurantId: existing.restaurantId,
                 branchId: existing.branchId,
                 organizationId: existing.organizationId,
@@ -124,6 +152,7 @@ export async function POST(
                 status: 'SETTLED',
               },
               update: {
+                waiterId: finalWaiterId,
                 amount: tipAmount,
                 status: 'SETTLED',
               },

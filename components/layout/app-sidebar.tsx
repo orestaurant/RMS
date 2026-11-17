@@ -19,6 +19,8 @@ import {
   Loader2,
   Receipt,
   UserCheck,
+  Boxes,
+  Truck,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -59,6 +61,8 @@ export function AppSidebar() {
   const isWaiter = userRoleUpper === 'WAITER'
   const isChef = userRoleUpper === 'CHEF'
   const isCustomer = userRoleUpper === 'CUSTOMER'
+  const isInventoryManager = userRoleUpper === 'INVENTORY_MANAGER'
+  const isVendor = userRoleUpper === 'VENDOR'
   const isSuperAdmin =
     userRoleUpper === 'SUPER_ADMIN' ||
     userRoleUpper === 'SUPERADMIN'
@@ -91,7 +95,7 @@ export function AppSidebar() {
   // Dynamic user data
   const userName = loading
     ? 'Loading...'
-    : auth?.name || (isCustomer ? 'Customer' : isWaiter ? 'Waiter' : isChef ? 'Chef' : isAdmin ? 'Admin' : 'Staff')
+    : auth?.name || (isCustomer ? 'Customer' : isWaiter ? 'Waiter' : isChef ? 'Chef' : isVendor ? 'Vendor' : isInventoryManager ? 'Inventory Manager' : isAdmin ? 'Admin' : 'Staff')
   const userEmail = loading ? '' : auth?.email || ''
   const initials =
     userName && userName !== 'Loading...'
@@ -152,7 +156,7 @@ export function AppSidebar() {
           items: [
             {
               label: 'Customer Dashboard',
-              href: '/dashboard',
+              href: '/customer-dashboard',
               icon: LayoutDashboard,
             },
             {
@@ -166,6 +170,49 @@ export function AppSidebar() {
               href: '/menu',
               icon: UtensilsCrossed,
             },
+          ],
+        },
+      ]
+    }
+
+    if (isVendor) {
+      return [
+        {
+          label: 'VENDOR PORTAL',
+          items: [
+            { label: 'Vendor Dashboard', href: '/dashboard', icon: LayoutDashboard },
+            { label: 'Restock Requests', href: '/vendor/dashboard', icon: Truck },
+          ],
+        },
+      ]
+    }
+
+    if (isInventoryManager) {
+      return [
+        {
+          label: 'OPERATIONS',
+          items: [
+            { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+            {
+              label: 'Live Orders',
+              href: '/orders',
+              icon: Zap,
+              badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
+            },
+          ],
+        },
+        {
+          label: 'INVENTORY',
+          items: [
+            { label: 'Inventory', href: '/inventory-manager/inventory', icon: Package },
+            { label: 'Menu Inventory', href: '/inventory', icon: Boxes },
+          ],
+        },
+        {
+          label: 'BUSINESS',
+          items: [
+            { label: 'Staff & Roles', href: '/staff', icon: UserCheck },
+            { label: 'Settings', href: '/dashboard/settings', icon: Settings },
           ],
         },
       ]
@@ -192,7 +239,7 @@ export function AppSidebar() {
         ],
       },
       {
-        label: 'KITCHEN',
+        label: 'KITCHEN & INVENTORY',
         items: [
           {
             label: 'Kitchen Display',
@@ -201,6 +248,7 @@ export function AppSidebar() {
             badge: counts?.kitchenLive ? 'Live' : undefined,
           },
           { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
+          { label: 'Raw Materials', href: '/inventory-manager/inventory', icon: Boxes },
           { label: 'Inventory', href: '/inventory', icon: Package },
         ],
       },
@@ -223,8 +271,8 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               size="lg"
-              tooltip={isWaiter ? "Go to Tables" : isCustomer ? "Go to Live Orders" : "Go to Home Page"}
-              render={<Link href={isWaiter ? '/tables' : isCustomer ? '/orders' : '/'} />}
+              tooltip={isCustomer ? "Go to Home Page" : isWaiter ? "Go to Tables" : isVendor ? "Vendor Dashboard" : "Go to Home Page"}
+              render={<Link href={isCustomer ? '/' : isWaiter ? '/tables' : isVendor ? '/vendor/dashboard' : '/'} />}
               className="hover:bg-sidebar-accent/50 w-full"
             >
               <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-tr from-orange-500 to-amber-500 text-white shrink-0 shadow-sm shadow-orange-500/25">
@@ -235,7 +283,7 @@ export function AppSidebar() {
                   Resto<span className="text-orange-500">Sphere</span>
                 </span>
                 <span className="text-xs text-muted-foreground truncate">
-                  {isCustomer ? 'Customer Portal' : isWaiter ? 'Waiter Console' : 'Restaurant OS'}
+                  {isCustomer ? 'Customer Portal' : isWaiter ? 'Waiter Console' : isVendor ? 'Vendor Portal' : isInventoryManager ? 'Inventory Portal' : 'Restaurant OS'}
                 </span>
               </div>
             </SidebarMenuButton>

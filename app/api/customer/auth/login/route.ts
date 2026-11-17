@@ -18,8 +18,8 @@ export async function POST(request: NextRequest) {
     const password = String(body.password)
 
     // 1. Database-based role check: Block if this email belongs to an ADMIN, OWNER, MANAGER, or STAFF role in User table
-    const staffUser = await prisma.user.findUnique({
-      where: { email },
+    const staffUser = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
       select: { id: true, role: true, deletedAt: true },
     })
 
@@ -38,8 +38,8 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Query customer from PostgreSQL via Prisma
-    const customer = await prisma.customer.findUnique({
-      where: { email },
+    const customer = await prisma.customer.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
     })
 
     // If customer account does not exist, reject with mandatory account creation guidance
@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         message: 'Logged in successfully',
-        redirect: '/dashboard',
+        redirect: '/customer-dashboard',
         customer: {
           id: customer.id,
           name: customer.name,

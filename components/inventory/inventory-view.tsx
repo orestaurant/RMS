@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import Link from 'next/link'
 import {
   Search,
   Plus,
   Package,
+  Boxes,
   AlertTriangle,
   TrendingUp,
   RefreshCw,
@@ -538,6 +540,17 @@ export function InventoryView() {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            render={<Link href="/inventory-manager/inventory" />}
+            title="Raw Material Inventory, QR Labels & Automated Vendor Alerts"
+            className="h-9 gap-1.5 bg-orange-500/10 border-orange-500/30 text-orange-600 hover:bg-orange-500/20 dark:text-orange-400 font-medium"
+          >
+            <Boxes className="size-3.5" />
+            <span className="hidden sm:inline">Raw Materials</span>
+          </Button>
+
           <Button
             variant="outline"
             size="sm"

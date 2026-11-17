@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
 import {
   UtensilsCrossed,
@@ -259,7 +260,13 @@ export function CustomerMenu() {
       Boolean(urlVehicle)
 
     let initialMode: 'dine_in' | 'drive_in' = 'dine_in'
-    if (isDriveInParam) {
+    if (urlTable && urlTable.trim()) {
+      // Table in URL (e.g. ?table=1 from QR code) always defaults to Dine-In
+      initialMode = 'dine_in'
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('rms_customer_order_mode', 'dine_in')
+      }
+    } else if (isDriveInParam) {
       initialMode = 'drive_in'
     } else if (typeof window !== 'undefined') {
       const savedMode = localStorage.getItem('rms_customer_order_mode')
@@ -391,9 +398,11 @@ export function CustomerMenu() {
     if (!manualTableInput.trim()) return
     const clean = manualTableInput.trim()
     setTableNumber(clean)
+    setOrderMode('dine_in')
     setIsTableLocked(true)
     if (typeof window !== 'undefined') {
       localStorage.setItem('rms_customer_table', clean)
+      localStorage.setItem('rms_customer_order_mode', 'dine_in')
     }
     setShowTableModal(false)
   }
@@ -890,83 +899,106 @@ export function CustomerMenu() {
               <span className="hidden sm:inline text-xs font-bold">Back</span>
             </Button>
 
-            <div className="size-10 rounded-2xl bg-gradient-to-tr from-primary to-indigo-600 text-primary-foreground flex items-center justify-center font-bold shadow-md shadow-primary/25 shrink-0">
-              <UtensilsCrossed className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-base font-black tracking-tight leading-none text-foreground truncate">
-                  RestoSphere
-                </h1>
-                <span className={cn(
-                  "hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border shrink-0",
-                  orderMode === 'drive_in'
-                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
-                    : "bg-primary/10 text-primary border-primary/20"
-                )}>
-                  {orderMode === 'drive_in' ? 'Car Drive-In' : 'Dine-in'}
-                </span>
+            <Link href="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity cursor-pointer" title="Go to Home Page">
+              <div className="size-10 rounded-2xl bg-gradient-to-tr from-primary to-indigo-600 text-primary-foreground flex items-center justify-center font-bold shadow-md shadow-primary/25 shrink-0">
+                <UtensilsCrossed className="size-5" />
               </div>
-              <p className="text-[11px] text-muted-foreground font-medium mt-0.5 truncate">
-                {orderMode === 'drive_in' ? 'Highway Food Cart / Car Ordering' : 'Table Self-Ordering Menu'}
-              </p>
-            </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h1 className="text-base font-black tracking-tight leading-none text-foreground truncate">
+                    RestoSphere
+                  </h1>
+                  <span className={cn(
+                    "hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border shrink-0",
+                    orderMode === 'drive_in'
+                      ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                      : "bg-primary/10 text-primary border-primary/20"
+                  )}>
+                    {orderMode === 'drive_in' ? 'Car Drive-In' : 'Dine-in'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground font-medium mt-0.5 truncate">
+                  {orderMode === 'drive_in' ? 'Highway Food Cart / Car Ordering' : 'Table Self-Ordering Menu'}
+                </p>
+              </div>
+            </Link>
           </div>
 
-          {/* Right Header Actions: Table Badge + Live Orders + Cart */}
-          <div className="flex items-center gap-2">
-            {/* Locked Table / Car Badge */}
-            {orderMode === 'drive_in' ? (
-              <button
-                type="button"
-                onClick={() => setIsDriveInModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 text-primary border border-primary/30 text-xs font-black shadow-xs cursor-pointer hover:bg-primary/20 transition-colors"
-                title="Click to view or edit Car & GPS Delivery spot"
-              >
-                <span>{displayTableBadge}</span>
-              </button>
-            ) : tableNumber ? (
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 text-xs font-black shadow-xs select-none"
-                title="Table locked for dine-in delivery"
-              >
-                <Lock className="size-3" />
-                <span>{displayTableBadge}</span>
-              </div>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowTableModal(true)}
-                className="h-9 px-3 rounded-xl text-xs font-bold gap-1.5 text-primary border-primary/40 hover:bg-primary/10"
-              >
-                <QrCode className="size-3.5" />
-                Select Table
-              </Button>
-            )}
-
-            {/* Highway Car Drive-In Quick Button */}
+          {/* Right Header Actions: Mode Toggle (Dine-In & Drive-In) + Live Orders + Cart */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* 1. Dine-In Option (Editable Table Number) */}
             <Button
+              type="button"
+              variant={orderMode === 'dine_in' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => {
+                setOrderMode('dine_in')
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('rms_customer_order_mode', 'dine_in')
+                }
+                setManualTableInput(tableNumber || '')
+                setShowTableModal(true)
+              }}
+              className={cn(
+                'h-9 px-2.5 sm:px-3 rounded-xl text-xs font-bold gap-1.5 shadow-2xs cursor-pointer transition-all',
+                orderMode === 'dine_in'
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 shadow-emerald-600/20'
+                  : 'border-border/80 text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              )}
+              title="Dine-In - Click to select or edit table"
+            >
+              <UtensilsCrossed className="size-3.5" />
+              <span>Dine-In</span>
+              {tableNumber ? (
+                <span className={cn(
+                  'text-[10px] px-1.5 py-0.5 rounded-md font-extrabold flex items-center gap-0.5',
+                  orderMode === 'dine_in'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-muted text-foreground'
+                )}>
+                  {tableNumber.toLowerCase().startsWith('table') ? tableNumber : `Table ${tableNumber}`}
+                  <Edit3 className="size-2.5 opacity-80" />
+                </span>
+              ) : (
+                <span className="text-[10px] opacity-75 font-normal hidden sm:inline">(Set Table)</span>
+              )}
+            </Button>
+
+            {/* 2. Drive-In Option (Editable Spot Details) */}
+            <Button
+              type="button"
               variant={orderMode === 'drive_in' ? 'default' : 'outline'}
               size="sm"
               onClick={() => {
-                if (orderMode !== 'drive_in') {
-                  setOrderMode('drive_in')
-                  if (typeof window !== 'undefined') {
-                    localStorage.setItem('rms_customer_order_mode', 'drive_in')
-                  }
-                  if (!locationData.vehicleNumber && !locationData.landmarkNote) {
-                    setIsDriveInModalOpen(true)
-                  }
-                } else {
-                  setIsDriveInModalOpen(true)
+                setOrderMode('drive_in')
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('rms_customer_order_mode', 'drive_in')
                 }
+                setIsDriveInModalOpen(true)
               }}
-              className="h-9 px-2.5 sm:px-3 rounded-xl text-xs font-bold gap-1.5 shadow-2xs cursor-pointer border-primary/30"
-              title="Highway & Food Cart Car Delivery"
+              className={cn(
+                'h-9 px-2.5 sm:px-3 rounded-xl text-xs font-bold gap-1.5 shadow-2xs cursor-pointer transition-all',
+                orderMode === 'drive_in'
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-600 shadow-amber-600/20'
+                  : 'border-border/80 text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              )}
+              title="Drive-In - Click to edit vehicle / spot delivery details"
             >
               <Car className="size-3.5" />
-              <span className="hidden sm:inline">Drive-In</span>
+              <span>Drive-In</span>
+              {locationData.vehicleNumber ? (
+                <span className={cn(
+                  'text-[10px] px-1.5 py-0.5 rounded-md font-extrabold flex items-center gap-0.5 max-w-[80px] truncate',
+                  orderMode === 'drive_in'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-muted text-foreground'
+                )}>
+                  {locationData.vehicleNumber}
+                  <Edit3 className="size-2.5 opacity-80" />
+                </span>
+              ) : (
+                <span className="text-[10px] opacity-75 font-normal hidden sm:inline">(Car Spot)</span>
+              )}
             </Button>
 
             {/* Live Orders Button - Always prominent in header */}
@@ -1138,7 +1170,7 @@ export function CustomerMenu() {
         </div>
       )}
 
-      {/* 3. MISSING TABLE / DRIVE-IN SELECTION PROMPT */}
+      {/* 3. DINE-IN TABLE SELECTION / EDIT MODAL */}
       {showTableModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="relative w-full max-w-sm bg-card border border-border shadow-2xl rounded-3xl p-6 text-center space-y-4">
@@ -1147,34 +1179,71 @@ export function CustomerMenu() {
                 variant="ghost"
                 size="icon"
                 onClick={() => setShowTableModal(false)}
-                className="size-7 rounded-full"
+                className="size-7 rounded-full text-muted-foreground hover:text-foreground"
               >
                 <X className="size-4" />
               </Button>
             </div>
-            <div className="size-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto">
-              <QrCode className="size-6" />
+            <div className="size-12 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/20">
+              <UtensilsCrossed className="size-6" />
             </div>
             <div>
-              <h2 className="text-lg font-bold">Select Dining or Car Spot</h2>
+              <h2 className="text-lg font-black text-foreground">Select Dine-In Table</h2>
               <p className="text-xs text-muted-foreground mt-1">
-                Enter your table number or select Highway Car Drive-In for vehicle delivery.
+                Choose or type your table number for direct table service.
               </p>
             </div>
 
-            <form onSubmit={handleSetTable} className="space-y-3">
+            {/* Quick Table Selection Pills */}
+            <div className="space-y-1.5 text-left pt-1">
+              <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block text-center">
+                Quick Select Table
+              </label>
+              <div className="flex flex-wrap gap-1.5 justify-center">
+                {['1', '2', '3', '4', '5', '6', '7', '8'].map((t) => {
+                  const isSelected = manualTableInput === t || tableNumber === t
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => {
+                        setManualTableInput(t)
+                        setTableNumber(t)
+                        setOrderMode('dine_in')
+                        setIsTableLocked(true)
+                        if (typeof window !== 'undefined') {
+                          localStorage.setItem('rms_customer_table', t)
+                          localStorage.setItem('rms_customer_order_mode', 'dine_in')
+                        }
+                        setShowTableModal(false)
+                      }}
+                      className={cn(
+                        'px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer',
+                        isSelected
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : 'bg-muted/60 hover:bg-muted text-foreground border-border/70'
+                      )}
+                    >
+                      Table {t}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <form onSubmit={handleSetTable} className="space-y-3 pt-1">
               <Input
                 type="text"
-                placeholder="Table # (e.g. 5, 12, or VIP-1)"
+                placeholder="Or custom table (e.g. 10, VIP-1)"
                 value={manualTableInput}
                 onChange={(e) => setManualTableInput(e.target.value)}
                 autoFocus
-                className="text-center font-bold text-lg h-12 rounded-xl"
+                className="text-center font-bold text-base h-11 rounded-xl"
               />
               <Button
                 type="submit"
                 disabled={!manualTableInput.trim()}
-                className="w-full h-11 rounded-xl font-bold cursor-pointer"
+                className="w-full h-11 rounded-xl font-bold cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white"
               >
                 Confirm Table
               </Button>
@@ -1185,7 +1254,7 @@ export function CustomerMenu() {
                 <span className="w-full border-t border-border" />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground text-[10px] font-bold">OR</span>
+                <span className="bg-card px-2 text-muted-foreground text-[10px] font-bold">OR SWITCH MODE</span>
               </div>
             </div>
 
@@ -1200,10 +1269,10 @@ export function CustomerMenu() {
                 }
                 setIsDriveInModalOpen(true)
               }}
-              className="w-full h-11 rounded-xl font-bold text-xs gap-2 border-primary/40 text-primary hover:bg-primary/10 cursor-pointer"
+              className="w-full h-11 rounded-xl font-bold text-xs gap-2 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 cursor-pointer"
             >
               <Car className="size-4" />
-              <span>🚗 Highway / Food Cart Drive-In</span>
+              <span>🚗 Switch to Highway Car Drive-In</span>
             </Button>
           </div>
         </div>

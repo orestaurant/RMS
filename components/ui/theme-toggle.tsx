@@ -1,7 +1,8 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React from 'react'
 import { Sun, Moon } from 'lucide-react'
+import { useTheme } from '@/hooks/useTheme'
 
 interface ThemeToggleProps {
   className?: string
@@ -9,49 +10,7 @@ interface ThemeToggleProps {
 }
 
 export function ThemeToggle({ className = '', showLabel = false }: ThemeToggleProps) {
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-    const isLight = document.documentElement.classList.contains('light')
-    const stored = localStorage.getItem('theme')
-    if (stored === 'light' || (!stored && isLight)) {
-      setTheme('light')
-    } else {
-      setTheme('dark')
-    }
-
-    const handleThemeChange = (e: CustomEvent<string>) => {
-      setTheme(e.detail === 'light' ? 'light' : 'dark')
-    }
-
-    window.addEventListener('theme-changed', handleThemeChange as EventListener)
-    return () => {
-      window.removeEventListener('theme-changed', handleThemeChange as EventListener)
-    }
-  }, [])
-
-  const toggleTheme = () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark'
-    setTheme(nextTheme)
-
-    if (nextTheme === 'light') {
-      document.documentElement.classList.remove('dark')
-      document.documentElement.classList.add('light')
-      try {
-        localStorage.setItem('theme', 'light')
-      } catch (e) {}
-    } else {
-      document.documentElement.classList.add('dark')
-      document.documentElement.classList.remove('light')
-      try {
-        localStorage.setItem('theme', 'dark')
-      } catch (e) {}
-    }
-
-    window.dispatchEvent(new CustomEvent('theme-changed', { detail: nextTheme }))
-  }
+  const { theme, toggleTheme } = useTheme()
 
   return (
     <button
@@ -73,4 +32,3 @@ export function ThemeToggle({ className = '', showLabel = false }: ThemeTogglePr
     </button>
   )
 }
-

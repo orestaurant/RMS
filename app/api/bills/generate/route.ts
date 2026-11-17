@@ -30,6 +30,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}))
     const {
+      orderId: reqOrderId,
       tableId: reqTableId,
       tableNumber: reqTableNumber,
       branchId: reqBranchId,
@@ -41,9 +42,160 @@ export async function POST(request: NextRequest) {
       waiterId: reqWaiterId,
     } = body
 
+    // 0. Handle direct Order Bill Generation if orderId is provided
+    if (reqOrderId) {
+      const targetOrder = await prisma.order.findUnique({
+        where: { id: reqOrderId },
+        include: {
+          items: true,
+          table: true,
+          customer: true,
+          servedBy: true,
+          createdBy: true,
+          bill: {
+            include: {
+              items: true,
+              table: true,
+              waiter: true,
+              tip: true,
+            },
+          },
+        },
+      })
+
+      if (targetOrder) {
+        // If an active bill already exists with items, return it
+        if (targetOrder.bill && targetOrder.bill.items && targetOrder.bill.items.length > 0) {
+          return NextResponse.json({
+            success: true,
+            message: 'Active bill retrieved successfully.',
+            data: {
+              ...targetOrder.bill,
+              subtotal: Number(targetOrder.bill.subtotal),
+              taxAmount: Number(targetOrder.bill.taxAmount),
+              discountAmount: Number(targetOrder.bill.discountAmount),
+              tipAmount: Number(targetOrder.bill.tipAmount),
+              grandTotal: Number(targetOrder.bill.grandTotal),
+            },
+          })
+        }
+
+        // Generate bill directly from this order
+        const resolvedBranchId = targetOrder.branchId
+        const resolvedRestaurantId = targetOrder.restaurantId
+        const resolvedOrgId = targetOrder.organizationId
+        const resolvedTableId = targetOrder.tableId
+
+        let taxPercentage = 5.0
+        try {
+          const settings = await prisma.restaurantSettings.findFirst({
+            where: { restaurantId: resolvedRestaurantId },
+            select: { taxPercentage: true },
+          })
+          if (settings?.taxPercentage) {
+            taxPercentage = Number(settings.taxPercentage)
+          }
+        } catch (e) {}
+
+        const billItems = targetOrder.items.map((it) => ({
+          name: it.itemName,
+          quantity: it.quantity,
+          price: Number(it.basePrice),
+          total: Number(it.itemTotal),
+          menuItemId: it.menuItemId,
+        }))
+
+        const calculatedSubtotal = billItems.reduce((acc, curr) => acc + curr.total, 0)
+        const discountAmount = Math.max(0, Number(discount || 0))
+        const taxableAmount = Math.max(0, calculatedSubtotal - discountAmount)
+        const totalTax = Math.round(taxableAmount * (taxPercentage / 100) * 100) / 100
+        const grandTotal = Math.round((taxableAmount + totalTax) * 100) / 100
+
+        const today = new Date()
+        const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '')
+        const randSuffix = Math.floor(1000 + Math.random() * 9000)
+        const billNumber = `INV-${dateStr}-${randSuffix}`
+
+        const isCustomerRequest = source === 'customer'
+        const newStatus = isCustomerRequest ? 'REQUESTED' : 'GENERATED'
+        const newBillStatus = isCustomerRequest ? 'requested' : 'open'
+        const assignedWaiterId = reqWaiterId || targetOrder.servedById || targetOrder.createdById || null
+
+        const createdBill = await prisma.bill.create({
+          data: {
+            billNumber,
+            orderId: targetOrder.id,
+            restaurantId: resolvedRestaurantId,
+            branchId: resolvedBranchId,
+            organizationId: resolvedOrgId,
+            tableId: resolvedTableId,
+            waiterId: assignedWaiterId,
+            customerName:
+              customerName ||
+              targetOrder.customer?.name ||
+              (targetOrder.vehicleNumber ? `Guest (${targetOrder.vehicleNumber})` : 'Dine-In Guest'),
+            customerPhone: customerPhone || targetOrder.customer?.phone || null,
+            subtotal: calculatedSubtotal,
+            discountAmount,
+            taxAmount: totalTax,
+            tipAmount: 0,
+            grandTotal,
+            totalAmount: grandTotal,
+            status: newStatus,
+            billStatus: newBillStatus,
+            paymentStatus: targetOrder.paymentStatus === 'completed' ? 'completed' : 'pending',
+            items: {
+              create: billItems.map((it) => ({
+                organizationId: resolvedOrgId,
+                itemName: it.name,
+                basePrice: it.price,
+                quantity: it.quantity,
+                itemTotal: it.total,
+                discountAmount: 0,
+                taxAmount: Math.round(it.total * (taxPercentage / 100) * 100) / 100,
+                lineTotal: it.total,
+                menuItemId: it.menuItemId || null,
+              })),
+            },
+          },
+          include: {
+            items: true,
+            table: true,
+            waiter: {
+              select: { id: true, name: true, firstName: true, lastName: true },
+            },
+            tip: true,
+          },
+        })
+
+        await prisma.order
+          .update({
+            where: { id: targetOrder.id },
+            data: { billId: createdBill.id, isBilled: true },
+          })
+          .catch(() => {})
+
+        return NextResponse.json(
+          {
+            success: true,
+            message: `Bill ${createdBill.billNumber} generated successfully.`,
+            data: {
+              ...createdBill,
+              subtotal: Number(createdBill.subtotal),
+              taxAmount: Number(createdBill.taxAmount),
+              discountAmount: Number(createdBill.discountAmount),
+              tipAmount: Number(createdBill.tipAmount),
+              grandTotal: Number(createdBill.grandTotal),
+            },
+          },
+          { status: 201 }
+        )
+      }
+    }
+
     if (!reqTableId && !reqTableNumber) {
       return NextResponse.json(
-        { success: false, message: 'Table identification (tableId or tableNumber) is required' },
+        { success: false, message: 'Table identification (tableId or tableNumber) or orderId is required' },
         { status: 400 }
       )
     }
@@ -133,12 +285,16 @@ export async function POST(request: NextRequest) {
       prisma.order.findMany({
         where: {
           tableId: table.id,
-          isBilled: false,
           deletedAt: null,
           createdAt: { gte: sessionCutoff },
           status: {
             notIn: ['cancelled', 'CANCELLED', 'refunded'],
           },
+          OR: [
+            { isBilled: false },
+            { billId: null },
+            { bill: { status: { in: ['REQUESTED', 'GENERATED', 'open', 'requested'] } } },
+          ],
         },
         select: {
           id: true,

@@ -20,6 +20,8 @@ import { Separator } from '@/components/ui/separator'
 import { StatCard } from '@/components/ui/stat-card'
 import { TableOccupancyGrid } from '@/components/dashboard/table-occupancy-grid'
 import { CustomerDashboardView } from '@/components/dashboard/customer-dashboard-view'
+import { VendorDashboardView } from '@/components/dashboard/vendor-dashboard-view'
+import { InventoryManagerDashboardView } from '@/components/dashboard/inventory-manager-dashboard-view'
 import { useDashboardStats } from '@/hooks/useDashboardStats'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import { getTopDishes, getInventoryAlerts } from '@/lib/api/dashboard'
@@ -63,6 +65,16 @@ export function DashboardOverview() {
   // Customer Guard: strictly render customer portal dashboard
   if (isCustomer) {
     return <CustomerDashboardView />
+  }
+
+  // Vendor Guard: strictly render vendor portal dashboard
+  if (roleUpper === 'VENDOR') {
+    return <VendorDashboardView />
+  }
+
+  // Inventory Manager Guard: render dedicated inventory manager overview
+  if (roleUpper === 'INVENTORY_MANAGER') {
+    return <InventoryManagerDashboardView />
   }
 
   return <AdminDashboardOverview auth={auth} />

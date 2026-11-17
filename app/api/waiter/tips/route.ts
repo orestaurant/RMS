@@ -62,6 +62,7 @@ export async function GET(request: NextRequest) {
         lastName: true,
         role: true,
         phone: true,
+        organizationId: true,
       },
     })
 
@@ -69,6 +70,68 @@ export async function GET(request: NextRequest) {
       waiterUser?.name ||
       `${waiterUser?.firstName || ''} ${waiterUser?.lastName || ''}`.trim() ||
       'Staff Member'
+
+    // Tip ledger is strictly for staff with role WAITER (e.g. Chefs and other staff do not see waiter tips)
+    const userRole = String(waiterUser?.role || '').toLowerCase()
+    if (userRole && userRole !== 'waiter') {
+      return NextResponse.json({
+        success: true,
+        data: null,
+        message: 'Tip ledger is only applicable for Waiter staff',
+      })
+    }
+
+    // Auto-sync & heal orphaned tips from bills with tipAmount > 0
+    try {
+      const unlinkedBills = await prisma.bill.findMany({
+        where: {
+          tipAmount: { gt: 0 },
+          OR: [
+            { waiterId: targetWaiterId },
+            {
+              waiterId: null,
+              ...(waiterUser?.organizationId ? { organizationId: waiterUser.organizationId } : {}),
+            },
+          ],
+          tip: null,
+        },
+        take: 25,
+      })
+
+      if (unlinkedBills.length > 0) {
+        for (const b of unlinkedBills) {
+          const isPaidBill = b.status === 'PAID' || b.paymentStatus === 'completed'
+          const tipAmt = Number(b.tipAmount || 0)
+          if (tipAmt <= 0) continue
+
+          await prisma.$transaction([
+            prisma.bill.update({
+              where: { id: b.id },
+              data: { waiterId: targetWaiterId },
+            }),
+            prisma.tip.upsert({
+              where: { billId: b.id },
+              create: {
+                billId: b.id,
+                waiterId: targetWaiterId,
+                restaurantId: b.restaurantId,
+                branchId: b.branchId,
+                organizationId: b.organizationId || waiterUser?.organizationId || '',
+                amount: tipAmt,
+                status: isPaidBill ? 'SETTLED' : 'PENDING',
+              },
+              update: {
+                waiterId: targetWaiterId,
+                amount: tipAmt,
+                status: isPaidBill ? 'SETTLED' : 'PENDING',
+              },
+            }),
+          ]).catch(() => {})
+        }
+      }
+    } catch (syncErr) {
+      console.warn('Orphaned tip auto-sync skipped:', syncErr)
+    }
 
     // Fetch tips records for this waiter
     const tips = await prisma.tip.findMany({
@@ -86,9 +149,14 @@ export async function GET(request: NextRequest) {
       take: 50,
     })
 
-    // Start of today in UTC / local
-    const startOfToday = new Date()
-    startOfToday.setHours(0, 0, 0, 0)
+    // Start of today in IST (UTC+5:30) and local timezone
+    const now = new Date()
+    const istOffsetMs = 5.5 * 60 * 60 * 1000
+    const istNow = new Date(now.getTime() + istOffsetMs)
+    const istMidnight = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()))
+    const startOfTodayUtc = new Date(istMidnight.getTime() - istOffsetMs)
+    const localMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+    const effectiveTodayStart = startOfTodayUtc < localMidnight ? startOfTodayUtc : localMidnight
 
     let todayTipsTotal = 0
     let allTimeTipsTotal = 0
@@ -100,7 +168,7 @@ export async function GET(request: NextRequest) {
 
       if (t.status === 'SETTLED') {
         allTimeTipsTotal += amt
-        if (tipDate >= startOfToday) {
+        if (tipDate >= effectiveTodayStart) {
           todayTipsTotal += amt
         }
       } else {
