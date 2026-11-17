@@ -193,12 +193,6 @@ export function AppSidebar() {
           label: 'OPERATIONS',
           items: [
             { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-            {
-              label: 'Live Orders',
-              href: '/orders',
-              icon: Zap,
-              badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
-            },
           ],
         },
         {
@@ -211,7 +205,6 @@ export function AppSidebar() {
         {
           label: 'BUSINESS',
           items: [
-            { label: 'Staff & Roles', href: '/staff', icon: UserCheck },
             { label: 'Settings', href: '/dashboard/settings', icon: Settings },
           ],
         },
@@ -248,7 +241,6 @@ export function AppSidebar() {
             badge: counts?.kitchenLive ? 'Live' : undefined,
           },
           { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
-          { label: 'Raw Materials', href: '/inventory-manager/inventory', icon: Boxes },
           { label: 'Inventory', href: '/inventory', icon: Package },
         ],
       },
