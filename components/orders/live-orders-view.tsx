@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import Link from 'next/link'
 import {
   Clock,
   Zap,
@@ -27,6 +28,7 @@ import {
   Compass,
   Copy,
   Check,
+  UtensilsCrossed,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -137,6 +139,7 @@ const priorityConfig = {
 
 function OrderRow({
   order,
+  isCustomer = false,
   onOrderDeleted,
   onOrderUpdated,
   onAcceptOrder,
@@ -144,6 +147,7 @@ function OrderRow({
   onGenerateBill,
 }: {
   order: LiveOrder
+  isCustomer?: boolean
   onOrderDeleted?: (id: string) => void
   onOrderUpdated?: (order: LiveOrder) => void
   onAcceptOrder?: (orderId: string, fullId?: string) => void
@@ -355,20 +359,24 @@ function OrderRow({
               >
                 <Eye className="size-3.5" /> View Details
               </DropdownMenuItem>
-              <DropdownMenuItem
-                className="gap-2 cursor-pointer font-bold text-emerald-600 dark:text-emerald-400"
-                onClick={() => onGenerateBill?.(order)}
-              >
-                <Receipt className="size-3.5 text-emerald-600" /> Generate Bill
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                className="gap-2 cursor-pointer text-destructive focus:text-destructive"
-                onClick={() => setDeleteConfirmOpen(true)}
-              >
-                <Trash2 className="size-3.5 text-destructive" /> Delete Order
-              </DropdownMenuItem>
+              {!isCustomer && (
+                <>
+                  <DropdownMenuItem
+                    className="gap-2 cursor-pointer font-bold text-emerald-600 dark:text-emerald-400"
+                    onClick={() => onGenerateBill?.(order)}
+                  >
+                    <Receipt className="size-3.5 text-emerald-600" /> Generate Bill
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    className="gap-2 cursor-pointer text-destructive focus:text-destructive"
+                    onClick={() => setDeleteConfirmOpen(true)}
+                  >
+                    <Trash2 className="size-3.5 text-destructive" /> Delete Order
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           <ChevronRight
@@ -477,19 +485,21 @@ function OrderRow({
                     Locate Customer
                   </Button>
                 )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setDeleteConfirmOpen(true)
-                  }}
-                >
-                  <Trash2 className="size-3" />
-                  Delete
-                </Button>
-                {order.status === 'pending' && (
+                {!isCustomer && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDeleteConfirmOpen(true)
+                    }}
+                  >
+                    <Trash2 className="size-3" />
+                    Delete
+                  </Button>
+                )}
+                {!isCustomer && order.status === 'pending' && (
                   <Button
                     size="sm"
                     className="h-7 text-xs font-extrabold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
@@ -502,7 +512,7 @@ function OrderRow({
                     Accept Order
                   </Button>
                 )}
-                {order.status === 'ready' && (
+                {!isCustomer && order.status === 'ready' && (
                   <Button
                     size="sm"
                     className="h-7 text-xs font-extrabold gap-1.5 bg-sky-600 hover:bg-sky-700 text-white shadow-sm"
@@ -527,14 +537,18 @@ function OrderRow({
                   <Eye className="size-3" />
                   Details
                 </Button>
-                <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5">
-                  <Printer className="size-3" />
-                  KOT
-                </Button>
-                <Button size="sm" className="h-7 text-xs gap-1.5">
-                  <Receipt className="size-3" />
-                  Bill
-                </Button>
+                {!isCustomer && (
+                  <>
+                    <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5">
+                      <Printer className="size-3" />
+                      KOT
+                    </Button>
+                    <Button size="sm" className="h-7 text-xs gap-1.5">
+                      <Receipt className="size-3" />
+                      Bill
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -925,6 +939,7 @@ type TabFilter = 'all' | OrderStatus
 
 export function LiveOrdersView() {
   const { auth } = useAuthContext()
+  const isCustomer = String(auth?.role || '').toUpperCase() === 'CUSTOMER'
   const activeBranchId = auth?.branchId
 
   const [tab, setTab] = useState<TabFilter>('all')
@@ -1293,7 +1308,7 @@ export function LiveOrdersView() {
       </div>
 
       {/* ── New / Pending Requests Section (Waiter Order Acceptance) ── */}
-      {pendingOrders.length > 0 && (
+      {!isCustomer && pendingOrders.length > 0 && (
         <div className="rounded-2xl border-2 border-warning/40 bg-warning/5 p-4 md:p-5 shadow-sm space-y-3.5">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2.5">
@@ -1579,22 +1594,35 @@ export function LiveOrdersView() {
                 <p className="text-sm font-medium text-foreground">
                   {filterMode === 'car'
                     ? 'No active Car / GPS Locked Orders'
+                    : isCustomer
+                    ? 'No active orders placed by your account'
                     : 'No active live orders'}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1 max-w-sm">
                   {filterMode === 'car'
                     ? 'Orders with vehicle numbers or captured GPS locations will appear here.'
+                    : isCustomer
+                    ? 'Dishes you order from the menu will appear here with live preparation & kitchen tracking.'
                     : 'Orders placed from the POS terminal or online orders will appear here in real-time.'}
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => fetchLiveOrders()}
-                className="mt-2 text-xs gap-1.5"
-              >
-                <RefreshCw className="size-3" /> Check for orders
-              </Button>
+              <div className="flex items-center gap-2 mt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchLiveOrders()}
+                  className="text-xs gap-1.5"
+                >
+                  <RefreshCw className="size-3" /> Check for orders
+                </Button>
+                {isCustomer && (
+                  <Link href="/admin-menu">
+                    <Button size="sm" className="text-xs gap-1.5 font-semibold">
+                      <UtensilsCrossed className="size-3" /> Order from Menu
+                    </Button>
+                  </Link>
+                )}
+              </div>
             </div>
           ) : (
             <div>
@@ -1602,6 +1630,7 @@ export function LiveOrdersView() {
                 <OrderRow
                   key={order.id}
                   order={order}
+                  isCustomer={isCustomer}
                   onOrderDeleted={handleOrderDeleted}
                   onOrderUpdated={handleOrderUpdated}
                   onAcceptOrder={handleAcceptOrder}

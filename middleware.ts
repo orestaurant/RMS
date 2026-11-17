@@ -35,12 +35,11 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   const adminPayload = await getAdminPayload(request)
-  const adminAuth = !!adminPayload?.userId
   const roleUpper = String(adminPayload?.role || '').toUpperCase()
-  const isWaiter = roleUpper === 'WAITER'
-  const isChef = roleUpper === 'CHEF'
+  const isAdminStaff = !!adminPayload?.userId && roleUpper !== 'CUSTOMER'
+  const isWaiter = isAdminStaff && roleUpper === 'WAITER'
+  const isChef = isAdminStaff && roleUpper === 'CHEF'
   const customerAuth = await isCustomerAuthenticated(request)
-  const isAuthenticated = adminAuth || customerAuth
 
   // Default redirect path based on user role
   const defaultAuthRedirect = isWaiter ? '/tables' : isChef ? '/kitchen' : '/dashboard'
@@ -52,23 +51,30 @@ export async function middleware(request: NextRequest) {
     pathname === '/customer/register'
 
   if (isCustomerAuthRoute) {
-    if (isAuthenticated) {
-      return NextResponse.redirect(new URL(defaultAuthRedirect, request.url))
+    // Account creation must always be accessible so new guest accounts can be created
+    if (pathname === '/customer/register') {
+      return NextResponse.next()
     }
+    // Only redirect if customer session is already active on signin routes
+    if (customerAuth) {
+      return NextResponse.redirect(new URL('/orders', request.url))
+    }
+    // Admin sessions must NEVER hijack or redirect away from the customer portal
     return NextResponse.next()
   }
 
   // 2. Admin Login Page (/login)
   if (pathname === '/login') {
-    if (isAuthenticated) {
+    if (isAdminStaff) {
       return NextResponse.redirect(new URL(defaultAuthRedirect, request.url))
     }
+    // Strict isolation: Never redirect a customer visiting /login to /orders.
+    // The Staff & Admin Sign In form must always be presented.
     return NextResponse.next()
   }
 
   // 2b. Waiter & Chef Role Route Security:
   // Waiter & Chef can only access Tables, Reservations, Live Orders, Kitchen Display, and Menu Management.
-  // Other administrative and operational routes redirect directly to /kitchen (for chef) or /tables (for waiter).
   if (isWaiter || isChef) {
     const fallbackRoute = isChef ? '/kitchen' : '/tables'
     if (pathname === '/dashboard' || pathname === '/dashboard/') {
@@ -96,16 +102,22 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // 3. Customer Dashboard Redirect
-  if (pathname === '/customer/dashboard') {
-    if (!isAuthenticated) {
-      return NextResponse.redirect(new URL('/customer/login', request.url))
+  // 3. Customer Dashboard Route (/customer/dashboard)
+  // Strict Isolation: If no customer session is active, redirect to customer account registration.
+  // Authenticated customers land cleanly on Live Orders (/orders).
+  if (pathname === '/customer/dashboard' || pathname.startsWith('/customer/dashboard/')) {
+    if (!customerAuth) {
+      return NextResponse.redirect(new URL('/customer/register', request.url))
     }
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+    return NextResponse.redirect(new URL('/orders', request.url))
   }
 
-  // 4. Restricted Routes for Customers (Tables, Staff, Inventory, Reservations, Analytics & Settings are Staff/Admin-Only)
-  const isCustomerRestrictedRoute =
+  // 4. Strict Isolation: Block Customer sessions from accessing Admin Portal (/admin or /dashboard) and Staff-Only Routes
+  const isAdminOrDashboardRoute =
+    pathname === '/admin' ||
+    pathname.startsWith('/admin/') ||
+    pathname === '/dashboard' ||
+    pathname.startsWith('/dashboard/') ||
     pathname === '/tables' ||
     pathname.startsWith('/tables/') ||
     pathname === '/staff' ||
@@ -118,17 +130,19 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/analytics/') ||
     pathname === '/settings' ||
     pathname.startsWith('/settings/') ||
-    pathname === '/dashboard/settings' ||
-    pathname.startsWith('/dashboard/settings/')
+    pathname === '/pos' ||
+    pathname.startsWith('/pos/') ||
+    pathname === '/kitchen' ||
+    pathname.startsWith('/kitchen/') ||
+    pathname === '/crm' ||
+    pathname.startsWith('/crm/') ||
+    pathname === '/billing' ||
+    pathname.startsWith('/billing/')
 
-  if (isCustomerRestrictedRoute) {
-    // If not logged in at all, go to login
-    if (!isAuthenticated) {
+  if (isAdminOrDashboardRoute) {
+    // Strict Isolation: Customer and unauthenticated sessions cannot access Admin/Staff routes
+    if (!isAdminStaff) {
       return NextResponse.redirect(new URL('/login', request.url))
-    }
-    // If logged in as customer (and not admin), block access and redirect to customer orders
-    if (customerAuth && !adminAuth) {
-      return NextResponse.redirect(new URL('/customer/orders', request.url))
     }
     return NextResponse.next()
   }
@@ -136,37 +150,24 @@ export async function middleware(request: NextRequest) {
   // 5. Customer Orders Routes (/customer/orders)
   const isCustomerOrdersRoute = pathname === '/customer/orders' || pathname.startsWith('/customer/orders/')
   if (isCustomerOrdersRoute) {
-    if (!isAuthenticated) {
+    if (isAdminStaff && !customerAuth) {
+      return NextResponse.redirect(new URL(defaultAuthRedirect, request.url))
+    }
+    if (!customerAuth) {
       return NextResponse.redirect(new URL('/customer/login', request.url))
     }
     return NextResponse.next()
   }
 
-  // 6. Protected Operational Dashboard Routes
-  const isProtectedDashboardRoute =
-    pathname === '/dashboard' ||
-    pathname.startsWith('/dashboard/') ||
-    pathname === '/pos' ||
-    pathname.startsWith('/pos/') ||
-    pathname === '/tables' ||
-    pathname.startsWith('/tables/') ||
-    pathname === '/reservations' ||
-    pathname.startsWith('/reservations/') ||
+  // 6. Shared Live Orders (/orders) & Menu Management (/admin-menu)
+  const isSharedOperationalRoute =
     pathname === '/orders' ||
     pathname.startsWith('/orders/') ||
-    pathname === '/kitchen' ||
-    pathname.startsWith('/kitchen/') ||
-    pathname === '/inventory' ||
-    pathname.startsWith('/inventory/') ||
-    pathname === '/crm' ||
-    pathname.startsWith('/crm/') ||
-    pathname === '/staff' ||
-    pathname.startsWith('/staff/') ||
-    pathname === '/billing' ||
-    pathname.startsWith('/billing/')
+    pathname === '/admin-menu' ||
+    pathname.startsWith('/admin-menu/')
 
-  if (isProtectedDashboardRoute) {
-    if (!isAuthenticated) {
+  if (isSharedOperationalRoute) {
+    if (!isAdminStaff && !customerAuth) {
       return NextResponse.redirect(new URL('/login', request.url))
     }
     return NextResponse.next()
@@ -177,6 +178,10 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    '/admin/:path*',
+    '/admin',
+    '/admin-menu/:path*',
+    '/admin-menu',
     '/dashboard/:path*',
     '/dashboard',
     '/pos/:path*',

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -21,7 +21,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { seedAuthCache } from '@/hooks/useAuthContext'
+import { seedAuthCache, clearAuthCache } from '@/hooks/useAuthContext'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -30,6 +30,11 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    // Clear any lingering auth session cache when navigating to the Staff & Admin login page
+    clearAuthCache()
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -127,10 +132,23 @@ export default function LoginPage() {
             {error && (
               <div
                 role="alert"
-                className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive animate-in fade-in slide-in-from-top-1 duration-200"
+                className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive animate-in fade-in slide-in-from-top-1 duration-200"
               >
-                <AlertCircle className="size-4 shrink-0 mt-0.5" />
-                <span className="font-medium leading-relaxed">{error}</span>
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                  <span className="font-medium leading-relaxed">{error}</span>
+                </div>
+                {error.includes('Customer accounts') && (
+                  <div className="pt-1 pl-6">
+                    <Link
+                      href="/customer/login"
+                      className="font-semibold underline underline-offset-2 hover:opacity-80 inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"
+                    >
+                      <span>Go to Customer & Guest Portal</span>
+                      <ArrowRight className="size-3" />
+                    </Link>
+                  </div>
+                )}
               </div>
             )}
 

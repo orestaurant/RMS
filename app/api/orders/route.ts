@@ -18,6 +18,7 @@ import {
   getCachedBranchMeta,
   setCachedBranchMeta,
 } from '@/lib/dashboard-cache'
+import { getCustomerSession } from '@/lib/customer-auth'
 
 // High-speed in-memory caches to eliminate redundant Neon DB round-trips over Singapore link
 const inMemoryTableCache = new Map<string, { id: string; tableNumber: string }>()
@@ -288,6 +289,10 @@ export async function POST(request: NextRequest) {
       locationCapturedAt = null,
     } = body
 
+    // Auto-link logged-in customer account if order was placed during customer session
+    const customerSession = await getCustomerSession(request)
+    const resolvedCustomerId = customerId || customerSession?.customerId || null
+
     const requestedStatus = body.status || body.requestedStatus || 'pending'
 
     const parsedLat = customerLat !== null && customerLat !== undefined && !isNaN(Number(customerLat)) ? Number(customerLat) : null
@@ -547,7 +552,7 @@ export async function POST(request: NextRequest) {
         status: finalStatus as any,
         paymentStatus: 'pending',
         tableId,
-        customerId: customerId || null,
+        customerId: resolvedCustomerId,
         subtotal: new Prisma.Decimal(calculatedSubtotal),
         taxAmount: new Prisma.Decimal(taxAmount),
         totalAmount: new Prisma.Decimal(finalTotal),

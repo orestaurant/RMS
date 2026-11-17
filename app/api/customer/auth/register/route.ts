@@ -42,7 +42,26 @@ export async function POST(request: NextRequest) {
     const cleanName = name.trim()
     const cleanMobile = mobile && typeof mobile === 'string' ? mobile.trim() : null
 
-    // 2. Check if email is already registered
+    // 2. Check if email is already registered as an admin/staff account
+    const existingStaff = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+      select: { id: true, role: true, deletedAt: true },
+    })
+
+    if (existingStaff && !existingStaff.deletedAt) {
+      const roleUpper = String(existingStaff.role || '').toUpperCase()
+      if (roleUpper !== 'CUSTOMER') {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'This email is registered as an admin/staff account. Please sign in via Staff & Admin Sign In.',
+          },
+          { status: 400 }
+        )
+      }
+    }
+
+    // Check if email is already registered in customer table
     const existingCustomer = await prisma.customer.findUnique({
       where: { email: cleanEmail },
     })
@@ -62,7 +81,7 @@ export async function POST(request: NextRequest) {
       select: { id: true },
     })
 
-    // 5. Create Customer record in PostgreSQL
+    // 5. Create Customer record in PostgreSQL with strict role: "CUSTOMER"
     const customer = await prisma.customer.create({
       data: {
         name: cleanName,
@@ -72,6 +91,7 @@ export async function POST(request: NextRequest) {
         phone: cleanMobile,
         status: 'active',
         customerSource: 'ONLINE',
+        role: 'CUSTOMER',
         ...(defaultOrg ? { organizationId: defaultOrg.id } : {}),
       },
     })
@@ -84,16 +104,18 @@ export async function POST(request: NextRequest) {
       name: customer.name,
     })
 
-    // 7. Response with customer_session cookie
+    // 7. Response with customer_session cookie and clean default redirect to Live Orders
     const response = NextResponse.json(
       {
         success: true,
         message: 'Registration successful',
+        redirect: '/orders',
         customer: {
           id: customer.id,
           name: customer.name,
           email: customer.email,
           mobile: customer.mobile,
+          role: 'CUSTOMER',
         },
       },
       {

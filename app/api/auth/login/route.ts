@@ -19,6 +19,24 @@ export async function POST(request: NextRequest) {
     const email = String(body.email).trim().toLowerCase()
     const password = String(body.password)
 
+    // 1. Immediate Customer check: Block any customer account from logging into Staff & Admin portal
+    const customerAccount = await prisma.customer.findFirst({
+      where: {
+        email: {
+          equals: email,
+          mode: 'insensitive',
+        },
+      },
+      select: { id: true, email: true, role: true },
+    })
+
+    if (customerAccount) {
+      return NextResponse.json(
+        { success: false, message: 'Customer accounts do not have access to the Staff & Admin portal. Please use the Customer & Guest Portal.' },
+        { status: 403 }
+      )
+    }
+
     // Query user by email from PostgreSQL via Prisma (with retry for Neon cold-starts)
     let user = null
     try {
@@ -31,6 +49,16 @@ export async function POST(request: NextRequest) {
       user = await prisma.user.findUnique({
         where: { email },
       })
+    }
+
+    if (user && !user.deletedAt) {
+      const roleUpper = String(user.role || '').toUpperCase()
+      if (roleUpper === 'CUSTOMER') {
+        return NextResponse.json(
+          { success: false, message: 'Customer accounts do not have access to the Staff & Admin portal. Please use the Customer & Guest Portal.' },
+          { status: 403 }
+        )
+      }
     }
 
     if (!user || user.deletedAt) {

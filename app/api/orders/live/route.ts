@@ -14,6 +14,7 @@ import {
   invalidateLiveOrdersCache,
 } from '@/lib/kds-utils'
 import { getCachedBranchMeta, setCachedBranchMeta } from '@/lib/dashboard-cache'
+import { getCustomerSession } from '@/lib/customer-auth'
 import { startOfDay } from 'date-fns'
 import { OrderStatusEnum } from '@prisma/client'
 
@@ -25,14 +26,20 @@ export async function GET(request: NextRequest) {
     const branchIdParam = request.nextUrl.searchParams.get('branchId')
     const statusFilter = (request.nextUrl.searchParams.get('status') || 'all').toLowerCase()
 
+    // 0. Detect Customer Session for strictly isolated, user-specific Live Orders
+    const customerSession = await getCustomerSession(request)
+    const isCustomer = Boolean(customerSession?.customerId)
+
     // UUID validator to protect Prisma queries against invalid uuid syntax
     const isUuid = (val: string | null): boolean =>
       !!val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)
 
-    // 1. Resolve branch filter
+    // 1. Resolve branch & customer-isolated cache key
     const explicitBranchFilter = branchIdParam && isUuid(branchIdParam) && branchIdParam !== 'all' ? branchIdParam : null
-    const cacheKey = `${explicitBranchFilter || 'all'}_${statusFilter}`
-    const cachedData = getLiveOrdersCache(cacheKey, 2500)
+    const cacheKey = isCustomer
+      ? `cust_${customerSession!.customerId}_${statusFilter}`
+      : `${explicitBranchFilter || 'all'}_${statusFilter}`
+    const cachedData = getLiveOrdersCache(cacheKey, isCustomer ? 1500 : 2500)
 
     // 2. High-speed in-memory cache check (< 5ms response)
     if (cachedData) {
@@ -45,7 +52,6 @@ export async function GET(request: NextRequest) {
     }
 
     const now = Date.now()
-
     const todayStart = startOfDay(new Date())
 
     // Active in-progress order statuses matching OrderStatusEnum in Prisma
@@ -64,27 +70,41 @@ export async function GET(request: NextRequest) {
     let formattedOrders: any[] = []
 
     try {
-      // 3. Fetch active orders OR orders created today with lean SELECT query
-      const rawOrders = await prisma.order.findMany({
-        where: {
-          deletedAt: null,
-          status: {
-            notIn: ['cancelled', 'CANCELLED', 'refunded'],
-          },
-          ...(explicitBranchFilter ? { branchId: explicitBranchFilter } : {}),
-          AND: [
-            {
-              OR: [
-                { createdAt: { gte: todayStart } },
-                {
-                  status: {
-                    in: inProgressStatuses as any,
-                  },
-                },
-              ],
-            },
-          ],
+      // 3. Lean query: If Customer, strictly filter by customerId; If Staff, filter by branch/active statuses
+      const whereClause: any = {
+        deletedAt: null,
+        status: {
+          notIn: ['cancelled', 'CANCELLED', 'refunded'],
         },
+      }
+
+      if (isCustomer) {
+        // Customer isolation: ONLY fetch orders placed by this specific customer account
+        whereClause.customerId = customerSession!.customerId
+        if (statusFilter !== 'all') {
+          whereClause.status = statusFilter
+        }
+      } else {
+        // Staff / Admin: branch filter and active today filter
+        if (explicitBranchFilter) {
+          whereClause.branchId = explicitBranchFilter
+        }
+        whereClause.AND = [
+          {
+            OR: [
+              { createdAt: { gte: todayStart } },
+              {
+                status: {
+                  in: inProgressStatuses as any,
+                },
+              },
+            ],
+          },
+        ]
+      }
+
+      const rawOrders = await prisma.order.findMany({
+        where: whereClause,
         select: {
           id: true,
           orderNumber: true,
@@ -125,7 +145,7 @@ export async function GET(request: NextRequest) {
         orderBy: {
           createdAt: 'desc',
         },
-        take: 120,
+        take: isCustomer ? 50 : 120,
       })
 
       if (rawOrders && rawOrders.length > 0) {
@@ -193,47 +213,49 @@ export async function GET(request: NextRequest) {
       console.error('Orders live DB lookup error:', dbErr)
     }
 
-    // 4. Merge fallback live orders from in-memory session if DB has fewer orders
-    const memoryOrders = getRealTimeLiveOrders()
-    for (const mo of memoryOrders) {
-      if (!formattedOrders.some((fo) => fo.id === mo.id || fo.fullId === mo.fullId)) {
-        const subtotal = (mo.items || []).reduce(
-          (sum: number, it: any) => sum + (it.price || 150) * it.quantity,
-          0
-        )
-        const tax = Math.round(subtotal * 0.05 * 100) / 100
-        const total = subtotal + tax
+    // 4. Merge fallback live orders from in-memory session ONLY for Staff/Admin (NEVER for Customers)
+    if (!isCustomer) {
+      const memoryOrders = getRealTimeLiveOrders()
+      for (const mo of memoryOrders) {
+        if (!formattedOrders.some((fo) => fo.id === mo.id || fo.fullId === mo.fullId)) {
+          const subtotal = (mo.items || []).reduce(
+            (sum: number, it: any) => sum + (it.price || 150) * it.quantity,
+            0
+          )
+          const tax = Math.round(subtotal * 0.05 * 100) / 100
+          const total = subtotal + tax
 
-        formattedOrders.push({
-          id: mo.id,
-          fullId: mo.fullId || mo.id,
-          tableNumber: mo.tableNumber,
-          waiter: mo.waiter || 'Staff',
-          customerName: mo.customerName,
-          customerPhone: mo.customerPhone,
-          status: normalizeKdsStatus(mo.status || 'pending'),
-          priority: mo.priority || 'normal',
-          ticketTime: mo.ticketTime || 5,
-          items: (mo.items || []).map((it: any) => ({
-            id: it.id,
-            name: it.name,
-            quantity: it.quantity,
-            price: it.price || 150,
-            notes: it.notes,
-          })),
-          subtotal,
-          discount: 0,
-          tax,
-          total,
-          createdAt: mo.createdAt || new Date().toISOString(),
-          isLocationLocked: Boolean(mo.isLocationLocked),
-          vehicleNumber: mo.vehicleNumber || null,
-          landmarkNote: mo.landmarkNote || null,
-          customerLat: mo.customerLat ?? null,
-          customerLng: mo.customerLng ?? null,
-          locationAccuracy: mo.locationAccuracy ?? null,
-          locationCapturedAt: mo.locationCapturedAt ?? null,
-        })
+          formattedOrders.push({
+            id: mo.id,
+            fullId: mo.fullId || mo.id,
+            tableNumber: mo.tableNumber,
+            waiter: mo.waiter || 'Staff',
+            customerName: mo.customerName,
+            customerPhone: mo.customerPhone,
+            status: normalizeKdsStatus(mo.status || 'pending'),
+            priority: mo.priority || 'normal',
+            ticketTime: mo.ticketTime || 5,
+            items: (mo.items || []).map((it: any) => ({
+              id: it.id,
+              name: it.name,
+              quantity: it.quantity,
+              price: it.price || 150,
+              notes: it.notes,
+            })),
+            subtotal,
+            discount: 0,
+            tax,
+            total,
+            createdAt: mo.createdAt || new Date().toISOString(),
+            isLocationLocked: Boolean(mo.isLocationLocked),
+            vehicleNumber: mo.vehicleNumber || null,
+            landmarkNote: mo.landmarkNote || null,
+            customerLat: mo.customerLat ?? null,
+            customerLng: mo.customerLng ?? null,
+            locationAccuracy: mo.locationAccuracy ?? null,
+            locationCapturedAt: mo.locationCapturedAt ?? null,
+          })
+        }
       }
     }
 
@@ -246,7 +268,7 @@ export async function GET(request: NextRequest) {
       all: formattedOrders.length,
       pending: formattedOrders.filter((o) => o.status === 'pending').length,
       accepted: formattedOrders.filter((o) => o.status === 'accepted').length,
-      cooking: formattedOrders.filter((o) => o.status === 'cooking').length,
+      cooking: formattedOrders.filter((o) => o.status === 'cooking' || o.status === 'preparing').length,
       ready: formattedOrders.filter((o) => o.status === 'ready').length,
       served: formattedOrders.filter((o) => o.status === 'served').length,
       carOrders: carOrdersCount,
@@ -265,10 +287,10 @@ export async function GET(request: NextRequest) {
       )
     } else if (statusFilter === 'active' || statusFilter === 'in_progress') {
       filteredOrders = formattedOrders.filter((o) =>
-        ['pending', 'accepted', 'cooking', 'ready'].includes(o.status)
+        ['pending', 'accepted', 'cooking', 'ready', 'preparing', 'confirmed'].includes(o.status)
       )
     } else if (statusFilter !== 'all') {
-      filteredOrders = filteredOrders.filter((o) => o.status === statusFilter)
+      filteredOrders = formattedOrders.filter((o) => o.status === statusFilter)
     }
 
     const responsePayload = successResponse({

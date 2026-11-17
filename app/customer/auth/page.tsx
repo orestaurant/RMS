@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -25,14 +25,20 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { clearAuthCache } from '@/hooks/useAuthContext'
 
 interface CustomerAuthPageProps {
   initialTab?: 'signin' | 'register'
 }
 
-export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuthPageProps) {
+export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAuthPageProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<'signin' | 'register'>(initialTab)
+
+  // Clear any existing admin cached auth context when accessing customer portal
+  useEffect(() => {
+    clearAuthCache()
+  }, [])
 
   // Sign In State
   const [loginEmail, setLoginEmail] = useState('')
@@ -40,6 +46,7 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
   const [showLoginPassword, setShowLoginPassword] = useState(false)
   const [loginLoading, setLoginLoading] = useState(false)
   const [loginError, setLoginError] = useState<string | null>(null)
+  const [loginErrorCode, setLoginErrorCode] = useState<string | null>(null)
 
   // Register State
   const [regName, setRegName] = useState('')
@@ -54,11 +61,13 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
     e.preventDefault()
     if (!loginEmail || !loginPassword) {
       setLoginError('Please enter both email and password.')
+      setLoginErrorCode(null)
       return
     }
 
     setLoginLoading(true)
     setLoginError(null)
+    setLoginErrorCode(null)
 
     try {
       const res = await fetch('/api/customer/auth/login', {
@@ -71,14 +80,16 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
 
       if (!res.ok || !data.success) {
         setLoginError(data.message || 'Invalid email or password.')
+        setLoginErrorCode(data.code || null)
         setLoginLoading(false)
         return
       }
 
-      // Success: full navigation to clear all prior in-memory session and cache states
-      window.location.href = '/dashboard'
+      // Success: navigate directly to Live Orders default view
+      window.location.href = data.redirect || '/orders'
     } catch (err: any) {
       setLoginError(err?.message || 'A network error occurred. Please try again.')
+      setLoginErrorCode(null)
       setLoginLoading(false)
     }
   }
@@ -118,8 +129,8 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
         return
       }
 
-      // Success: full navigation to clear all prior in-memory session and cache states
-      window.location.href = '/dashboard'
+      // Success: navigate directly to Live Orders default view
+      window.location.href = data.redirect || '/orders'
     } catch (err: any) {
       setRegError(err?.message || 'A network error occurred. Please try again.')
       setRegLoading(false)
@@ -194,10 +205,46 @@ export default function CustomerAuthPage({ initialTab = 'signin' }: CustomerAuth
                 {loginError && (
                   <div
                     role="alert"
-                    className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive animate-in fade-in"
+                    className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive animate-in fade-in"
                   >
-                    <AlertCircle className="size-4 shrink-0 mt-0.5" />
-                    <span className="font-medium">{loginError}</span>
+                    <div className="flex items-start gap-2.5">
+                      <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                      <span className="font-medium leading-relaxed">{loginError}</span>
+                    </div>
+
+                    {/* Direct link / button to Create Guest / Customer Account flow */}
+                    {(loginErrorCode === 'ACCOUNT_NOT_FOUND' || loginError.includes('create a customer account')) && (
+                      <div className="pt-1 pl-6">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setActiveTab('register')
+                            setRegEmail(loginEmail)
+                            setLoginError(null)
+                            setLoginErrorCode(null)
+                          }}
+                          className="h-8 text-xs font-semibold bg-destructive/15 border-destructive/30 hover:bg-destructive/25 text-destructive gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          <span>Create Guest Account</span>
+                          <ArrowRight className="size-3" />
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Direct link to Staff & Admin Sign In if staff credentials entered */}
+                    {loginError.includes('Staff & Admin Sign In') && (
+                      <div className="pt-1 pl-6">
+                        <Link
+                          href="/login"
+                          className="font-semibold underline underline-offset-2 hover:opacity-80 inline-flex items-center gap-1 text-xs"
+                        >
+                          <span>Go to Staff & Admin Sign In</span>
+                          <ArrowRight className="size-3" />
+                        </Link>
+                      </div>
+                    )}
                   </div>
                 )}
 

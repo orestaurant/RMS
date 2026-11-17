@@ -58,7 +58,7 @@ export function AppSidebar() {
   const userRoleUpper = String(userRole).toUpperCase()
   const isWaiter = userRoleUpper === 'WAITER'
   const isChef = userRoleUpper === 'CHEF'
-  const isCustomer = userRoleUpper === 'CUSTOMER' || pathname.startsWith('/customer')
+  const isCustomer = userRoleUpper === 'CUSTOMER'
   const isSuperAdmin =
     userRoleUpper === 'SUPER_ADMIN' ||
     userRoleUpper === 'SUPERADMIN'
@@ -157,16 +157,10 @@ export function AppSidebar() {
               badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
             },
             {
-              label: 'My Orders',
-              href: '/customer/orders',
-              icon: Receipt,
+              label: 'Menu Management',
+              href: '/admin-menu',
+              icon: UtensilsCrossed,
             },
-          ],
-        },
-        {
-          label: 'MENU',
-          items: [
-            { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
           ],
         },
       ]
@@ -224,8 +218,8 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               size="lg"
-              tooltip={isWaiter ? "Go to Tables" : "Go to Home Page"}
-              render={<Link href={isWaiter ? '/tables' : '/'} />}
+              tooltip={isWaiter ? "Go to Tables" : isCustomer ? "Go to Live Orders" : "Go to Home Page"}
+              render={<Link href={isWaiter ? '/tables' : isCustomer ? '/orders' : '/'} />}
               className="hover:bg-sidebar-accent/50 w-full"
             >
               <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-tr from-orange-500 to-amber-500 text-white shrink-0 shadow-sm shadow-orange-500/25">
@@ -355,11 +349,11 @@ export function AppSidebar() {
                 {/* Account / Profile Action */}
                 {isCustomer ? (
                   <DropdownMenuItem
-                    render={<Link href="/customer/orders" />}
+                    render={<Link href="/orders" />}
                     className="cursor-pointer gap-2 py-2 px-2"
                   >
-                    <Receipt className="size-4 text-muted-foreground" />
-                    <span>My Orders & History</span>
+                    <Zap className="size-4 text-muted-foreground" />
+                    <span>Live Orders</span>
                   </DropdownMenuItem>
                 ) : isWaiter ? (
                   <DropdownMenuItem
