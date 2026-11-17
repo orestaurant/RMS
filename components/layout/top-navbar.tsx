@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTheme } from '@/hooks/useTheme'
+import { useAuthContext } from '@/hooks/useAuthContext'
 import {
   Search,
   Bell,
@@ -47,21 +48,43 @@ interface NotificationItem {
 export function TopNavbar({ title, subtitle }: TopNavbarProps) {
   const [commandOpen, setCommandOpen] = useState(false)
   const { theme, toggleTheme } = useTheme()
+  const { auth } = useAuthContext()
+  const isCustomer = String(auth?.role || '').toUpperCase() === 'CUSTOMER'
   const [liveNotifications, setLiveNotifications] = useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
 
   const fetchLiveNotifications = useCallback(async () => {
     try {
-      const res = await fetch('/api/notifications?limit=15')
+      const custParam = isCustomer
+        ? `&role=CUSTOMER${auth?.id ? `&customerId=${encodeURIComponent(auth.id)}` : ''}`
+        : ''
+      const res = await fetch(`/api/notifications?limit=15${custParam}`)
       const json = await res.json()
       if (json.success && json.data) {
-        setLiveNotifications(json.data.notifications || [])
-        setUnreadCount(json.data.unreadCount || 0)
+        let notifs: NotificationItem[] = json.data.notifications || []
+        if (isCustomer) {
+          // Strictly exclude any staff invoice/bill/table notifications
+          notifs = notifs.filter((n) => {
+            const body = (n.body || '').toLowerCase()
+            const notifTitle = (n.title || '').toLowerCase()
+            if (
+              body.includes('table is now available') ||
+              body.includes('ready for customer settlement') ||
+              notifTitle.includes('invoice #') ||
+              notifTitle.includes('bill #')
+            ) {
+              return false
+            }
+            return true
+          })
+        }
+        setLiveNotifications(notifs)
+        setUnreadCount(isCustomer ? notifs.filter((n) => !n.read).length : (json.data.unreadCount || 0))
       }
     } catch (err) {
       console.warn('Could not sync notifications:', err)
     }
-  }, [])
+  }, [isCustomer, auth?.id])
 
   useEffect(() => {
     fetchLiveNotifications()
@@ -156,7 +179,9 @@ export function TopNavbar({ title, subtitle }: TopNavbarProps) {
             <div className="p-3 bg-muted/30 border-b border-border flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Bell className="size-4 text-primary" />
-                <span className="text-xs font-bold">Live Kitchen & Table Alerts</span>
+                <span className="text-xs font-bold">
+                  {isCustomer ? 'Dining & Order Updates' : 'Live Kitchen & Table Alerts'}
+                </span>
                 {unreadCount > 0 && (
                   <Badge variant="secondary" className="text-[10px] h-4 px-1.5 bg-primary/15 text-primary">
                     {unreadCount} new
@@ -226,7 +251,9 @@ export function TopNavbar({ title, subtitle }: TopNavbarProps) {
                 })
               ) : (
                 <div className="p-6 text-center text-xs text-muted-foreground">
-                  No notifications yet. Food prepared and new order alerts will appear here.
+                  {isCustomer
+                    ? 'No notifications yet. Updates about your food preparation and dining orders will appear here.'
+                    : 'No notifications yet. Food prepared and new order alerts will appear here.'}
                 </div>
               )}
             </div>
@@ -234,7 +261,9 @@ export function TopNavbar({ title, subtitle }: TopNavbarProps) {
             <DropdownMenuSeparator className="m-0" />
             <div className="p-2 bg-muted/20 text-center">
               <span className="text-[10px] text-muted-foreground font-mono">
-                Real-Time RestoSphere Dispatcher Active
+                {isCustomer
+                  ? 'Real-Time Dining Updates Active'
+                  : 'Real-Time RestoSphere Dispatcher Active'}
               </span>
             </div>
           </DropdownMenuContent>

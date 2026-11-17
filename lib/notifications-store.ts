@@ -11,11 +11,13 @@ export interface AppNotification {
   time: string
   read: boolean
   createdAt: string
+  customerId?: string | null
   metadata?: {
     orderNumber?: string
     tableNumber?: string
     billNumber?: string
     amount?: number
+    customerId?: string | null
   }
 }
 

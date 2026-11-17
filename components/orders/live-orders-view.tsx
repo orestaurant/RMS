@@ -70,6 +70,7 @@ export interface OrderItem {
 export interface LiveOrder {
   id: string
   fullId?: string
+  customerId?: string | null
   tableId?: string
   tableNumber: number | string
   waiter: string
@@ -315,7 +316,7 @@ function OrderRow({
 
         {/* Actions - STRICT FIXED COLUMN WIDTH */}
         <div className="w-28 shrink-0 flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-          {order.status === 'pending' && (
+          {!isCustomer && order.status === 'pending' && (
             <Button
               size="sm"
               className="h-7 px-2.5 text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white gap-1 shadow-sm shrink-0 cursor-pointer"
@@ -328,7 +329,7 @@ function OrderRow({
               Accept
             </Button>
           )}
-          {order.status === 'ready' && (
+          {!isCustomer && order.status === 'ready' && (
             <Button
               size="sm"
               className="h-7 px-2.5 text-xs font-extrabold bg-sky-600 hover:bg-sky-700 text-white gap-1 shadow-sm shrink-0 cursor-pointer"
@@ -974,17 +975,54 @@ export function LiveOrdersView() {
         setLoading(true)
       }
       const branchParam = activeBranchId ? `&branchId=${encodeURIComponent(activeBranchId)}` : ''
-      const res = await fetch(`/api/orders/live?status=all${branchParam}`)
+      const customerParam = isCustomer
+        ? `&role=CUSTOMER${auth?.id ? `&customerId=${encodeURIComponent(auth.id)}` : ''}`
+        : ''
+      const res = await fetch(`/api/orders/live?status=all${branchParam}${customerParam}`)
       const json = await res.json()
 
       if (json.success && json.data) {
-        const fetchedOrders: LiveOrder[] = json.data.orders || []
-        setOrders(fetchedOrders)
-        if (json.data.counts) {
-          setCounts(json.data.counts)
+        let fetchedOrders: LiveOrder[] = json.data.orders || []
+
+        // Strict Account-Based Isolation for Customer:
+        if (isCustomer) {
+          const currentCustId = auth?.id
+          fetchedOrders = fetchedOrders.filter((o) => {
+            if (!o) return false
+            if (!o.customerId) return false
+            if (currentCustId && o.customerId !== currentCustId) return false
+            return true
+          })
         }
-        if (json.data.stats) {
-          setStats(json.data.stats)
+
+        setOrders(fetchedOrders)
+
+        if (isCustomer) {
+          const dynamicCounts = {
+            all: fetchedOrders.length,
+            pending: fetchedOrders.filter((o) => o.status === 'pending').length,
+            accepted: fetchedOrders.filter((o) => o.status === 'accepted').length,
+            cooking: fetchedOrders.filter((o) => o.status === 'cooking' || (o.status as any) === 'preparing').length,
+            ready: fetchedOrders.filter((o) => o.status === 'ready').length,
+            served: fetchedOrders.filter((o) => o.status === 'served').length,
+            carOrders: fetchedOrders.filter((o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)).length,
+          }
+          const dynamicStats = {
+            activeCount: fetchedOrders.filter((o) => ['pending', 'accepted', 'cooking', 'ready', 'preparing'].includes(o.status)).length,
+            readyCount: dynamicCounts.ready,
+            urgentCount: fetchedOrders.filter((o) => o.priority === 'urgent' && o.status !== 'served').length,
+            overdueCount: 0,
+            carOrdersCount: dynamicCounts.carOrders,
+          }
+          setCounts(dynamicCounts)
+          setStats(dynamicStats)
+        } else {
+          if (json.data.counts) {
+            setCounts(json.data.counts)
+          }
+          if (json.data.stats) {
+            setStats(json.data.stats)
+          }
         }
         isInitialLoadRef.current = false
       } else {
@@ -1000,7 +1038,7 @@ export function LiveOrdersView() {
     } finally {
       setLoading(false)
     }
-  }, [activeBranchId])
+  }, [activeBranchId, isCustomer, auth?.id])
 
   useEffect(() => {
     fetchLiveOrders()
@@ -1622,7 +1660,7 @@ export function LiveOrdersView() {
                   <RefreshCw className="size-3" /> Check for orders
                 </Button>
                 {isCustomer && (
-                  <Link href="/admin-menu">
+                  <Link href="/menu">
                     <Button size="sm" className="text-xs gap-1.5 font-semibold">
                       <UtensilsCrossed className="size-3" /> Order from Menu
                     </Button>

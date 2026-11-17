@@ -71,9 +71,10 @@ export async function getRevenueChart(
 /**
  * Get sidebar badge counts
  */
-export async function getSidebarCounts(branchId: string): Promise<SidebarCounts> {
+export async function getSidebarCounts(branchId: string, customerId?: string | null): Promise<SidebarCounts> {
+  const custParam = customerId ? `&customerId=${encodeURIComponent(customerId)}&role=CUSTOMER` : ''
   const response = await apiGet<SuccessResponse<SidebarCounts>>(
-    `/dashboard/sidebar-counts?branchId=${branchId}`
+    `/dashboard/sidebar-counts?branchId=${branchId}${custParam}`
   )
 
   if (!response.success) {

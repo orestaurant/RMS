@@ -12,6 +12,8 @@ import {
   clearAllNotifications,
   AppNotification,
 } from '@/lib/notifications-store'
+import { getCustomerSession } from '@/lib/customer-auth'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 
 export async function GET(request: NextRequest) {
   try {
@@ -19,6 +21,96 @@ export async function GET(request: NextRequest) {
       parseInt(request.nextUrl.searchParams.get('limit') || '20'),
       50
     )
+
+    // 0. Resolve whether requester is an authenticated Customer
+    let customerId: string | null = null
+    const customerSession = await getCustomerSession(request)
+    if (customerSession?.customerId) {
+      customerId = customerSession.customerId
+    } else {
+      const adminCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
+      if (adminCookie) {
+        const payload = await verifyJWT(adminCookie)
+        if (payload?.userId) {
+          const cust = await prisma.customer.findFirst({
+            where: {
+              OR: [
+                { id: payload.userId },
+                { email: { equals: payload.email, mode: 'insensitive' as const } },
+              ],
+            },
+            select: { id: true },
+          })
+          if (cust) {
+            customerId = cust.id
+          }
+        }
+      }
+    }
+
+    const queryCustomerId = request.nextUrl.searchParams.get('customerId') || request.nextUrl.searchParams.get('userId')
+    const queryRole = (request.nextUrl.searchParams.get('role') || '').toUpperCase()
+
+    if (!customerId && queryCustomerId) {
+      customerId = queryCustomerId
+    }
+
+    const isCustomer = Boolean(customerId || queryRole === 'CUSTOMER' || customerSession?.role === 'CUSTOMER')
+
+    // Customer Isolation: Never show other customers' or restaurant staff alerts to a customer
+    if (isCustomer) {
+      if (!customerId) {
+        return NextResponse.json({
+          success: true,
+          data: {
+            notifications: [],
+            unreadCount: 0,
+          },
+        })
+      }
+
+      // Query orders belonging strictly to this customer
+      const customerOrders = await prisma.order.findMany({
+        where: {
+          customerId: customerId,
+          deletedAt: null,
+        },
+        select: {
+          id: true,
+          orderNumber: true,
+        },
+      })
+
+      // If customer has no orders, they have zero notifications
+      if (customerOrders.length === 0) {
+        return NextResponse.json({
+          success: true,
+          data: {
+            notifications: [],
+            unreadCount: 0,
+          },
+        })
+      }
+
+      const orderNumbers = new Set(customerOrders.map((o) => o.orderNumber))
+      const storeNotifs = getNotificationsList(limit)
+
+      // Strictly filter to notifications belonging to this customer
+      const customerNotifs = storeNotifs.filter((n) => {
+        if (n.customerId && n.customerId === customerId) return true
+        if (n.metadata?.customerId && n.metadata.customerId === customerId) return true
+        if (n.metadata?.orderNumber && orderNumbers.has(n.metadata.orderNumber)) return true
+        return false
+      })
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          notifications: customerNotifs,
+          unreadCount: customerNotifs.filter((n) => !n.read).length,
+        },
+      })
+    }
 
     let dbNotifs: any[] = []
     try {

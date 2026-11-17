@@ -50,6 +50,8 @@ interface CustomerOrder {
   totalAmount: number
   createdAt: string
   items: OrderItem[]
+  customerId?: string
+  customerEmail?: string
 }
 
 const statusBadgeStyles: Record<string, { label: string; className: string }> = {
@@ -74,47 +76,37 @@ export function CustomerDashboardView() {
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
   const [loading, setLoading] = useState(true)
-  const [quickOrdering, setQuickOrdering] = useState(false)
-  const [orderNotice, setOrderNotice] = useState<string | null>(null)
 
   const customerName = auth?.name || profile?.name || 'Customer'
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
-  const handleQuickPlaceOrder = async () => {
-    try {
-      setQuickOrdering(true)
-      setOrderNotice(null)
-      const res = await fetch('/api/customer/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tableNumber: 'Table 1' }),
-      })
-      const data = await res.json()
-      if (res.ok && data.success) {
-        setOrderNotice(`Order #${data.order.orderNumber} placed successfully! Visible to staff in kitchen.`)
-        await fetchCustomerData()
-      } else {
-        setOrderNotice(data.message || 'Failed to place order. Please try from Menu.')
-      }
-    } catch (e: any) {
-      setOrderNotice('Network error placing order.')
-    } finally {
-      setQuickOrdering(false)
-    }
-  }
-
   const fetchCustomerData = useCallback(async () => {
     try {
       setLoading(true)
+      const currentCustId = auth?.id || profile?.id
+      const queryParams = new URLSearchParams()
+      if (currentCustId) {
+        queryParams.set('customerId', currentCustId)
+        queryParams.set('userId', currentCustId)
+      }
+      if (auth?.email) {
+        queryParams.set('email', auth.email)
+      }
+      const ordersUrl = queryParams.toString()
+        ? `/api/customer/orders?${queryParams.toString()}`
+        : '/api/customer/orders'
+
       const [meRes, ordersRes] = await Promise.all([
         fetch('/api/customer/auth/me', { cache: 'no-store' }),
-        fetch('/api/customer/orders', { cache: 'no-store' }),
+        fetch(ordersUrl, { cache: 'no-store' }),
       ])
 
+      let loadedProfile: CustomerProfile | null = profile
       if (meRes.ok) {
         const meJson = await meRes.json()
         if (meJson.success && meJson.customer) {
+          loadedProfile = meJson.customer
           setProfile(meJson.customer)
         }
       }
@@ -122,28 +114,66 @@ export function CustomerDashboardView() {
       if (ordersRes.ok) {
         const ordersJson = await ordersRes.json()
         if (ordersJson.success && Array.isArray(ordersJson.orders)) {
-          setOrders(ordersJson.orders)
+          const targetCustomerId = loadedProfile?.id || auth?.id
+          const targetEmail = (loadedProfile?.email || auth?.email || '').toLowerCase().trim()
+
+          // Strict Account-Based Order Filtering:
+          // Strictly exclude any walk-in, anonymous, table-only, or other customers' orders
+          const strictlyCustomerOrders = ordersJson.orders.filter((order: CustomerOrder) => {
+            if (!order) return false
+
+            const orderCustId = order.customerId
+            const orderCustEmail = (order.customerEmail || '').toLowerCase().trim()
+
+            // Exclude orders with no customer association (walk-in, anonymous, table-only)
+            if (!orderCustId && !orderCustEmail) {
+              return false
+            }
+
+            // Exclude if customerId does not match current authenticated customer account
+            if (targetCustomerId && orderCustId && orderCustId !== targetCustomerId) {
+              return false
+            }
+
+            // Exclude if customerEmail does not match current authenticated customer account
+            if (targetEmail && orderCustEmail && orderCustEmail !== targetEmail) {
+              return false
+            }
+
+            return true
+          })
+
+          setOrders(strictlyCustomerOrders)
+        } else {
+          setOrders([])
         }
+      } else {
+        setOrders([])
       }
     } catch (err) {
       console.error('Failed to load customer dashboard details:', err)
+      setOrders([])
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [auth?.id, auth?.email, profile?.id])
 
   useEffect(() => {
     fetchCustomerData()
   }, [fetchCustomerData])
 
+  // Strict Account-Based Order Filtering:
+  // Dynamically compute all 4 KPI metrics strictly from the authenticated customer's orders
   const activeOrders = orders.filter((o) =>
-    ['pending', 'confirmed', 'preparing', 'ready'].includes(String(o.status).toLowerCase())
+    ['pending', 'confirmed', 'preparing', 'ready', 'accepted'].includes(String(o.status).toLowerCase())
   )
   const completedOrders = orders.filter((o) =>
-    ['served', 'completed'].includes(String(o.status).toLowerCase())
+    ['served', 'completed', 'cancelled', 'refunded'].includes(String(o.status).toLowerCase())
   )
-  const totalOrdersCount = profile?.totalOrders ?? orders.length
-  const totalSpentAmount = profile?.totalSpent ?? orders.reduce((sum, o) => sum + (o.total || o.totalAmount || 0), 0)
+  const totalOrdersCount = orders.length
+  const totalSpentAmount = orders
+    .filter((o) => !['cancelled', 'refunded'].includes(String(o.status).toLowerCase()))
+    .reduce((sum, o) => sum + (Number(o.total || o.totalAmount) || 0), 0)
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">
@@ -174,36 +204,8 @@ export function CustomerDashboardView() {
             <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
             <span>Refresh</span>
           </Button>
-          <Button
-            size="sm"
-            variant="default"
-            onClick={handleQuickPlaceOrder}
-            disabled={quickOrdering}
-            className="h-8 gap-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
-          >
-            <Sparkles className="size-3.5" />
-            <span>{quickOrdering ? 'Placing Order...' : 'Quick Place Order'}</span>
-          </Button>
-          <Link href="/customer/orders">
-            <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs font-semibold shadow-sm">
-              <Receipt className="size-3.5" />
-              <span>My Orders & History</span>
-            </Button>
-          </Link>
         </div>
       </div>
-
-      {orderNotice && (
-        <div className="p-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-medium flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="size-4 shrink-0" />
-            <span>{orderNotice}</span>
-          </div>
-          <Button size="sm" variant="ghost" onClick={() => setOrderNotice(null)} className="h-6 px-2 text-xs">
-            Dismiss
-          </Button>
-        </div>
-      )}
 
       {/* ── 20-Second Live Chef Preparation Add-on Banner ───────── */}
       <LiveBatchAddonBanner

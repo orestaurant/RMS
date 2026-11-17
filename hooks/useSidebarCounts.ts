@@ -19,27 +19,23 @@ interface UseSidebarCountsReturn {
 // Client-side cache for instant sidebar badge rendering
 let clientSidebarCache: SidebarCounts | null = null
 
-export function useSidebarCounts(branchId: string | null): UseSidebarCountsReturn {
-  const [data, setData] = useState<SidebarCounts | null>(clientSidebarCache)
-  const [loading, setLoading] = useState(!clientSidebarCache)
+export function useSidebarCounts(branchId: string | null, customerId?: string | null): UseSidebarCountsReturn {
+  const [data, setData] = useState<SidebarCounts | null>(null)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
 
   const refetch = useCallback(async () => {
     try {
-      if (!clientSidebarCache) {
-        setLoading(true)
-      }
       setError(null)
       const targetBranch = branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
-      const counts = await getSidebarCounts(targetBranch)
-      clientSidebarCache = counts
+      const counts = await getSidebarCounts(targetBranch, customerId)
       setData(counts)
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch sidebar counts'))
     } finally {
       setLoading(false)
     }
-  }, [branchId])
+  }, [branchId, customerId])
 
   useEffect(() => {
     refetch()

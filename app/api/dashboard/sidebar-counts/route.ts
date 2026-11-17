@@ -14,11 +14,76 @@ import {
   getCachedBranchMeta,
   setCachedBranchMeta,
 } from '@/lib/dashboard-cache'
+import { getCustomerSession } from '@/lib/customer-auth'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<SidebarCounts>>> {
   try {
     const url = new URL(request.url)
     const branchIdParam = url.searchParams.get('branchId')
+
+    // Detect Customer identity
+    let customerId: string | null = null
+    const customerSession = await getCustomerSession(request)
+    if (customerSession?.customerId) {
+      customerId = customerSession.customerId
+    } else {
+      const adminCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
+      if (adminCookie) {
+        const payload = await verifyJWT(adminCookie)
+        if (payload?.userId) {
+          const cust = await prisma.customer.findFirst({
+            where: {
+              OR: [
+                { id: payload.userId },
+                { email: { equals: payload.email, mode: 'insensitive' as const } },
+              ],
+            },
+            select: { id: true },
+          })
+          if (cust) {
+            customerId = cust.id
+          }
+        }
+      }
+    }
+
+    const queryCustomerId = url.searchParams.get('customerId') || url.searchParams.get('userId')
+    const queryRole = (url.searchParams.get('role') || '').toUpperCase()
+    if (!customerId && queryCustomerId) {
+      customerId = queryCustomerId
+    }
+
+    const isCustomer = Boolean(customerId || queryRole === 'CUSTOMER' || customerSession?.role === 'CUSTOMER')
+
+    // Strict Customer counts isolation: only count active orders belonging to this customer
+    if (isCustomer) {
+      let customerLiveOrders = 0
+      if (customerId && customerId !== 'customer') {
+        customerLiveOrders = await prisma.order.count({
+          where: {
+            customerId: customerId,
+            deletedAt: null,
+            status: {
+              in: ['pending', 'confirmed', 'preparing', 'ready', 'accepted', 'PENDING', 'PREPARING', 'READY', 'ACCEPTED'],
+            },
+          },
+        }).catch(() => 0)
+      }
+
+      const customerCounts: SidebarCounts = {
+        reservations: 0,
+        liveOrders: customerLiveOrders,
+        inventoryAlerts: 0,
+        kitchenLive: customerLiveOrders > 0,
+        posLive: false,
+      }
+
+      return NextResponse.json(
+        successResponse(customerCounts, 'Customer sidebar counts retrieved')
+      )
+    }
+
     const cacheKey = branchIdParam || 'default'
 
     // 1. Ultra-fast in-memory cache hit (< 1ms)

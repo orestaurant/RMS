@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getCustomerSession } from '@/lib/customer-auth'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import {
   registerActiveLiveOrder,
   getKitchenStation,
@@ -11,21 +12,80 @@ import { invalidateDashboardStatsCache } from '@/lib/dashboard-cache'
 
 /**
  * GET /api/customer/orders
- * Return all orders belonging exclusively to the logged-in customer
+ * Return all orders belonging exclusively to the logged-in customer account.
+ * Excludes any walk-in, anonymous, table-only, or other customers' orders.
  */
 export async function GET(request: NextRequest) {
   try {
+    let customerId: string | null = null
+    let customerEmail: string | null = null
+
+    // 1. Resolve from customer session cookie
     const session = await getCustomerSession(request)
-    if (!session || !session.customerId) {
+    if (session?.customerId) {
+      customerId = session.customerId
+      customerEmail = session.email || null
+    }
+
+    // 2. Fallback to admin/user session cookie if logged in through unified auth
+    if (!customerId) {
+      const adminCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
+      if (adminCookie) {
+        const payload = await verifyJWT(adminCookie)
+        if (payload?.userId) {
+          const cust = await prisma.customer.findFirst({
+            where: {
+              OR: [
+                { id: payload.userId },
+                { email: { equals: payload.email, mode: 'insensitive' } },
+              ],
+            },
+            select: { id: true, email: true },
+          })
+          if (cust) {
+            customerId = cust.id
+            customerEmail = cust.email
+          }
+        }
+      }
+    }
+
+    // 3. Fallback to query parameters (customerId / userId / email)
+    const url = new URL(request.url)
+    const queryCustId = url.searchParams.get('customerId') || url.searchParams.get('userId')
+    const queryEmail = url.searchParams.get('email')
+
+    if (!customerId && (queryCustId || queryEmail)) {
+      const cust = await prisma.customer.findFirst({
+        where: {
+          OR: [
+            ...(queryCustId ? [{ id: queryCustId }] : []),
+            ...(queryEmail ? [{ email: { equals: queryEmail, mode: 'insensitive' as const } }] : []),
+          ],
+        },
+        select: { id: true, email: true },
+      })
+      if (cust) {
+        customerId = cust.id
+        customerEmail = cust.email
+      }
+    }
+
+    // Strict account check: Reject if no authenticated customer account is resolved
+    if (!customerId) {
       return NextResponse.json(
-        { success: false, message: 'Unauthorized. Please sign in.' },
+        { success: false, message: 'Unauthorized. Please sign in.', orders: [] },
         { status: 401 }
       )
     }
 
+    // Strict account-based filter: Exclude any walk-in, anonymous, table-only, or other customers' orders
     const orders = await prisma.order.findMany({
       where: {
-        customerId: session.customerId,
+        customerId: customerId,
+        NOT: [
+          { customerId: null },
+        ],
         deletedAt: null,
       },
       include: {
@@ -37,6 +97,13 @@ export async function GET(request: NextRequest) {
         table: true,
         branch: {
           select: {
+            name: true,
+          },
+        },
+        customer: {
+          select: {
+            id: true,
+            email: true,
             name: true,
           },
         },
@@ -59,6 +126,8 @@ export async function GET(request: NextRequest) {
         paymentStatus: order.paymentStatus,
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,
+        customerId: order.customerId,
+        customerEmail: order.customer?.email || customerEmail || null,
         tableNumber: order.table?.tableNumber || null,
         branchName: order.branch?.name || 'Main Branch',
         items: order.items.map((item) => ({

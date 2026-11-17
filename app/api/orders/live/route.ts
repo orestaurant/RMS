@@ -15,6 +15,7 @@ import {
 } from '@/lib/kds-utils'
 import { getCachedBranchMeta, setCachedBranchMeta } from '@/lib/dashboard-cache'
 import { getCustomerSession } from '@/lib/customer-auth'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { startOfDay } from 'date-fns'
 import { OrderStatusEnum } from '@prisma/client'
 
@@ -27,8 +28,51 @@ export async function GET(request: NextRequest) {
     const statusFilter = (request.nextUrl.searchParams.get('status') || 'all').toLowerCase()
 
     // 0. Detect Customer Session for strictly isolated, user-specific Live Orders
+    let customerId: string | null = null
     const customerSession = await getCustomerSession(request)
-    const isCustomer = Boolean(customerSession?.customerId)
+    if (customerSession?.customerId) {
+      customerId = customerSession.customerId
+    } else {
+      const adminCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
+      if (adminCookie) {
+        const payload = await verifyJWT(adminCookie)
+        if (payload?.userId) {
+          const cust = await prisma.customer.findFirst({
+            where: {
+              OR: [
+                { id: payload.userId },
+                { email: { equals: payload.email, mode: 'insensitive' as const } },
+              ],
+            },
+            select: { id: true },
+          })
+          if (cust) {
+            customerId = cust.id
+          }
+        }
+      }
+    }
+
+    const queryCustomerId = request.nextUrl.searchParams.get('customerId') || request.nextUrl.searchParams.get('userId')
+    const queryRole = (request.nextUrl.searchParams.get('role') || '').toUpperCase()
+
+    if (!customerId && queryCustomerId) {
+      customerId = queryCustomerId
+    }
+
+    const isCustomer = Boolean(customerId || queryRole === 'CUSTOMER' || customerSession?.role === 'CUSTOMER')
+
+    // If request is from a customer account but no customerId could be resolved,
+    // immediately return zero live orders (never leak branch/staff orders)
+    if (isCustomer && !customerId) {
+      return NextResponse.json(
+        successResponse({
+          orders: [],
+          counts: { all: 0, pending: 0, accepted: 0, cooking: 0, ready: 0, served: 0, carOrders: 0 },
+          stats: { activeCount: 0, readyCount: 0, urgentCount: 0, overdueCount: 0, carOrdersCount: 0 },
+        }, 'No active live orders for customer account')
+      )
+    }
 
     // UUID validator to protect Prisma queries against invalid uuid syntax
     const isUuid = (val: string | null): boolean =>
@@ -37,7 +81,7 @@ export async function GET(request: NextRequest) {
     // 1. Resolve branch & customer-isolated cache key
     const explicitBranchFilter = branchIdParam && isUuid(branchIdParam) && branchIdParam !== 'all' ? branchIdParam : null
     const cacheKey = isCustomer
-      ? `cust_${customerSession!.customerId}_${statusFilter}`
+      ? `cust_${customerId}_${statusFilter}`
       : `${explicitBranchFilter || 'all'}_${statusFilter}`
     const cachedData = getLiveOrdersCache(cacheKey, isCustomer ? 1500 : 2500)
 
@@ -80,7 +124,8 @@ export async function GET(request: NextRequest) {
 
       if (isCustomer) {
         // Customer isolation: ONLY fetch orders placed by this specific customer account
-        whereClause.customerId = customerSession!.customerId
+        whereClause.customerId = customerId
+        whereClause.NOT = [{ customerId: null }]
         if (statusFilter !== 'all') {
           whereClause.status = statusFilter
         }
@@ -107,6 +152,7 @@ export async function GET(request: NextRequest) {
         where: whereClause,
         select: {
           id: true,
+          customerId: true,
           orderNumber: true,
           status: true,
           createdAt: true,
@@ -167,6 +213,7 @@ export async function GET(request: NextRequest) {
           return {
             id: order.orderNumber || order.id.slice(0, 8),
             fullId: order.id,
+            customerId: order.customerId,
             tableNumber: order.table?.tableNumber || 'Takeaway',
             waiter: order.createdBy?.name || order.createdBy?.firstName || 'Staff',
             status: normalizedStatus,

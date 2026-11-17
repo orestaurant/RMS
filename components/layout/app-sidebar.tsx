@@ -53,9 +53,6 @@ export function AppSidebar() {
   const { auth, loading } = useAuthContext()
   const [loggingOut, setLoggingOut] = useState(false)
 
-  // Real-time badge counts from PostgreSQL via Prisma
-  const { data: counts } = useSidebarCounts(auth?.branchId || null)
-
   const userRole = auth?.role || (loading ? '' : 'STAFF')
   const userRoleUpper = String(userRole).toUpperCase()
   const isWaiter = userRoleUpper === 'WAITER'
@@ -67,6 +64,9 @@ export function AppSidebar() {
     userRoleUpper === 'SUPER_ADMIN' ||
     userRoleUpper === 'SUPERADMIN'
   const isAdmin = userRoleUpper === 'ADMIN' || isSuperAdmin
+
+  // Real-time badge counts from PostgreSQL via Prisma (customer-isolated when role is CUSTOMER)
+  const { data: counts } = useSidebarCounts(auth?.branchId || null, isCustomer ? (auth?.id || 'customer') : null)
 
   const handleLogout = async () => {
     try {
