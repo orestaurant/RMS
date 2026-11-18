@@ -214,6 +214,7 @@ export async function GET(request: NextRequest) {
             id: order.orderNumber || order.id.slice(0, 8),
             fullId: order.id,
             customerId: order.customerId,
+            tableId: order.table?.id,
             tableNumber: order.table?.tableNumber || 'Takeaway',
             waiter: order.createdBy?.name || order.createdBy?.firstName || 'Staff',
             status: normalizedStatus,

@@ -539,18 +539,6 @@ function OrderRow({
                   <Eye className="size-3" />
                   Details
                 </Button>
-                {!isCustomer && (
-                  <>
-                    <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5">
-                      <Printer className="size-3" />
-                      KOT
-                    </Button>
-                    <Button size="sm" className="h-7 text-xs gap-1.5">
-                      <Receipt className="size-3" />
-                      Bill
-                    </Button>
-                  </>
-                )}
               </div>
             </div>
           </div>
@@ -1684,7 +1672,7 @@ export function LiveOrdersView() {
                       id: ord.tableId,
                       tableNumber: ord.tableNumber,
                       waiter: ord.waiter,
-                      orderId: ord.id || ord.fullId,
+                      orderId: ord.fullId || ord.id,
                     })
                   }
                 />

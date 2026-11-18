@@ -39,6 +39,7 @@ interface CustomerBillModalProps {
   onOpenChange: (open: boolean) => void
   tableNumber: string | number
   tableOrders: any[]
+  selectedOrderId?: string | null
   onSuccess?: () => void
 }
 
@@ -47,6 +48,7 @@ export function CustomerBillModal({
   onOpenChange,
   tableNumber,
   tableOrders,
+  selectedOrderId,
   onSuccess,
 }: CustomerBillModalProps) {
   const [loading, setLoading] = useState(false)
@@ -104,8 +106,17 @@ export function CustomerBillModal({
     if (!Array.isArray(tableOrders) || tableOrders.length === 0) {
       return { items: [], subtotal: 0, taxAmount: 0, grandTotal: 0 }
     }
+    const filteredOrders = selectedOrderId
+      ? tableOrders.filter(
+          (ord) =>
+            ord.id === selectedOrderId ||
+            ord.fullId === selectedOrderId ||
+            ord.orderNumber === selectedOrderId
+        )
+      : tableOrders
+
     const itemMap = new Map<string, { name: string; quantity: number; price: number; total: number }>()
-    for (const ord of tableOrders) {
+    for (const ord of filteredOrders) {
       const ordStatus = String(ord.status || '').toLowerCase()
       if (ordStatus === 'cancelled' || ordStatus === 'refunded') continue
       if (Array.isArray(ord.items)) {
@@ -130,14 +141,14 @@ export function CustomerBillModal({
     const taxAmount = Math.round(subtotal * 0.05 * 100) / 100
     const grandTotal = Math.round((subtotal + taxAmount) * 100) / 100
     return { items, subtotal, taxAmount, grandTotal }
-  }, [tableOrders])
+  }, [tableOrders, selectedOrderId])
 
   const pendingTipRef = React.useRef<number | null>(null)
 
   // Fetch or generate active bill for this table session
   const loadBill = useCallback(
     async (asCustomerRequest = false) => {
-      if (!tableNumber) return
+      if (!tableNumber && !selectedOrderId) return
       try {
         if (!clientBreakdown.items || clientBreakdown.items.length === 0) {
           setLoading(true)
@@ -147,7 +158,8 @@ export function CustomerBillModal({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            tableNumber: String(tableNumber),
+            orderId: selectedOrderId || undefined,
+            tableNumber: String(tableNumber || ''),
             source: asCustomerRequest ? 'customer' : 'waiter',
             customerName: customerName.trim() || undefined,
             customerPhone: customerPhone.trim() || undefined,
@@ -183,7 +195,7 @@ export function CustomerBillModal({
         setLoading(false)
       }
     },
-    [tableNumber, customerName, customerPhone, clientBreakdown.items, selectedTip]
+    [tableNumber, selectedOrderId, customerName, customerPhone, clientBreakdown.items, selectedTip]
   )
 
   useEffect(() => {

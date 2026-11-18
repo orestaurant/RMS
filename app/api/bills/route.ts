@@ -455,9 +455,18 @@ export async function POST(request: NextRequest) {
     // Try saving in Prisma database if available
     try {
       if (orderId) {
-        const order = await prisma.order.findUnique({
-          where: { id: orderId },
-        })
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(orderId).trim())
+        let order = null
+        if (isUuid) {
+          order = await prisma.order.findUnique({
+            where: { id: String(orderId).trim() },
+          })
+        }
+        if (!order) {
+          order = await prisma.order.findFirst({
+            where: { orderNumber: String(orderId).trim(), deletedAt: null },
+          })
+        }
         if (order) {
           await prisma.order.update({
             where: { id: order.id },

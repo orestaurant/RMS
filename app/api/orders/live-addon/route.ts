@@ -68,19 +68,38 @@ export async function POST(request: NextRequest) {
     const tableNumber = activeTable?.tableNumber || reqTableNumber || 'POS'
 
     // Find active order or open bill for this table
-    let targetOrder = reqOrderId
-      ? await prisma.order.findUnique({
-          where: { id: reqOrderId },
-          include: { bill: true },
-        })
-      : await prisma.order.findFirst({
-          where: {
-            tableId: activeTable?.id,
-            status: { in: ['pending', 'accepted', 'preparing', 'ready', 'served'] },
-          },
-          orderBy: { createdAt: 'desc' },
-          include: { bill: true },
-        })
+    const isUuid = (val: string) =>
+      typeof val === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim())
+
+    let targetOrder = null
+    if (reqOrderId) {
+      if (isUuid(reqOrderId)) {
+        try {
+          targetOrder = await prisma.order.findUnique({
+            where: { id: reqOrderId },
+            include: { bill: true },
+          })
+        } catch (e) {}
+      }
+      if (!targetOrder) {
+        try {
+          targetOrder = await prisma.order.findFirst({
+            where: { orderNumber: reqOrderId, deletedAt: null },
+            include: { bill: true },
+          })
+        } catch (e) {}
+      }
+    } else {
+      targetOrder = await prisma.order.findFirst({
+        where: {
+          tableId: activeTable?.id,
+          status: { in: ['pending', 'accepted', 'preparing', 'ready', 'served'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        include: { bill: true },
+      })
+    }
 
     const targetBill = await prisma.bill.findFirst({
       where: {

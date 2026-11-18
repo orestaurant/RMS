@@ -728,7 +728,10 @@ export function KitchenDisplay() {
           setBatchItems(json.data.batchItems)
         }
         if (json.data.stations && json.data.stations.length > 0) {
-          setStations(json.data.stations)
+          const mergedStations = Array.from(
+            new Set(['All', ...json.data.stations, 'Grill & Tandoor', 'Main Kitchen', 'Beverages / Bar', 'Desserts'])
+          )
+          setStations(mergedStations)
         }
 
         // Sound alert if new incoming orders arrived
@@ -1265,13 +1268,13 @@ export function KitchenDisplay() {
                     setViewMode('vertical')
                   } else if (col.id === 'pending') {
                     setViewMode('vertical')
-                    setUpcomingFilter('pending')
+                    setUpcomingFilter((prev) => (prev === 'pending' ? 'all' : 'pending'))
                   } else if (col.id === 'accepted') {
                     setViewMode('vertical')
-                    setUpcomingFilter('accepted')
+                    setUpcomingFilter((prev) => (prev === 'accepted' ? 'all' : 'accepted'))
                   } else if (col.id === 'ready') {
                     setViewMode('vertical')
-                    setShowReadySection(true)
+                    setShowReadySection((prev) => !prev)
                   }
                 }}
                 className={cn(
@@ -1295,6 +1298,22 @@ export function KitchenDisplay() {
 
         {/* Action Controls */}
         <div className="flex items-center gap-2.5 ml-auto">
+          {/* Station Selector - Always Visible */}
+          <div className="flex items-center gap-1.5 bg-muted/40 border border-border rounded-lg px-2.5 py-1">
+            <span className="text-[11px] font-semibold text-muted-foreground hidden sm:inline">Station:</span>
+            <select
+              value={activeStation}
+              onChange={(e) => setActiveStation(e.target.value)}
+              className="h-6 text-xs bg-transparent border-0 font-semibold text-foreground focus:outline-none cursor-pointer"
+            >
+              {stations.map((s) => (
+                <option key={s} value={s} className="bg-card text-foreground">
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Search */}
           <div className="relative w-44 sm:w-56">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />

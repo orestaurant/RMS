@@ -48,17 +48,37 @@ export async function POST(
     const tenantContext = extractTenantContext(authContext)
 
     // Fetch the order
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
-      include: {
-        items: {
-          include: {
-            menuItem: true,
+    const isUuid = (val: string) =>
+      typeof val === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim())
+
+    let order = null
+    if (isUuid(orderId)) {
+      order = await prisma.order.findUnique({
+        where: { id: orderId },
+        include: {
+          items: {
+            include: {
+              menuItem: true,
+            },
           },
+          table: true,
         },
-        table: true,
-      },
-    })
+      })
+    }
+    if (!order) {
+      order = await prisma.order.findFirst({
+        where: { orderNumber: orderId, deletedAt: null },
+        include: {
+          items: {
+            include: {
+              menuItem: true,
+            },
+          },
+          table: true,
+        },
+      })
+    }
 
     if (!order) {
       throw new ValidationError('Order not found')

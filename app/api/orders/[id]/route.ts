@@ -3,16 +3,19 @@ import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { updateFallbackOrder, removeFallbackOrder, invalidateLiveOrdersCache, invalidateKDSCache } from '@/lib/kds-utils'
 
+const isUuid = (val: string) =>
+  typeof val === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim())
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params
+    const whereClause = isUuid(id) ? { OR: [{ id }, { orderNumber: id }] } : { orderNumber: id }
     const order = await prisma.order.findFirst({
-      where: {
-        OR: [{ id }, { orderNumber: id }],
-      },
+      where: whereClause,
       include: {
         table: true,
         items: true,
@@ -75,10 +78,9 @@ export async function PATCH(
     let updatedOrder: any = null
 
     try {
+      const whereClause = isUuid(id) ? { OR: [{ id }, { orderNumber: id }] } : { orderNumber: id }
       const existing = await prisma.order.findFirst({
-        where: {
-          OR: [{ id }, { orderNumber: id }],
-        },
+        where: whereClause,
       })
 
       if (existing) {
@@ -220,10 +222,9 @@ export async function DELETE(
 
     // 2. Try soft-deleting in Prisma DB if available
     try {
+      const whereClause = isUuid(id) ? { OR: [{ id }, { orderNumber: id }] } : { orderNumber: id }
       const existing = await prisma.order.findFirst({
-        where: {
-          OR: [{ id }, { orderNumber: id }],
-        },
+        where: whereClause,
       })
 
       if (existing) {

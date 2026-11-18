@@ -111,12 +111,35 @@ export function AppSidebar() {
       : 'U'
 
   // Dynamic navigation groups with Role-Based Access Control (RBAC):
-  // 1. WAITER & CHEF: Strictly limited to Tables, Reservations, Live Orders, Kitchen Display, and Menu Management.
-  //    All other dashboard/business options (POS Terminal, Inventory, Staff & Roles, Settings) are removed.
-  // 2. CUSTOMER: Customer operations and menu without internal settings
-  // 3. ADMIN/SUPER_ADMIN: Full system control across operations, kitchen, and business settings
+  // 1. CHEF: Focused strictly on Kitchen Display, Menu Management, and Tables (Reservations & Live Orders removed).
+  // 2. WAITER: Tables, Reservations, Live Orders, Kitchen Display, and Menu Management.
+  // 3. CUSTOMER: Customer operations and menu without internal settings
+  // 4. ADMIN/SUPER_ADMIN: Full system control across operations, kitchen, and business settings
   const navGroups = (() => {
-    if (isWaiter || isChef) {
+    if (isChef) {
+      return [
+        {
+          label: 'OPERATIONS',
+          items: [
+            { label: 'Tables', href: '/tables', icon: TableProperties },
+          ],
+        },
+        {
+          label: 'KITCHEN',
+          items: [
+            {
+              label: 'Kitchen Display',
+              href: '/kitchen',
+              icon: ChefHat,
+              badge: counts?.kitchenLive ? 'Live' : undefined,
+            },
+            { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
+          ],
+        },
+      ]
+    }
+
+    if (isWaiter) {
       return [
         {
           label: 'OPERATIONS',

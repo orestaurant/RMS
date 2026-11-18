@@ -223,6 +223,7 @@ export function CustomerMenu() {
   const [tableOrders, setTableOrders] = useState<any[]>([])
   const [showOrdersModal, setShowOrdersModal] = useState<boolean>(false)
   const [showBillModal, setShowBillModal] = useState<boolean>(false)
+  const [selectedOrderIdForBill, setSelectedOrderIdForBill] = useState<string | null>(null)
   const [showSongModal, setShowSongModal] = useState<boolean>(false)
 
   // Append Mode State (Attach dishes to active running live order)
@@ -1525,23 +1526,39 @@ export function CustomerMenu() {
                               {ord.paymentStatus || 'pay at counter'}
                             </span>
                           </div>
-                          {!isServed && (
+                          <div className="flex items-center gap-1.5 flex-wrap justify-end">
                             <Button
                               type="button"
                               size="sm"
                               onClick={() => {
-                                setIsAppendMode(true)
-                                setAppendTargetOrder(ord)
+                                setSelectedOrderIdForBill(ord.fullId || ord.id || ord.orderNumber)
                                 setShowOrdersModal(false)
-                                setIsCartOpen(false)
+                                setShowBillModal(true)
                               }}
-                              className="h-7 px-2 text-[11px] font-extrabold gap-1 rounded-lg bg-orange-500 hover:bg-orange-600 text-white shadow-xs cursor-pointer z-20 pointer-events-auto"
-                              title="Add dishes directly to this live order"
+                              className="h-7 px-2.5 text-[11px] font-extrabold gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer z-20 pointer-events-auto"
+                              title="Bill only this specific order"
                             >
-                              <Plus className="size-3" />
-                              <span>Add on Live Order</span>
+                              <Receipt className="size-3" />
+                              <span>Bill</span>
                             </Button>
-                          )}
+                            {!isServed && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => {
+                                  setIsAppendMode(true)
+                                  setAppendTargetOrder(ord)
+                                  setShowOrdersModal(false)
+                                  setIsCartOpen(false)
+                                }}
+                                className="h-7 px-2 text-[11px] font-extrabold gap-1 rounded-lg bg-orange-500 hover:bg-orange-600 text-white shadow-xs cursor-pointer z-20 pointer-events-auto"
+                                title="Add dishes directly to this live order"
+                              >
+                                <Plus className="size-3" />
+                                <span>Add on Live Order</span>
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -1730,6 +1747,11 @@ export function CustomerMenu() {
                       variant="outline"
                       className="flex-1 h-11 rounded-xl font-bold text-xs gap-1.5 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 cursor-pointer"
                       onClick={() => {
+                        if (tableOrders.length === 1) {
+                          setSelectedOrderIdForBill(tableOrders[0].fullId || tableOrders[0].id || tableOrders[0].orderNumber)
+                        } else {
+                          setSelectedOrderIdForBill(null)
+                        }
                         setShowOrdersModal(false)
                         setShowBillModal(true)
                       }}
@@ -1742,6 +1764,11 @@ export function CustomerMenu() {
                       variant="default"
                       className="flex-1 h-11 rounded-xl font-extrabold text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-2 shadow-md cursor-pointer"
                       onClick={() => {
+                        if (tableOrders.length === 1) {
+                          setSelectedOrderIdForBill(tableOrders[0].fullId || tableOrders[0].id || tableOrders[0].orderNumber)
+                        } else {
+                          setSelectedOrderIdForBill(null)
+                        }
                         setShowOrdersModal(false)
                         setShowBillModal(true)
                       }}
@@ -2897,10 +2924,15 @@ export function CustomerMenu() {
       {/* 7. DIGITAL BILL & POST-SERVICE TIPPING MODAL */}
       <CustomerBillModal
         open={showBillModal}
-        onOpenChange={setShowBillModal}
+        onOpenChange={(open) => {
+          setShowBillModal(open)
+          if (!open) setSelectedOrderIdForBill(null)
+        }}
         tableNumber={orderMode === 'drive_in' ? displayTableBadge : tableNumber}
         tableOrders={tableOrders}
+        selectedOrderId={selectedOrderIdForBill}
         onSuccess={() => {
+          setSelectedOrderIdForBill(null)
           fetchTableOrders()
         }}
       />
