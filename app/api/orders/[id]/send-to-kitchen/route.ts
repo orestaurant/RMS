@@ -64,15 +64,16 @@ export async function POST(
       throw new ValidationError('Order not found')
     }
 
-    // Validate order status
-    if (order.status !== 'confirmed') {
+    // Validate order status (allow pending, confirmed, or accepted)
+    const allowedStatuses = ['confirmed', 'pending', 'accepted']
+    if (!allowedStatuses.includes(order.status)) {
       throw new ValidationError(
-        `Only confirmed orders can be sent to kitchen. Current status: ${order.status}`
+        `Only pending or confirmed orders can be sent to kitchen. Current status: ${order.status}`
       )
     }
 
     // Get default kitchen section (or first available)
-    const kitchenSection = await prisma.kitchenSection.findFirst({
+    let kitchenSection = await prisma.kitchenSection.findFirst({
       where: {
         branchId: order.branchId,
         organizationId: tenantContext.organizationId,
@@ -81,7 +82,16 @@ export async function POST(
     })
 
     if (!kitchenSection) {
-      throw new ValidationError('No kitchen section found for this branch')
+      // Auto-create a default Main Kitchen section if none exists
+      kitchenSection = await prisma.kitchenSection.create({
+        data: {
+          name: 'Main Kitchen',
+          branchId: order.branchId,
+          organizationId: tenantContext.organizationId,
+          restaurantId: order.restaurantId,
+          sectionType: 'MAIN_KITCHEN',
+        },
+      })
     }
 
     // Generate kitchen ticket number

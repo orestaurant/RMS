@@ -405,10 +405,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Helper regex to validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
     // Check memory cache for menu items
-    const itemIds = items.map((i: any) => i.menuItemId).filter(Boolean)
+    const rawIds = items.map((i: any) => i.menuItemId || i.id).filter(Boolean)
+    const validUuidIds = rawIds.filter((id: string) => typeof id === 'string' && uuidRegex.test(id))
     const nowMs = Date.now()
-    const uncachedItemIds = itemIds.filter((id: string) => {
+    const uncachedItemIds = validUuidIds.filter((id: string) => {
       const cached = inMemoryMenuItemCache.get(id)
       return !cached || nowMs - cached.cachedAt > MENU_ITEM_CACHE_TTL
     })
@@ -488,15 +492,18 @@ export async function POST(request: NextRequest) {
 
     // Check item availability
     for (const reqItem of items) {
-      const cached = inMemoryMenuItemCache.get(reqItem.menuItemId)
-      if (cached && cached.isAvailable === false) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: `"${cached.name}" is currently out of stock and cannot be ordered.`,
-          },
-          { status: 400 }
-        )
+      const reqId = reqItem.menuItemId || reqItem.id
+      if (reqId) {
+        const cached = inMemoryMenuItemCache.get(reqId)
+        if (cached && cached.isAvailable === false) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: `"${cached.name}" is currently out of stock and cannot be ordered.`,
+            },
+            { status: 400 }
+          )
+        }
       }
     }
 
@@ -505,9 +512,10 @@ export async function POST(request: NextRequest) {
     const orderItemsCreateData: any[] = []
 
     for (const it of items) {
-      const dbItem = inMemoryMenuItemCache.get(it.menuItemId)
+      const rawId = it.menuItemId || it.id
+      const dbItem = rawId ? inMemoryMenuItemCache.get(rawId) : null
       const qty = Math.max(1, parseInt(it.quantity || '1') || 1)
-      const name = it.name || dbItem?.name || 'Menu Item'
+      const name = it.name || it.itemName || dbItem?.name || 'Menu Item'
       const clientPrice = parseFloat(it.price || 0) || 0
       const dbPrice = dbItem ? Number(dbItem.basePrice) : 0
       const price = clientPrice > 0 ? clientPrice : dbPrice
@@ -515,15 +523,83 @@ export async function POST(request: NextRequest) {
 
       calculatedSubtotal += itemTotal
 
+      let resolvedMenuItemId = rawId && typeof rawId === 'string' && uuidRegex.test(rawId) ? rawId : null
+
+      // If missing or non-UUID (e.g. VIP custom dish), find or create a valid MenuItem record
+      if (!resolvedMenuItemId) {
+        const existingItem = await prisma.menuItem.findFirst({
+          where: {
+            organizationId,
+            name: { equals: name, mode: 'insensitive' },
+            deletedAt: null,
+          },
+          select: { id: true },
+        })
+
+        if (existingItem) {
+          resolvedMenuItemId = existingItem.id
+        } else {
+          try {
+            // Find or create category for custom table items
+            let defaultCat = await prisma.menuCategory.findFirst({
+              where: { organizationId, deletedAt: null },
+              select: { id: true },
+            })
+            if (!defaultCat) {
+              defaultCat = await prisma.menuCategory.create({
+                data: {
+                  organizationId,
+                  restaurantId,
+                  name: 'Chef Specials',
+                },
+                select: { id: true },
+              })
+            }
+
+            const newItem = await prisma.menuItem.create({
+              data: {
+                organizationId,
+                restaurantId,
+                categoryId: defaultCat.id,
+                name,
+                basePrice: price,
+                isAvailable: true,
+                isVegetarian: true,
+                description: it.specialInstructions || it.notes || 'Table Custom Dish',
+              },
+              select: { id: true },
+            })
+            resolvedMenuItemId = newItem.id
+          } catch (createErr) {
+            console.warn('Could not create custom MenuItem, falling back to any existing MenuItem:', createErr)
+            const anyItem = await prisma.menuItem.findFirst({
+              where: { organizationId, deletedAt: null },
+              select: { id: true },
+            })
+            resolvedMenuItemId = anyItem?.id || null
+          }
+        }
+      }
+
+      if (!resolvedMenuItemId) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: `Could not resolve menu item for "${name}". Please ensure menu items are set up.`,
+          },
+          { status: 400 }
+        )
+      }
+
       orderItemsCreateData.push({
         organizationId,
-        menuItemId: it.menuItemId,
-        variantId: it.variantId || null,
+        menuItemId: resolvedMenuItemId,
+        variantId: it.variantId && uuidRegex.test(it.variantId) ? it.variantId : null,
         itemName: name,
         basePrice: price,
         quantity: qty,
         itemTotal,
-        specialInstructions: it.specialInstructions || null,
+        specialInstructions: it.specialInstructions || it.notes || null,
       })
     }
 
@@ -646,7 +722,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        message: 'Order placed successfully!',
+        message: 'Order sent to kitchen successfully!',
         data: {
           id: order.id,
           orderNumber: order.orderNumber,

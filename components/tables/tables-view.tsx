@@ -184,7 +184,7 @@ function TableCard({
     <div
       onClick={() => onOpenMenu?.(table)}
       className={cn(
-        'group relative rounded-2xl border p-4 transition-all duration-200 cursor-pointer select-none flex flex-col justify-between hover:shadow-md hover:scale-[1.01]',
+        'group relative rounded-2xl border p-3.5 transition-all duration-200 cursor-pointer select-none flex flex-col justify-between hover:shadow-md hover:scale-[1.01] overflow-hidden',
         table.billRequested && 'border-amber-500/60 bg-amber-500/10 ring-2 ring-amber-500/30',
         cfg.card
       )}
@@ -440,13 +440,13 @@ function TableCard({
         {table.order && (
           <>
             <Separator className="my-2.5" />
-            <div className="flex items-center gap-1.5">
-              <ChefHat className="size-3.5 text-muted-foreground" />
-              <span className="text-xs font-medium">{table.order.id}</span>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <ChefHat className="size-3.5 text-muted-foreground shrink-0" />
+              <span className="text-xs font-medium truncate">{table.order.id}</span>
               <Badge
                 variant="outline"
                 className={cn(
-                  'ml-auto text-[9px] h-4 px-1 capitalize',
+                  'ml-auto text-[9px] h-4 px-1 capitalize shrink-0',
                   (table.order.status === 'cooking' || table.order.status === 'preparing') && 'border-chart-4/50 text-chart-4',
                   table.order.status === 'ready' && 'border-success/50 text-success',
                   table.order.status === 'pending' && 'border-warning/50 text-warning',
@@ -462,7 +462,7 @@ function TableCard({
       </div>
 
       {/* Action Buttons Row */}
-      <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-border/40">
+      <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-border/40 w-full min-w-0">
         <Button
           variant="outline"
           size="sm"
@@ -470,10 +470,13 @@ function TableCard({
             e.stopPropagation()
             onOpenMenu?.(table)
           }}
-          className="flex-1 h-7 text-xs font-bold gap-1 text-primary border-primary/30 hover:bg-primary/10 cursor-pointer"
+          className="flex-1 min-w-0 shrink h-7 px-2 text-xs font-bold gap-1 text-primary border-primary/30 hover:bg-primary/10 cursor-pointer overflow-hidden"
+          title="Open Menu / Take Order"
         >
-          <UtensilsCrossed className="size-3" />
-          <span>Menu / Order</span>
+          <UtensilsCrossed className="size-3 shrink-0" />
+          <span className="truncate">
+            <span className="hidden 2xl:inline">Menu / </span>Order
+          </span>
         </Button>
 
         {/* Available CTA */}
@@ -485,7 +488,8 @@ function TableCard({
               e.stopPropagation()
               onUpdateStatus?.(table.id, 'occupied')
             }}
-            className="flex-1 h-7 text-xs text-success hover:bg-success/10 hover:text-success"
+            className="flex-1 min-w-0 shrink h-7 px-2 text-xs font-bold text-success hover:bg-success/10 hover:text-success cursor-pointer overflow-hidden"
+            title="Seat Guests"
           >
             Seat
           </Button>
@@ -501,14 +505,15 @@ function TableCard({
               onGenerateBill?.(table)
             }}
             className={cn(
-              'flex-1 h-7 text-xs font-bold gap-1 shadow-xs cursor-pointer',
+              'flex-1 min-w-0 shrink h-7 px-2 text-xs font-bold gap-1 shadow-xs cursor-pointer overflow-hidden',
               table.billRequested
                 ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse'
                 : 'bg-emerald-600 hover:bg-emerald-700 text-white'
             )}
+            title={table.billRequested ? 'Settle Table Bill' : 'Generate Bill'}
           >
-            <Receipt className="size-3" />
-            <span>{table.billRequested ? 'Settle' : 'Bill'}</span>
+            <Receipt className="size-3 shrink-0" />
+            <span className="truncate">{table.billRequested ? 'Settle' : 'Bill'}</span>
           </Button>
         )}
       </div>

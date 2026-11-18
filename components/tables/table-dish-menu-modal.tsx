@@ -424,9 +424,11 @@ export function TableDishMenuModal({
           if (item) {
             orderItems.push({
               id: item.id,
+              menuItemId: item.id,
               name: item.name,
               quantity: qty,
               price: item.price,
+              specialInstructions: selectedPresetReqs.join(', ') || undefined,
               notes: selectedPresetReqs.join(', ') || undefined,
             })
           }
@@ -436,10 +438,10 @@ export function TableDishMenuModal({
       // Attach VIP unique custom dishes
       vipCustomDishes.forEach((vd) => {
         orderItems.push({
-          id: `vip-dish-${Date.now()}`,
           name: vd.name,
           quantity: 1,
           price: vd.price,
+          specialInstructions: vd.notes ? `[VIP Custom Dish]: ${vd.notes}` : '[VIP Custom Dish]',
           notes: vd.notes ? `[VIP Custom Dish]: ${vd.notes}` : '[VIP Custom Dish]',
         })
       })
@@ -463,13 +465,14 @@ export function TableDishMenuModal({
           totalAmount: totalPrice,
           notes: combinedNotes,
           status: 'pending',
+          source: 'TABLE_POS',
           bypassedLiveOrdering: bypassLiveOrdering,
         }),
       })
 
       const json = await res.json()
       if (!res.ok || !json.success) {
-        throw new Error(json.message || 'Failed to place table order')
+        throw new Error(json.message || 'Failed to send order to kitchen')
       }
 
       // Trigger feedback & success
@@ -482,7 +485,7 @@ export function TableDishMenuModal({
       }, 1800)
     } catch (err: any) {
       console.error('Order placement error:', err)
-      setErrorMessage(err.message || 'Failed to place order')
+      setErrorMessage(err.message || 'Failed to send order to kitchen')
     } finally {
       setSubmittingOrder(false)
     }
@@ -553,13 +556,13 @@ export function TableDishMenuModal({
         </DialogHeader>
 
         {orderSuccess ? (
-          <div className="p-12 text-center space-y-3 flex flex-col items-center justify-center">
+          <div className="p-12 text-center space-y-3 flex flex-col items-center justify-center animate-in fade-in zoom-in-95">
             <div className="size-16 rounded-full bg-emerald-500/10 text-emerald-500 flex items-center justify-center border border-emerald-500/20">
               <CheckCircle2 className="size-8" />
             </div>
-            <h3 className="text-lg font-black text-foreground">Order Placed for Table {tableNumber}!</h3>
+            <h3 className="text-lg font-black text-foreground">Order Sent to Kitchen for Table {tableNumber}!</h3>
             <p className="text-xs text-muted-foreground">
-              Sent straight to Kitchen Display System. Estimated prep: ~{totalEstPrepTime} minutes.
+              Sent straight to Kitchen Display System (KDS). Estimated prep: ~{totalEstPrepTime} minutes.
             </p>
           </div>
         ) : (
@@ -852,17 +855,17 @@ export function TableDishMenuModal({
             <Button
               disabled={totalCount === 0 || submittingOrder}
               onClick={handlePlaceOrder}
-              className="h-11 px-6 font-black text-xs rounded-2xl shadow-md bg-primary text-primary-foreground hover:bg-primary/90 gap-2 cursor-pointer"
+              className="h-11 px-6 font-black text-xs rounded-2xl shadow-md bg-primary text-primary-foreground hover:bg-primary/90 gap-2 cursor-pointer transition-all active:scale-[0.98]"
             >
               {submittingOrder ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Sending Order...
+                  <span>Sending to Kitchen...</span>
                 </>
               ) : (
                 <>
-                  <UtensilsCrossed className="size-4" />
-                  Place Order for Table {tableNumber}
+                  <ChefHat className="size-4" />
+                  <span>Send to Kitchen (Table {tableNumber})</span>
                 </>
               )}
             </Button>
