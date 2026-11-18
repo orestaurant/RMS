@@ -135,11 +135,13 @@ export async function POST(
           data: {
             orderId: newOrder.id,
             organizationId: restaurant.organizationId,
-            itemPrice: Number(item.price || item.unit_price || 0),
+            menuItemId: item.menuItemId || item.id || '00000000-0000-0000-0000-000000000000',
+            itemName: item.name || item.itemName || 'Aggregator Item',
+            basePrice: Number(item.price || item.unit_price || 0),
             quantity: Number(item.quantity || 1),
-            totalPrice: Number(item.price || 0) * Number(item.quantity || 1),
+            itemTotal: Number(item.price || 0) * Number(item.quantity || 1),
+            specialInstructions: item.notes || item.customizations || null,
             status: 'pending',
-            notes: item.notes || item.customizations || undefined,
           },
         })
       }
