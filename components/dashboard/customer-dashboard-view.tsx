@@ -16,6 +16,8 @@ import {
   TableProperties,
   RefreshCw,
   Car,
+  Plus,
+  Star,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -214,6 +216,37 @@ export function CustomerDashboardView() {
         onOrderPlaced={fetchCustomerData}
       />
 
+      {/* ── Google Review & 10% Discount Banner ──────────────── */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/5 border border-amber-500/30 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="size-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+            <Star className="size-5 fill-white" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-foreground">
+                Get 10% Off Your Bill with Google Review
+              </h2>
+              <Badge className="bg-amber-500 text-white text-[10px] py-0">
+                10% OFF
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Verify dining with 1-click Google login, share quick feedback, and show your instant discount voucher.
+            </p>
+          </div>
+        </div>
+        <Link href="/customer/feedback" className="shrink-0">
+          <Button
+            size="sm"
+            className="w-full sm:w-auto font-bold text-xs gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-xs cursor-pointer"
+          >
+            <span>Review & Claim 10% Off</span>
+            <ArrowRight className="size-3.5" />
+          </Button>
+        </Link>
+      </div>
+
       {/* ── Customer Metric Cards (Zero Admin/Revenue Numbers) ── */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* Active Live Orders */}
@@ -360,10 +393,20 @@ export function CustomerDashboardView() {
                           </span>
                         </div>
 
-                        <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-border/60">
-                          <span className="text-sm font-bold text-foreground">
+                        <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-border/60">
+                          <span className="text-sm font-bold text-foreground mr-1">
                             ₹{Number(order.total || order.totalAmount || 0).toLocaleString('en-IN')}
                           </span>
+                          <Link href={`/menu?appendOrderId=${order.id}&table=1`}>
+                            <Button
+                              size="sm"
+                              className="h-8 text-xs font-bold gap-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white cursor-pointer shadow-xs"
+                              title="Add dishes directly to this live order"
+                            >
+                              <Plus className="size-3" />
+                              <span>Add on Live Order</span>
+                            </Button>
+                          </Link>
                           <Link href="/customer/orders">
                             <Button variant="outline" size="sm" className="h-8 text-xs">
                               <span>View Receipt</span>
@@ -452,6 +495,25 @@ export function CustomerDashboardView() {
                   </div>
                 </div>
                 <ArrowRight className="size-3.5 text-primary group-hover:translate-x-0.5 transition-transform" />
+              </Link>
+
+              {/* Customer Feedback & Google Reviews */}
+              <Link
+                href="/customer/feedback"
+                className="flex items-center justify-between p-3 rounded-lg border border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10 transition-colors group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="size-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                    <Star className="size-4 fill-white" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground group-hover:text-amber-600 transition-colors">
+                      ⭐ Google Review & 10% Discount
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">Verify dining experience & claim meal coupon</p>
+                  </div>
+                </div>
+                <ArrowRight className="size-3.5 text-amber-500 group-hover:translate-x-0.5 transition-transform" />
               </Link>
 
               {/* Browse Menu */}

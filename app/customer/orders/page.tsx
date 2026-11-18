@@ -20,6 +20,9 @@ import {
   ArrowRight,
   ChevronRight,
   ShieldCheck,
+  Music,
+  Flame,
+  Star,
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -27,6 +30,7 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
+import { SongRequestModal } from '@/components/customer/song-request-modal'
 
 interface CustomerProfile {
   id: string
@@ -85,6 +89,18 @@ export default function CustomerOrdersPage() {
   const [actionLoading, setActionLoading] = useState(false)
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | 'queue' | 'live' | 'completed'>('all')
+  const [showSongModal, setShowSongModal] = useState<boolean>(false)
+
+  // Real-time tick for dish timing countdowns
+  const [liveNow, setLiveNow] = useState<number>(Date.now())
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        setLiveNow(Date.now())
+      }
+    }, 1000)
+    return () => clearInterval(t)
+  }, [])
 
   const queueCount = orders.filter((o) => ['pending', 'confirmed'].includes(o.status.toLowerCase())).length
   const liveCount = orders.filter((o) => ['preparing', 'ready'].includes(o.status.toLowerCase())).length
@@ -131,6 +147,27 @@ export default function CustomerOrdersPage() {
 
   useEffect(() => {
     loadData()
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        loadData()
+      }
+    }, 4000)
+
+    const handleVis = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        loadData()
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVis)
+    }
+
+    return () => {
+      clearInterval(timer)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVis)
+      }
+    }
   }, [loadData])
 
   // Place dynamic test order
@@ -206,6 +243,25 @@ export default function CustomerOrdersPage() {
           </Link>
 
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowSongModal(true)}
+              className="h-8 gap-1.5 text-xs border-pink-500/40 text-pink-600 dark:text-pink-400 hover:bg-pink-500/10 cursor-pointer"
+            >
+              <Music className="size-3.5 text-pink-500" />
+              <span className="hidden sm:inline">DJ Song</span>
+            </Button>
+            <Link href="/menu">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs text-primary border-primary/30 hover:bg-primary/10 cursor-pointer"
+              >
+                <UtensilsCrossed className="size-3.5 text-primary" />
+                <span className="hidden sm:inline">Menu</span>
+              </Button>
+            </Link>
             <Button
               variant="outline"
               size="sm"
@@ -334,23 +390,35 @@ export default function CustomerOrdersPage() {
             </p>
           </div>
 
-          <Button
-            onClick={handlePlaceTestOrder}
-            disabled={actionLoading}
-            className="gap-2 h-10 font-semibold shadow-md shadow-primary/20 text-sm"
-          >
-            {actionLoading ? (
-              <>
-                <RefreshCw className="size-4 animate-spin" />
-                <span>Submitting Order...</span>
-              </>
-            ) : (
-              <>
-                <Plus className="size-4" />
-                <span>Place New Test Order</span>
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-2.5">
+            <Link href="/customer/feedback">
+              <Button
+                variant="outline"
+                className="gap-1.5 h-10 font-semibold border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 text-xs cursor-pointer"
+              >
+                <Star className="size-4 fill-amber-500" />
+                <span>Review & 10% Off</span>
+              </Button>
+            </Link>
+
+            <Button
+              onClick={handlePlaceTestOrder}
+              disabled={actionLoading}
+              className="gap-2 h-10 font-semibold shadow-md shadow-primary/20 text-sm"
+            >
+              {actionLoading ? (
+                <>
+                  <RefreshCw className="size-4 animate-spin" />
+                  <span>Submitting Order...</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="size-4" />
+                  <span>Place New Test Order</span>
+                </>
+              )}
+            </Button>
+          </div>
         </div>
 
         {/* ── Status Tabs Filter (Queue vs Live vs Completed) ── */}
@@ -482,6 +550,18 @@ export default function CustomerOrdersPage() {
                       </div>
 
                       <div className="flex items-center gap-3">
+                        {['pending', 'confirmed', 'preparing', 'ready'].includes(order.status.toLowerCase()) && (
+                          <Link href={`/menu?appendOrderId=${order.id}&table=1`}>
+                            <Button
+                              size="sm"
+                              className="h-7 text-xs font-bold gap-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white cursor-pointer shadow-xs"
+                              title="Add dishes to this running order"
+                            >
+                              <Plus className="size-3" />
+                              <span>Add on Live Order</span>
+                            </Button>
+                          </Link>
+                        )}
                         <Badge
                           variant="outline"
                           className={cn('text-xs font-semibold px-2.5 py-0.5', badgeCfg.className)}
@@ -501,19 +581,65 @@ export default function CustomerOrdersPage() {
                         Order Items
                       </span>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {order.items.map((item) => (
-                          <div
-                            key={item.id}
-                            className="flex items-center justify-between text-xs p-2 rounded-lg bg-muted/30 border border-border/40"
-                          >
-                            <span className="font-medium text-foreground">
-                              {item.quantity}× {item.name}
-                            </span>
-                            <span className="text-muted-foreground font-semibold">
-                              ₹{item.total.toLocaleString('en-IN')}
-                            </span>
-                          </div>
-                        ))}
+                        {order.items.map((item) => {
+                          const dishPrepMinutes = 15
+                          const orderStartTime = order.createdAt ? new Date(order.createdAt).getTime() : Date.now()
+                          const elapsedMins = Math.max(0, Math.floor((liveNow - orderStartTime) / 60000))
+                          const remainingMins = Math.max(1, dishPrepMinutes - elapsedMins)
+
+                          const ordStatus = String(order.status || '').toLowerCase().trim()
+                          const isDishPending = ordStatus === 'pending'
+                          const isDishCooking = ordStatus === 'accepted' || ordStatus === 'confirmed' || ordStatus === 'preparing' || ordStatus === 'cooking'
+                          const isDishReady = ordStatus === 'ready'
+                          const isDishServed = ordStatus === 'served' || ordStatus === 'completed'
+
+                          return (
+                            <div
+                              key={item.id}
+                              className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-muted/30 border border-border/40"
+                            >
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-semibold text-foreground">
+                                  {item.quantity}× {item.name}
+                                </span>
+                                <span className="text-muted-foreground font-semibold font-mono">
+                                  ₹{item.total.toLocaleString('en-IN')}
+                                </span>
+                              </div>
+
+                              {/* Real-time Dish Timing & Status Badge */}
+                              <div className="flex items-center justify-between text-[10px]">
+                                {isDishPending && (
+                                  <Badge variant="outline" className="text-[10px] font-bold bg-amber-500/15 text-amber-500 border-amber-500/30 gap-1 px-1.5 py-0 h-4">
+                                    <Clock className="size-2.5 animate-spin text-amber-500" />
+                                    <span>Pending Approval</span>
+                                  </Badge>
+                                )}
+                                {isDishCooking && (
+                                  <Badge variant="outline" className="text-[10px] font-extrabold bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30 gap-1 px-1.5 py-0 h-4">
+                                    <Flame className="size-2.5 text-orange-500 animate-pulse" />
+                                    <span>Preparing ({remainingMins} mins left)</span>
+                                  </Badge>
+                                )}
+                                {isDishReady && (
+                                  <Badge variant="outline" className="text-[10px] font-bold bg-emerald-500/15 text-emerald-500 border-emerald-500/30 gap-1 px-1.5 py-0 h-4">
+                                    <Sparkles className="size-2.5 text-emerald-500" />
+                                    <span>Ready</span>
+                                  </Badge>
+                                )}
+                                {isDishServed && (
+                                  <Badge variant="outline" className="text-[10px] font-bold bg-sky-500/15 text-sky-500 border-sky-500/30 gap-1 px-1.5 py-0 h-4">
+                                    <UtensilsCrossed className="size-2.5 text-sky-500" />
+                                    <span>Served</span>
+                                  </Badge>
+                                )}
+                                <span className="text-muted-foreground font-mono">
+                                  Est ~{dishPrepMinutes}m
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   </CardContent>
@@ -533,6 +659,14 @@ export default function CustomerOrdersPage() {
           </div>
         )}
       </main>
+
+      {/* Song Playing Request (DJ Sync) Modal */}
+      <SongRequestModal
+        open={showSongModal}
+        onOpenChange={setShowSongModal}
+        tableNumber="Table 1"
+        guestName={profile?.name || 'Customer'}
+      />
     </div>
   )
 }

@@ -14,6 +14,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Loader2,
+  Star,
+  Globe,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -302,6 +304,40 @@ export function SettingsView() {
             <Users className="size-4" />
             Manage Access & Permissions
           </Button>
+        </div>
+      </Card>
+
+      {/* Integrations & Customer Reviews */}
+      <Card className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Star className="size-5 text-amber-500" />
+          <h3 className="text-lg font-semibold">Integrations & Customer Reviews</h3>
+        </div>
+        <Separator className="mb-6" />
+        <div className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Configure Google OAuth 2.0 customer verification, direct Google Maps place review shortlinks, and 10% dining discount incentives.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              className="flex-1 gap-2 cursor-pointer hover:bg-accent"
+              onClick={() => router.push('/integrations?tab=reviews')}
+            >
+              <Star className="size-4 text-amber-500" />
+              Configure Google Reviews & OAuth
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="flex-1 gap-2 cursor-pointer hover:bg-accent"
+              onClick={() => router.push('/integrations?tab=delivery')}
+            >
+              <Globe className="size-4" />
+              Delivery Aggregators (Zomato/Swiggy)
+            </Button>
+          </div>
         </div>
       </Card>
 

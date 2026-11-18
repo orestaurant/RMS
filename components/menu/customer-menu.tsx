@@ -36,6 +36,10 @@ import {
   Navigation,
   Compass,
   ExternalLink,
+  Music,
+  Headphones,
+  Crown,
+  BellRing,
 } from 'lucide-react'
 import {
   Dialog,
@@ -50,6 +54,7 @@ import {
   isValidCoord,
 } from '@/components/orders/CustomerLocationLock'
 import { CustomerBillModal } from '@/components/billing/customer-bill-modal'
+import { SongRequestModal } from '@/components/customer/song-request-modal'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -218,6 +223,22 @@ export function CustomerMenu() {
   const [tableOrders, setTableOrders] = useState<any[]>([])
   const [showOrdersModal, setShowOrdersModal] = useState<boolean>(false)
   const [showBillModal, setShowBillModal] = useState<boolean>(false)
+  const [showSongModal, setShowSongModal] = useState<boolean>(false)
+
+  // Append Mode State (Attach dishes to active running live order)
+  const [isAppendMode, setIsAppendMode] = useState<boolean>(false)
+  const [appendTargetOrder, setAppendTargetOrder] = useState<any | null>(null)
+
+  // Real-time tick for live dish preparation countdown timers
+  const [liveNow, setLiveNow] = useState<number>(Date.now())
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        setLiveNow(Date.now())
+      }
+    }, 1000)
+    return () => clearInterval(t)
+  }, [])
 
   // 4. Filters & Pagination State
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
@@ -386,11 +407,43 @@ export function CustomerMenu() {
     loadMenu()
   }, [loadMenu])
 
+  // Visibility-aware polling (pauses automatically when tab is hidden)
   useEffect(() => {
     fetchTableOrders()
-    const timer = setInterval(fetchTableOrders, 4000)
-    return () => clearInterval(timer)
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchTableOrders()
+      }
+    }, 4000)
+
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchTableOrders()
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibility)
+    }
+
+    return () => {
+      clearInterval(timer)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibility)
+      }
+    }
   }, [fetchTableOrders])
+
+  // Detect appendOrderId from URL query
+  useEffect(() => {
+    const urlAppendId = searchParams?.get('appendOrderId')
+    if (urlAppendId && tableOrders.length > 0) {
+      const matched = tableOrders.find((o: any) => o.id === urlAppendId)
+      if (matched) {
+        setIsAppendMode(true)
+        setAppendTargetOrder(matched)
+      }
+    }
+  }, [searchParams, tableOrders])
 
   // Handle manual table entry submission
   const handleSetTable = (e: React.FormEvent) => {
@@ -760,6 +813,45 @@ export function CustomerMenu() {
         ? (locationData.vehicleNumber ? `🚗 ${locationData.vehicleNumber.trim().toUpperCase()}` : '🚗 Car Delivery')
         : tableNumber
 
+      // ── Handle Append Mode (Attach to Existing Live Order) ──
+      if (isAppendMode && appendTargetOrder) {
+        const appendPayload = {
+          orderId: appendTargetOrder.id,
+          tableNumber: finalTable || appendTargetOrder.tableNumber || '1',
+          customerName: typeof window !== 'undefined' ? localStorage.getItem('rms_customer_name') || 'Table Guest' : 'Table Guest',
+          items: cartItemList.map((ci) => ({
+            menuItemId: ci.menuItem.id,
+            name: ci.menuItem.name,
+            dishName: ci.menuItem.name,
+            price: ci.unitPrice ?? ci.menuItem.price,
+            quantity: ci.quantity,
+            notes: ci.specialInstructions,
+            isAddon: true,
+          })),
+        }
+
+        const res = await fetch('/api/orders/live-addon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(appendPayload),
+        })
+
+        const json = await res.json()
+        if (!res.ok || !json.success) {
+          throw new Error(json.message || 'Failed to attach items to live order.')
+        }
+
+        // Successfully attached! Reset cart and append mode
+        setCart({})
+        setIsCartOpen(false)
+        setIsAppendMode(false)
+        setAppendTargetOrder(null)
+        setOrderNotes('')
+        setShowOrdersModal(true)
+        await fetchTableOrders()
+        return
+      }
+
       const payload = {
         tableNumber: finalTable,
         orderType: orderMode === 'drive_in' ? 'drive_in' : 'dine_in',
@@ -1025,6 +1117,18 @@ export function CustomerMenu() {
               )}
             </Button>
 
+            {/* Song Playing Request (DJ Sync) Trigger */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowSongModal(true)}
+              className="h-9 px-2.5 rounded-xl font-bold gap-1.5 border-pink-500/40 text-pink-600 dark:text-pink-400 hover:bg-pink-500/10 shadow-xs cursor-pointer"
+              title="Request a song to the live DJ"
+            >
+              <Music className="size-3.5 text-pink-500" />
+              <span className="hidden sm:inline">DJ Song</span>
+            </Button>
+
             {/* Bring Bill / Pay Button (Visible once customer has placed at least one order) */}
             {tableOrders.length > 0 && (
               <Button
@@ -1060,6 +1164,36 @@ export function CustomerMenu() {
           </div>
         </div>
       </header>
+
+      {/* ── APPEND MODE ACTIVE BANNER ──────────────────────── */}
+      {isAppendMode && appendTargetOrder && (
+        <div className="sticky top-16 z-30 p-3.5 bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 text-white shadow-xl rounded-2xl mx-4 my-2 flex items-center justify-between gap-3 animate-in slide-in-from-top-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="size-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+              <Flame className="size-4 animate-bounce" />
+            </div>
+            <div className="min-w-0 text-xs">
+              <p className="font-extrabold truncate">
+                Append Mode Active: Adding to Live Order #{appendTargetOrder.orderNumber || appendTargetOrder.id}
+              </p>
+              <p className="text-[11px] text-white/90 truncate">
+                Newly selected dishes attach directly to your existing running table bill
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setIsAppendMode(false)
+              setAppendTargetOrder(null)
+            }}
+            className="h-8 px-3 text-xs font-bold bg-white text-orange-600 border-white hover:bg-white/90 shrink-0 cursor-pointer shadow-sm"
+          >
+            Cancel Append
+          </Button>
+        </div>
+      )}
 
       {/* 2. LIVE ORDER CONFIRMATION MODAL / SCREEN */}
       {confirmedOrder && (
@@ -1382,13 +1516,32 @@ export function CustomerMenu() {
                             Placed {ord.createdAt ? new Date(ord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'recently'}
                           </span>
                         </div>
-                        <div className="text-right">
-                          <span className="text-sm font-extrabold text-primary block">
-                            ₹{Number(ord.totalAmount || ord.total || 0).toFixed(2)}
-                          </span>
-                          <span className="text-[10px] text-muted-foreground capitalize">
-                            {ord.paymentStatus || 'pay at counter'}
-                          </span>
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <div className="text-right">
+                            <span className="text-sm font-extrabold text-primary block">
+                              ₹{Number(ord.totalAmount || ord.total || 0).toFixed(2)}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground capitalize">
+                              {ord.paymentStatus || 'pay at counter'}
+                            </span>
+                          </div>
+                          {!isServed && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => {
+                                setIsAppendMode(true)
+                                setAppendTargetOrder(ord)
+                                setShowOrdersModal(false)
+                                setIsCartOpen(false)
+                              }}
+                              className="h-7 px-2 text-[11px] font-extrabold gap-1 rounded-lg bg-orange-500 hover:bg-orange-600 text-white shadow-xs cursor-pointer z-20 pointer-events-auto"
+                              title="Add dishes directly to this live order"
+                            >
+                              <Plus className="size-3" />
+                              <span>Add on Live Order</span>
+                            </Button>
+                          )}
                         </div>
                       </div>
 
@@ -1486,26 +1639,73 @@ export function CustomerMenu() {
                         </div>
                       )}
 
-                      {/* Ordered Items List with Customization Details */}
+                      {/* Ordered Items List with Real-Time Preparation Timing & Status */}
                       <div className="space-y-2 pt-1 text-xs border-t border-border/50">
-                        {itemsList.map((it: any, i: number) => (
-                          <div key={i} className="flex flex-col gap-0.5">
-                            <div className="flex justify-between items-center text-foreground font-medium">
-                              <span>
-                                <span className="text-primary font-bold mr-1.5">{it.quantity}x</span>
-                                {it.name}
-                              </span>
-                              <span className="text-muted-foreground font-mono">
-                                ₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}
-                              </span>
+                        {itemsList.map((it: any, i: number) => {
+                          const dishPrepMinutes = Number(it.prepTime || it.preparationTimeMinutes || 15)
+                          const orderStartTime = ord.createdAt ? new Date(ord.createdAt).getTime() : Date.now()
+                          const elapsedMins = Math.max(0, Math.floor((liveNow - orderStartTime) / 60000))
+                          const remainingMins = Math.max(1, dishPrepMinutes - elapsedMins)
+
+                          const ordStatus = String(ord.status || '').toLowerCase().trim()
+                          const isDishPending = ordStatus === 'pending'
+                          const isDishCooking = ordStatus === 'accepted' || ordStatus === 'confirmed' || ordStatus === 'preparing' || ordStatus === 'cooking'
+                          const isDishReady = ordStatus === 'ready'
+                          const isDishServed = ordStatus === 'served' || ordStatus === 'completed'
+
+                          return (
+                            <div key={i} className="flex flex-col gap-1 p-2.5 rounded-xl bg-muted/20 border border-border/40">
+                              <div className="flex justify-between items-center text-foreground font-medium">
+                                <span className="font-semibold text-xs">
+                                  <span className="text-primary font-bold mr-1.5">{it.quantity}x</span>
+                                  {it.name}
+                                </span>
+                                <span className="text-foreground font-mono font-bold text-xs">
+                                  ₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}
+                                </span>
+                              </div>
+
+                              {/* Real-time Dish Timing & Status Badge */}
+                              <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5">
+                                <div className="flex items-center gap-1.5">
+                                  {isDishPending && (
+                                    <Badge variant="outline" className="text-[10px] font-bold bg-amber-500/15 text-amber-500 border-amber-500/30 gap-1 px-1.5 py-0 h-4.5">
+                                      <Clock className="size-2.5 animate-spin text-amber-500" />
+                                      <span>Pending Approval</span>
+                                    </Badge>
+                                  )}
+                                  {isDishCooking && (
+                                    <Badge variant="outline" className="text-[10px] font-extrabold bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30 gap-1 px-1.5 py-0 h-4.5">
+                                      <Flame className="size-2.5 text-orange-500 animate-pulse" />
+                                      <span>Preparing ({remainingMins} mins left)</span>
+                                    </Badge>
+                                  )}
+                                  {isDishReady && (
+                                    <Badge variant="outline" className="text-[10px] font-bold bg-emerald-500/15 text-emerald-500 border-emerald-500/30 gap-1 px-1.5 py-0 h-4.5">
+                                      <Sparkles className="size-2.5 text-emerald-500" />
+                                      <span>Ready to Serve</span>
+                                    </Badge>
+                                  )}
+                                  {isDishServed && (
+                                    <Badge variant="outline" className="text-[10px] font-bold bg-sky-500/15 text-sky-500 border-sky-500/30 gap-1 px-1.5 py-0 h-4.5">
+                                      <UtensilsCrossed className="size-2.5 text-sky-500" />
+                                      <span>Served</span>
+                                    </Badge>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-muted-foreground font-mono">
+                                  Prep ~{dishPrepMinutes}m
+                                </span>
+                              </div>
+
+                              {(it.notes || it.specialInstructions) && (
+                                <span className="text-[10px] text-amber-500/90 font-medium pl-1">
+                                  ↳ {it.notes || it.specialInstructions}
+                                </span>
+                              )}
                             </div>
-                            {(it.notes || it.specialInstructions) && (
-                              <span className="text-[10px] text-amber-500/90 font-medium pl-4">
-                                ↳ {it.notes || it.specialInstructions}
-                              </span>
-                            )}
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
 
                       {/* Order Special Notes */}
@@ -1522,27 +1722,58 @@ export function CustomerMenu() {
             </div>
 
             {/* Footer */}
-            <div className="pt-2 border-t border-border flex flex-col sm:flex-row gap-2">
-              {tableOrders.length > 0 && (
+            <div className="pt-2 border-t border-border flex flex-col gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
+                {tableOrders.length > 0 && (
+                  <>
+                    <Button
+                      variant="outline"
+                      className="flex-1 h-11 rounded-xl font-bold text-xs gap-1.5 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 cursor-pointer"
+                      onClick={() => {
+                        setShowOrdersModal(false)
+                        setShowBillModal(true)
+                      }}
+                    >
+                      <Receipt className="size-4 text-amber-500" />
+                      <span>Ask for Pending Bill</span>
+                    </Button>
+
+                    <Button
+                      variant="default"
+                      className="flex-1 h-11 rounded-xl font-extrabold text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-2 shadow-md cursor-pointer"
+                      onClick={() => {
+                        setShowOrdersModal(false)
+                        setShowBillModal(true)
+                      }}
+                    >
+                      <Receipt className="size-4" />
+                      <span>Settle Bill & Tip</span>
+                    </Button>
+                  </>
+                )}
                 <Button
-                  variant="default"
-                  className="flex-1 h-11 rounded-xl font-extrabold text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-2 shadow-md cursor-pointer"
+                  variant={tableOrders.length > 0 ? 'outline' : 'default'}
+                  className="flex-1 h-11 rounded-xl font-bold cursor-pointer"
+                  onClick={() => setShowOrdersModal(false)}
+                >
+                  Continue Browsing Menu
+                </Button>
+              </div>
+
+              {/* DJ Song Request Link in Footer */}
+              <div className="flex items-center justify-between pt-1 px-1 text-xs">
+                <button
+                  type="button"
                   onClick={() => {
                     setShowOrdersModal(false)
-                    setShowBillModal(true)
+                    setShowSongModal(true)
                   }}
+                  className="inline-flex items-center gap-1.5 font-bold text-pink-500 hover:underline cursor-pointer"
                 >
-                  <Receipt className="size-4" />
-                  <span>Bring Bill & Tip Waiter</span>
-                </Button>
-              )}
-              <Button
-                variant={tableOrders.length > 0 ? 'outline' : 'default'}
-                className="flex-1 h-11 rounded-xl font-bold cursor-pointer"
-                onClick={() => setShowOrdersModal(false)}
-              >
-                Continue Browsing Menu
-              </Button>
+                  <Music className="size-3.5" />
+                  <span>Request a Song to DJ Booth 🎵</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2580,12 +2811,22 @@ export function CustomerMenu() {
                 <Button
                   onClick={handlePlaceOrder}
                   disabled={submitting || cartItemCount === 0}
-                  className="w-full h-12 rounded-xl font-extrabold text-sm shadow-md"
+                  className={cn(
+                    'w-full h-12 rounded-xl font-extrabold text-sm shadow-md cursor-pointer transition-all',
+                    isAppendMode
+                      ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white'
+                      : ''
+                  )}
                 >
                   {submitting ? (
                     <span className="flex items-center gap-2">
                       <RefreshCw className="size-4 animate-spin" />
-                      Sending to Kitchen...
+                      {isAppendMode ? 'Appending to Live Order...' : 'Sending to Kitchen...'}
+                    </span>
+                  ) : isAppendMode && appendTargetOrder ? (
+                    <span className="flex items-center gap-2">
+                      <Plus className="size-4" />
+                      Attach to Live Order #{appendTargetOrder.orderNumber || appendTargetOrder.id} (₹{cartGrandTotal.toFixed(2)})
                     </span>
                   ) : (
                     <span className="flex items-center gap-2">
@@ -2610,6 +2851,25 @@ export function CustomerMenu() {
             <span>Bill & Tip</span>
           </Button>
         )}
+
+        {/* Floating DJ Song Request for mobile */}
+        <Button
+          onClick={() => setShowSongModal(true)}
+          className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 text-white font-extrabold text-xs shadow-xl flex items-center justify-center p-0 shrink-0"
+          title="Request a song"
+        >
+          <Music className="size-5" />
+        </Button>
+
+        {/* Floating Review & 10% Discount */}
+        <Link href={`/customer/feedback?table=${encodeURIComponent(tableNumber || '1')}`}>
+          <Button
+            className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white font-extrabold text-xs shadow-xl flex items-center justify-center p-0 shrink-0 cursor-pointer"
+            title="Review & Claim 10% Off"
+          >
+            <Star className="size-5 fill-white" />
+          </Button>
+        </Link>
 
         <Button
           onClick={() => setShowOrdersModal(true)}
@@ -2643,6 +2903,14 @@ export function CustomerMenu() {
         onSuccess={() => {
           fetchTableOrders()
         }}
+      />
+
+      {/* 8. SONG PLAYING REQUEST (DJ SYNC) MODAL */}
+      <SongRequestModal
+        open={showSongModal}
+        onOpenChange={setShowSongModal}
+        tableNumber={orderMode === 'drive_in' ? displayTableBadge : tableNumber}
+        guestName={typeof window !== 'undefined' ? localStorage.getItem('rms_customer_name') || 'Guest' : 'Guest'}
       />
 
       {/* 8. HIGHWAY / FOOD CART DRIVE-IN SPOT MODAL */}

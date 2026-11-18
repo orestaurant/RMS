@@ -122,8 +122,8 @@ export function LiveBatchAddonBanner({
     )
   })
 
-  // Handle One-Tap +1 Live Add-on
-  const handleAddOne = async (batch: LiveBatch) => {
+  // Handle One-Tap +1 Live Add-on (with optional bypass lock)
+  const handleAddOne = async (batch: LiveBatch, bypass = false) => {
     setAddingId(batch.id)
     setFeedback(null)
 
@@ -138,6 +138,7 @@ export function LiveBatchAddonBanner({
           tableNumber: currentTableNumber,
           customerName,
           quantity: 1,
+          bypassLock: bypass,
         }),
       })
 
@@ -160,7 +161,7 @@ export function LiveBatchAddonBanner({
         setFeedback({
           batchId: batch.id,
           type: 'success',
-          message: `+1 ${batch.dishName} added to Chef's active batch! (Order #${data.newOrderNumber})`,
+          message: `+1 ${batch.dishName} added on live order! ${bypass ? '(Bypassed lock restriction)' : ''} (Order #${data.newOrderNumber})`,
         })
         fetchBatches()
         if (onOrderPlaced) onOrderPlaced()
@@ -305,15 +306,19 @@ export function LiveBatchAddonBanner({
                     )}
                   </Button>
                 ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled
-                    className="h-10 px-3 text-xs opacity-60 cursor-not-allowed border-dashed"
-                  >
-                    <Lock className="size-3.5 mr-1 text-muted-foreground" />
-                    <span>Window Closed</span>
-                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isAdding}
+                      onClick={() => handleAddOne(batch, true)}
+                      className="h-10 px-3 text-xs font-bold border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 gap-1 cursor-pointer"
+                      title="Bypass 20s lock restriction and add directly to chef's batch"
+                    >
+                      <Plus className="size-3.5" />
+                      <span>Bypass & Add (+1)</span>
+                    </Button>
+                  </div>
                 )}
               </div>
             </div>

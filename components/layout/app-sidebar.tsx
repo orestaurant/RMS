@@ -21,6 +21,8 @@ import {
   UserCheck,
   Boxes,
   Truck,
+  Globe,
+  Star,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -170,6 +172,12 @@ export function AppSidebar() {
               href: '/menu',
               icon: UtensilsCrossed,
             },
+            {
+              label: 'Review & 10% Off',
+              href: '/customer/feedback',
+              icon: Star,
+              badge: '10% OFF',
+            },
           ],
         },
       ]
@@ -248,6 +256,7 @@ export function AppSidebar() {
         label: 'BUSINESS',
         items: [
           { label: 'Billing & Invoices', href: '/billing', icon: Receipt },
+          { label: 'Delivery Sync', href: '/integrations', icon: Globe },
           { label: 'Staff & Roles', href: '/staff', icon: UserCheck },
           { label: 'Settings', href: '/dashboard/settings', icon: Settings },
         ],

@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
   Receipt,
   IndianRupee,
@@ -25,10 +26,24 @@ import {
   Clock,
   Heart,
   User,
+  Users,
   Send,
   Percent,
+  Star,
+  Car,
+  AlertTriangle,
+  ShieldCheck,
+  BellRing,
+  Sparkles,
+  Crown,
+  DollarSign,
+  Plus,
+  Minus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useAuthContext } from '@/hooks/useAuthContext'
+import { checkPermission } from '@/lib/rolesAndPermission'
+import { triggerNotificationFeedback } from '@/lib/sound-vibrate'
 
 interface BillSettlementModalProps {
   open: boolean
@@ -37,6 +52,7 @@ interface BillSettlementModalProps {
   tableNumber: string | number
   waiterName?: string
   orderId?: string
+  isHighwayOrder?: boolean
   onSuccess?: () => void
 }
 
@@ -47,23 +63,56 @@ export function BillSettlementModal({
   tableNumber,
   waiterName,
   orderId,
+  isHighwayOrder = false,
   onSuccess,
 }: BillSettlementModalProps) {
+  const { auth } = useAuthContext()
+  const role = auth?.role || 'WAITER'
+
   const [loading, setLoading] = useState(false)
   const [bill, setBill] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // Settlement & Discount state
+  // Billing tabs: Single bill vs Split bill
+  const [billingTab, setBillingTab] = useState<'standard' | 'split'>('standard')
+
+  // Discount & Fees state
   const [discountInput, setDiscountInput] = useState<string>('')
+  const [tipInput, setTipInput] = useState<string>('')
+  const [coverChargeInput, setCoverChargeInput] = useState<string>('')
+  const [penaltyInput, setPenaltyInput] = useState<string>('')
   const [applyingDiscount, setApplyingDiscount] = useState(false)
+
+  // Party Thrower State
+  const [isPartyThrowerEnabled, setIsPartyThrowerEnabled] = useState(false)
+  const [partyThrowerName, setPartyThrowerName] = useState('')
+  const [partyThrowerPhone, setPartyThrowerPhone] = useState('')
+
+  // Split Bill State
+  const [splitCount, setSplitCount] = useState<number>(2)
+  const [splitMethod, setSplitMethod] = useState<'equal' | 'item'>('equal')
+  const [guestSplits, setGuestSplits] = useState<Array<{ name: string; amount: number; isPaid: boolean }>>([])
+
+  // Review Discount State
+  const [reviewDiscountApplied, setReviewDiscountApplied] = useState(false)
+
+  // Highway Payment Verified State
+  const [highwayPaymentVerified, setHighwayPaymentVerified] = useState(false)
+
+  // Settlement execution state
   const [payLoading, setPayLoading] = useState(false)
   const [paySuccess, setPaySuccess] = useState(false)
   const [settledMethod, setSettledMethod] = useState<string>('')
 
-  // WhatsApp link & Guest Phone
+  // Communication state
   const [customerPhone, setCustomerPhone] = useState<string>('')
   const [customerName, setCustomerName] = useState<string>('')
-  const [whatsAppSuccess, setWhatsAppSuccess] = useState(false)
+  const [actionNotice, setActionNotice] = useState<string | null>(null)
+
+  // Permission checks
+  const canApplyDiscount = checkPermission(role, 'canApplyDiscount', { isManagerLoggedIn: true })
+  const canApplyCoverCharge = checkPermission(role, 'canApplyCoverCharge')
+  const canApplyPenalty = checkPermission(role, 'canApplyPenalty', { isManagerLoggedIn: true })
 
   // Fetch or generate the bill
   const loadBill = useCallback(async () => {
@@ -87,16 +136,24 @@ export function BillSettlementModal({
         throw new Error(json.message || 'Failed to generate bill')
       }
 
-      setBill(json.data)
-      if (json.data.discountAmount > 0) {
-        setDiscountInput(String(json.data.discountAmount))
+      const b = json.data
+      setBill(b)
+
+      if (b.discountAmount > 0) setDiscountInput(String(b.discountAmount))
+      if (b.tipAmount > 0) setTipInput(String(b.tipAmount))
+      if (b.customerPhone) setCustomerPhone(b.customerPhone)
+      if (b.customerName) setCustomerName(b.customerName)
+
+      const meta = b.metadata || {}
+      if (meta.coverCharges) setCoverChargeInput(String(meta.coverCharges))
+      if (meta.nonPaymentPenalty) setPenaltyInput(String(meta.nonPaymentPenalty))
+      if (meta.partyThrower) {
+        setIsPartyThrowerEnabled(true)
+        setPartyThrowerName(meta.partyThrower.name || '')
+        setPartyThrowerPhone(meta.partyThrower.phone || '')
       }
-      if (json.data.customerPhone) {
-        setCustomerPhone(json.data.customerPhone)
-      }
-      if (json.data.customerName) {
-        setCustomerName(json.data.customerName)
-      }
+      if (meta.highwayPaymentVerified) setHighwayPaymentVerified(true)
+      if (meta.reviewDiscountApplied) setReviewDiscountApplied(true)
     } catch (err: any) {
       console.error('Error in BillSettlementModal:', err)
       setError(err.message || 'Unable to load bill for this table.')
@@ -108,37 +165,125 @@ export function BillSettlementModal({
   useEffect(() => {
     if (open) {
       setPaySuccess(false)
-      setWhatsAppSuccess(false)
+      setActionNotice(null)
       loadBill()
     }
   }, [open, loadBill])
 
-  // Apply discount
-  const handleApplyDiscount = async () => {
+  // Calculations
+  const subtotal = Number(bill?.subtotal || 0)
+  const currentDiscount = Math.max(0, Number(discountInput || 0))
+  const currentTip = Math.max(0, Number(tipInput || 0))
+  const currentCover = Math.max(0, Number(coverChargeInput || 0))
+  const currentPenalty = Math.max(0, Number(penaltyInput || 0))
+
+  const taxable = Math.max(0, subtotal - currentDiscount)
+  const taxAmount = Math.round(taxable * 0.05 * 100) / 100
+  const grandTotal = Math.round((taxable + taxAmount + currentTip + currentCover + currentPenalty) * 100) / 100
+
+  // Update equal share splits whenever grandTotal or splitCount changes
+  useEffect(() => {
+    const share = Math.round((grandTotal / splitCount) * 100) / 100
+    setGuestSplits(
+      Array.from({ length: splitCount }, (_, i) => ({
+        name: `Guest ${i + 1}`,
+        amount: share,
+        isPaid: false,
+      }))
+    )
+  }, [grandTotal, splitCount])
+
+  // Apply discount / fees update via PATCH
+  const handleApplyFeesAndDiscounts = async () => {
     if (!bill?.id) return
     try {
       setApplyingDiscount(true)
       setError(null)
-      const discVal = Math.max(0, Number(discountInput || 0))
 
       const res = await fetch(`/api/bills/${bill.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ discountAmount: discVal }),
+        body: JSON.stringify({
+          discountAmount: currentDiscount,
+          tipAmount: currentTip,
+          coverCharges: currentCover,
+          nonPaymentPenalty: currentPenalty,
+          partyThrower: isPartyThrowerEnabled ? { name: partyThrowerName, phone: partyThrowerPhone } : null,
+          customerName: customerName.trim() || undefined,
+          customerPhone: customerPhone.trim() || undefined,
+          highwayPaymentVerified,
+        }),
       })
 
       const json = await res.json()
       if (!res.ok || !json.success) {
-        throw new Error(json.message || 'Failed to update discount')
+        throw new Error(json.message || 'Failed to update bill fees')
       }
 
       setBill(json.data)
+      setActionNotice('Bill adjustments updated successfully.')
+      setTimeout(() => setActionNotice(null), 3500)
     } catch (err: any) {
-      console.error('Discount error:', err)
-      setError(err.message || 'Failed to apply discount')
+      setError(err.message || 'Failed to update bill adjustments')
     } finally {
       setApplyingDiscount(false)
     }
+  }
+
+  // Apply Review Discount (e.g. 10% off subtotal)
+  const handleApplyReviewDiscount = () => {
+    const revDiscount = Math.round(subtotal * 0.1 * 100) / 100
+    setDiscountInput(String(revDiscount))
+    setReviewDiscountApplied(true)
+    setActionNotice('10% Review Discount applied to bill!')
+    setTimeout(() => setActionNotice(null), 4000)
+  }
+
+  // Ask for Review (WhatsApp trigger)
+  const handleAskForReview = () => {
+    const cleanPhone = (customerPhone || partyThrowerPhone).replace(/[^0-9]/g, '')
+    const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone || '919876543210'
+    const feedbackUrl = typeof window !== 'undefined' ? `${window.location.origin}/customer/feedback?table=${tableNumber || '1'}` : 'https://g.page/r/review?restosphere'
+    const reviewMsg = encodeURIComponent(
+      `Hello ${customerName || partyThrowerName || 'valued guest'}! Thank you for dining with us at RestoSphere (Table ${tableNumber}). We hope you loved your food and service! Please verify your dining experience & claim your 10% meal discount: ${feedbackUrl}`
+    )
+    window.open(`https://wa.me/${targetPhone}?text=${reviewMsg}`, '_blank')
+    setActionNotice('Review request dispatched to guest!')
+    setTimeout(() => setActionNotice(null), 4000)
+  }
+
+  // Send Bill (WhatsApp trigger)
+  const handleSendBill = () => {
+    const cleanPhone = (isPartyThrowerEnabled && partyThrowerPhone ? partyThrowerPhone : customerPhone).replace(/[^0-9]/g, '')
+    const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone || '919876543210'
+    const recipient = isPartyThrowerEnabled && partyThrowerName ? partyThrowerName : customerName || 'Guest'
+
+    const message = encodeURIComponent(
+      `Hello ${recipient}! Your bill for RestoSphere Table ${tableNumber} is ready:\nInvoice #${bill?.billNumber || 'BILL'}\nSubtotal: ₹${subtotal.toFixed(2)}\nTax: ₹${taxAmount.toFixed(2)}${currentDiscount > 0 ? `\nDiscount: -₹${currentDiscount.toFixed(2)}` : ''}${currentCover > 0 ? `\nCover Charges: ₹${currentCover.toFixed(2)}` : ''}${currentPenalty > 0 ? `\nPenalty Fee: ₹${currentPenalty.toFixed(2)}` : ''}${currentTip > 0 ? `\nServer Tip: ₹${currentTip.toFixed(2)}` : ''}\nGrand Total: ₹${grandTotal.toFixed(2)}.\nPay via UPI: upi://pay?pa=restosphere@okhdfcbank&pn=RestoSphere&am=${grandTotal.toFixed(2)}&cu=INR`
+    )
+    window.open(`https://wa.me/${targetPhone}?text=${message}`, '_blank')
+    setActionNotice(`Invoice sent to ${recipient} via WhatsApp!`)
+    setTimeout(() => setActionNotice(null), 4000)
+  }
+
+  // Ask for Pending Bill (Payment Reminder trigger)
+  const handleAskForPendingBill = () => {
+    const cleanPhone = (isPartyThrowerEnabled && partyThrowerPhone ? partyThrowerPhone : customerPhone).replace(/[^0-9]/g, '')
+    const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone || '919876543210'
+
+    const message = encodeURIComponent(
+      `Friendly Payment Reminder from RestoSphere:\nYour pending bill for Table ${tableNumber} (Invoice #${bill?.billNumber || ''}) is ₹${grandTotal.toFixed(2)}. Please complete the payment at the table counter or via UPI: upi://pay?pa=restosphere@okhdfcbank&pn=RestoSphere&am=${grandTotal.toFixed(2)}&cu=INR. Thank you!`
+    )
+    window.open(`https://wa.me/${targetPhone}?text=${message}`, '_blank')
+    setActionNotice('Payment reminder dispatched!')
+    setTimeout(() => setActionNotice(null), 4000)
+  }
+
+  // Verify Highway Customer Payment
+  const handleVerifyHighwayPayment = async () => {
+    setHighwayPaymentVerified(true)
+    setActionNotice('Highway / GPS pre-order payment recorded and verified!')
+    setTimeout(() => setActionNotice(null), 4000)
   }
 
   // Settle Bill
@@ -153,9 +298,15 @@ export function BillSettlementModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           paymentMethod: method,
-          customerPhone: customerPhone.trim() || undefined,
-          customerName: customerName.trim() || undefined,
-          discountAmount: discountInput ? Number(discountInput) : undefined,
+          customerPhone: (isPartyThrowerEnabled && partyThrowerPhone ? partyThrowerPhone : customerPhone).trim() || undefined,
+          customerName: (isPartyThrowerEnabled && partyThrowerName ? partyThrowerName : customerName).trim() || undefined,
+          discountAmount: currentDiscount,
+          tipAmount: currentTip,
+          coverCharges: currentCover,
+          nonPaymentPenalty: currentPenalty,
+          highwayPaymentVerified,
+          partyThrower: isPartyThrowerEnabled ? { name: partyThrowerName, phone: partyThrowerPhone } : null,
+          splits: guestSplits,
         }),
       })
 
@@ -167,6 +318,10 @@ export function BillSettlementModal({
       setBill(json.data.bill)
       setSettledMethod(method)
       setPaySuccess(true)
+
+      // Sound and haptic vibration trigger
+      triggerNotificationFeedback('payment')
+
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('waiter-tip-updated'))
         window.dispatchEvent(new CustomEvent('bill-settled'))
@@ -180,32 +335,9 @@ export function BillSettlementModal({
     }
   }
 
-  // Send WhatsApp bill link to customer
-  const handleSendWhatsAppLink = () => {
-    if (!bill) return
-    const cleanPhone = customerPhone.replace(/[^0-9]/g, '')
-    const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone || '919876543210'
-
-    const message = encodeURIComponent(
-      `Hello! Thank you for dining at Spice Garden (Table ${tableNumber}). Your Invoice #${bill.billNumber} for ₹${Number(bill.grandTotal).toFixed(2)} is ready.\nSubtotal: ₹${Number(bill.subtotal).toFixed(2)}\nTax: ₹${Number(bill.taxAmount).toFixed(2)}${Number(bill.tipAmount) > 0 ? `\nServer Tip: ₹${Number(bill.tipAmount).toFixed(2)}` : ''}\nGrand Total: ₹${Number(bill.grandTotal).toFixed(2)}.\nPay via UPI: upi://pay?pa=spicegarden@okhdfcbank&pn=Spice%20Garden&am=${Number(bill.grandTotal).toFixed(2)}&cu=INR`
-    )
-
-    const waUrl = `https://wa.me/${targetPhone}?text=${message}`
-    window.open(waUrl, '_blank')
-    setWhatsAppSuccess(true)
-    setTimeout(() => setWhatsAppSuccess(false), 4000)
-  }
-
-  // Handle Printing Bill
   const handlePrint = () => {
     window.print()
   }
-
-  const subtotal = Number(bill?.subtotal || 0)
-  const taxAmount = Number(bill?.taxAmount || 0)
-  const tipAmount = Number(bill?.tipAmount || 0)
-  const discountAmount = Number(bill?.discountAmount || 0)
-  const grandTotal = Number(bill?.grandTotal || subtotal + taxAmount - discountAmount + tipAmount)
 
   const serverDisplayName =
     bill?.waiter?.name ||
@@ -215,7 +347,7 @@ export function BillSettlementModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[92vh] flex flex-col p-0 overflow-hidden bg-card border-border shadow-2xl rounded-3xl">
+      <DialogContent className="sm:max-w-xl max-h-[92vh] flex flex-col p-0 overflow-hidden bg-card border-border shadow-2xl rounded-3xl">
         <DialogHeader className="p-5 pb-3 border-b border-border shrink-0 bg-muted/20">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -225,27 +357,36 @@ export function BillSettlementModal({
               <div>
                 <DialogTitle className="text-base font-extrabold text-foreground flex items-center gap-2">
                   Invoice & Settlement — Table {tableNumber}
+                  {isHighwayOrder && (
+                    <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-500 bg-amber-500/10">
+                      <Car className="size-3 mr-1" />
+                      Highway / GPS
+                    </Badge>
+                  )}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground">
                   {bill?.billNumber || 'Generating bill...'} · Server: {serverDisplayName}
                 </DialogDescription>
               </div>
             </div>
-            {bill?.status && (
-              <Badge
-                variant="outline"
-                className={cn(
-                  'text-[10px] font-extrabold capitalize px-2.5 py-0.5',
-                  bill.status === 'PAID'
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500'
-                    : bill.status === 'REQUESTED'
-                    ? 'border-amber-500/40 bg-amber-500/20 text-amber-500 animate-pulse'
-                    : 'border-primary/40 bg-primary/10 text-primary'
-                )}
-              >
-                {bill.status === 'REQUESTED' ? '🔔 Bill Requested' : bill.status}
-              </Badge>
-            )}
+
+            <div className="flex items-center gap-2">
+              {bill?.status && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'text-[10px] font-extrabold capitalize px-2.5 py-0.5',
+                    bill.status === 'PAID'
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500'
+                      : bill.status === 'REQUESTED'
+                      ? 'border-amber-500/40 bg-amber-500/20 text-amber-500 animate-pulse'
+                      : 'border-primary/40 bg-primary/10 text-primary'
+                  )}
+                >
+                  {bill.status === 'REQUESTED' ? '🔔 Bill Requested' : bill.status}
+                </Badge>
+              )}
+            </div>
           </div>
         </DialogHeader>
 
@@ -276,25 +417,37 @@ export function BillSettlementModal({
                 <span className="font-mono">₹{subtotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-muted-foreground">
-                <span>Tax (GST)</span>
+                <span>Tax (GST 5%)</span>
                 <span className="font-mono">₹{taxAmount.toFixed(2)}</span>
               </div>
-              {discountAmount > 0 && (
+              {currentDiscount > 0 && (
                 <div className="flex justify-between text-emerald-600 dark:text-emerald-400">
                   <span>Discount</span>
-                  <span className="font-mono">-₹{discountAmount.toFixed(2)}</span>
+                  <span className="font-mono">-₹{currentDiscount.toFixed(2)}</span>
                 </div>
               )}
-              {tipAmount > 0 && (
+              {currentCover > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Cover Charges</span>
+                  <span className="font-mono">+₹{currentCover.toFixed(2)}</span>
+                </div>
+              )}
+              {currentPenalty > 0 && (
+                <div className="flex justify-between text-destructive">
+                  <span>Non-Payment Penalty Fee</span>
+                  <span className="font-mono">+₹{currentPenalty.toFixed(2)}</span>
+                </div>
+              )}
+              {currentTip > 0 && (
                 <div className="flex justify-between text-emerald-500 font-bold">
                   <span>Server Tip Settled ({serverDisplayName})</span>
-                  <span className="font-mono">₹{tipAmount.toFixed(2)}</span>
+                  <span className="font-mono">₹{currentTip.toFixed(2)}</span>
                 </div>
               )}
               <Separator className="my-1.5" />
               <div className="flex justify-between text-sm font-black text-foreground">
                 <span>Total Collected</span>
-                <span className="text-primary font-mono">₹{grandTotal.toFixed(2)}</span>
+                <span className="text-primary font-mono text-base">₹{grandTotal.toFixed(2)}</span>
               </div>
             </div>
 
@@ -323,126 +476,310 @@ export function BillSettlementModal({
               </div>
             )}
 
-            {/* Bill Requested Alert Banner */}
-            {bill?.status === 'REQUESTED' && (
-              <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-semibold flex items-center gap-2.5 animate-pulse">
-                <Clock className="size-4 shrink-0" />
-                <span>Guest requested the bill from their mobile QR menu. Ready for settlement.</span>
+            {actionNotice && (
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-semibold flex items-center gap-2">
+                <CheckCircle2 className="size-4 shrink-0" />
+                <span>{actionNotice}</span>
               </div>
             )}
 
-            {/* Itemized Order Items */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-                  Itemized Dishes ({bill?.items?.length || 0})
-                </h4>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handlePrint}
-                  className="h-7 px-2 text-xs font-semibold gap-1 text-muted-foreground hover:text-foreground"
-                >
-                  <Printer className="size-3.5" />
-                  Print
-                </Button>
-              </div>
+            {/* Billing Mode Tabs */}
+            <Tabs value={billingTab} onValueChange={(v: any) => setBillingTab(v)} className="w-full">
+              <TabsList className="grid grid-cols-2 w-full h-9">
+                <TabsTrigger value="standard" className="text-xs font-bold">
+                  Full Bill
+                </TabsTrigger>
+                <TabsTrigger value="split" className="text-xs font-bold">
+                  Split Bill ({splitCount} Guests)
+                </TabsTrigger>
+              </TabsList>
 
-              <div className="divide-y divide-border/60 rounded-2xl border border-border/70 bg-card overflow-hidden">
-                {bill?.items && bill.items.length > 0 ? (
-                  bill.items.map((it: any, idx: number) => (
-                    <div key={idx} className="p-3 flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="size-5 rounded-md bg-muted text-muted-foreground flex items-center justify-center font-bold text-[10px]">
-                          {it.quantity}x
-                        </span>
-                        <span className="font-semibold text-foreground">{it.name || it.itemName}</span>
-                      </div>
-                      <span className="font-mono font-bold text-foreground">
-                        ₹{Number(it.total || it.itemTotal || 0).toFixed(2)}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="p-4 text-center text-xs text-muted-foreground">
-                    No items found on active orders.
+              <TabsContent value="standard" className="space-y-4 mt-3">
+                {/* Party Thrower Designation */}
+                <div className="p-3 rounded-xl border border-primary/20 bg-primary/5 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-foreground flex items-center gap-1.5 cursor-pointer">
+                      <Crown className="size-3.5 text-amber-500" />
+                      Designate &quot;Party Thrower&quot; (Routes full bill to one guest)
+                    </label>
+                    <input
+                      type="checkbox"
+                      checked={isPartyThrowerEnabled}
+                      onChange={(e) => setIsPartyThrowerEnabled(e.target.checked)}
+                      className="size-4 rounded accent-primary cursor-pointer"
+                    />
                   </div>
-                )}
-              </div>
-            </div>
-
-            {/* Tip Highlight Widget if customer tipped */}
-            {tipAmount > 0 && (
-              <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold">
-                  <Heart className="size-4 text-rose-500 fill-rose-500" />
-                  <span>Customer Tip Added for {serverDisplayName}:</span>
+                  {isPartyThrowerEnabled && (
+                    <div className="grid grid-cols-2 gap-2 pt-1 animate-in fade-in">
+                      <Input
+                        placeholder="Party Thrower Name"
+                        value={partyThrowerName}
+                        onChange={(e) => setPartyThrowerName(e.target.value)}
+                        className="h-8 text-xs bg-card"
+                      />
+                      <Input
+                        placeholder="Party Thrower Phone"
+                        value={partyThrowerPhone}
+                        onChange={(e) => setPartyThrowerPhone(e.target.value)}
+                        className="h-8 text-xs bg-card"
+                      />
+                    </div>
+                  )}
                 </div>
-                <span className="font-mono font-black text-emerald-500 text-sm">
-                  +₹{tipAmount.toFixed(2)}
-                </span>
-              </div>
-            )}
 
-            {/* Discount Adjustment */}
-            <div className="p-3.5 rounded-2xl bg-muted/30 border border-border space-y-2">
-              <label className="text-[11px] font-bold text-muted-foreground flex items-center gap-1.5">
-                <Percent className="size-3 text-primary" />
-                Apply Discount (₹)
-              </label>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  min="0"
-                  placeholder="Discount in ₹ (e.g. 50)"
-                  value={discountInput}
-                  onChange={(e) => setDiscountInput(e.target.value)}
-                  className="h-9 text-xs rounded-xl bg-card"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={applyingDiscount}
-                  onClick={handleApplyDiscount}
-                  className="h-9 px-3 rounded-xl text-xs font-bold"
-                >
-                  {applyingDiscount ? <Loader2 className="size-3 animate-spin" /> : 'Apply'}
-                </Button>
-              </div>
-            </div>
+                {/* Itemized Dishes List */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                      Itemized Dishes ({bill?.items?.length || 0})
+                    </h4>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handlePrint}
+                      className="h-7 px-2 text-xs font-semibold gap-1 text-muted-foreground hover:text-foreground"
+                    >
+                      <Printer className="size-3.5" />
+                      Print
+                    </Button>
+                  </div>
 
-            {/* Guest WhatsApp for E-Bill */}
-            <div className="p-3.5 rounded-2xl bg-muted/30 border border-border space-y-2">
-              <label className="text-[11px] font-bold text-muted-foreground flex items-center gap-1.5">
-                <Send className="size-3 text-primary" />
-                Customer Phone for WhatsApp Invoice
-              </label>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="tel"
-                  placeholder="+91 98765 43210"
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
-                  className="h-9 text-xs rounded-xl bg-card"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleSendWhatsAppLink}
-                  className="h-9 px-3 rounded-xl text-xs font-bold gap-1 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10 border-emerald-500/30"
-                >
-                  <Share2 className="size-3.5" />
-                  WhatsApp
-                </Button>
-              </div>
-              {whatsAppSuccess && (
-                <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
-                  WhatsApp bill link opened!
-                </p>
-              )}
-            </div>
+                  <div className="divide-y divide-border/60 rounded-2xl border border-border/70 bg-card overflow-hidden">
+                    {bill?.items && bill.items.length > 0 ? (
+                      bill.items.map((it: any, idx: number) => (
+                        <div key={idx} className="p-2.5 px-3 flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="size-5 rounded-md bg-muted text-muted-foreground flex items-center justify-center font-bold text-[10px]">
+                              {it.quantity}x
+                            </span>
+                            <span className="font-semibold text-foreground">{it.name || it.itemName}</span>
+                          </div>
+                          <span className="font-mono font-bold text-foreground">
+                            ₹{Number(it.total || it.itemTotal || 0).toFixed(2)}
+                          </span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-4 text-center text-xs text-muted-foreground">
+                        No items found on active orders.
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-            {/* Bill Calculation Totals */}
+                {/* Cover Charges & Penalties & Tip Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+                  {/* Tip Input */}
+                  <div className="p-2.5 rounded-xl border border-border bg-card space-y-1">
+                    <label className="text-[11px] font-bold text-muted-foreground flex items-center gap-1">
+                      <Heart className="size-3 text-rose-500 fill-rose-500" />
+                      Waiter Tip (₹)
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <Input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={tipInput}
+                        onChange={(e) => setTipInput(e.target.value)}
+                        className="h-8 text-xs bg-muted/20"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Cover Charges */}
+                  <div className="p-2.5 rounded-xl border border-border bg-card space-y-1">
+                    <label className="text-[11px] font-bold text-muted-foreground flex items-center gap-1">
+                      <DollarSign className="size-3 text-primary" />
+                      Cover Charges (₹)
+                    </label>
+                    <Input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      value={coverChargeInput}
+                      onChange={(e) => setCoverChargeInput(e.target.value)}
+                      className="h-8 text-xs bg-muted/20"
+                    />
+                  </div>
+
+                  {/* Non-Payment Penalty */}
+                  <div className="p-2.5 rounded-xl border border-border bg-card space-y-1 col-span-2 sm:col-span-1">
+                    <label className="text-[11px] font-bold text-destructive flex items-center gap-1">
+                      <AlertTriangle className="size-3" />
+                      Penalty Fee (₹)
+                    </label>
+                    <Input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      value={penaltyInput}
+                      onChange={(e) => setPenaltyInput(e.target.value)}
+                      className="h-8 text-xs bg-muted/20"
+                    />
+                  </div>
+                </div>
+
+                {/* Discount & Review Discount */}
+                <div className="p-3.5 rounded-2xl bg-muted/30 border border-border space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-muted-foreground flex items-center gap-1">
+                      <Percent className="size-3 text-primary" />
+                      Manager Discount (₹)
+                    </label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleApplyReviewDiscount}
+                      className={cn(
+                        'h-6 px-2 text-[10px] font-bold gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10',
+                        reviewDiscountApplied && 'bg-amber-500/20 text-amber-500'
+                      )}
+                    >
+                      <Star className="size-3 fill-amber-500" />
+                      {reviewDiscountApplied ? '10% Review Discount Added' : 'Apply Review Discount (10%)'}
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min="0"
+                      placeholder="Discount in ₹"
+                      value={discountInput}
+                      onChange={(e) => setDiscountInput(e.target.value)}
+                      className="h-8 text-xs bg-card"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={applyingDiscount}
+                      onClick={handleApplyFeesAndDiscounts}
+                      className="h-8 px-3 text-xs font-bold"
+                    >
+                      {applyingDiscount ? <Loader2 className="size-3 animate-spin" /> : 'Save Adjustments'}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Customer Actions & Triggers */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSendBill}
+                    className="h-9 font-semibold text-emerald-600 border-emerald-500/30 hover:bg-emerald-500/10 gap-1.5"
+                  >
+                    <Share2 className="size-3.5" />
+                    Send Bill via WhatsApp
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAskForPendingBill}
+                    className="h-9 font-semibold text-amber-600 border-amber-500/30 hover:bg-amber-500/10 gap-1.5"
+                  >
+                    <BellRing className="size-3.5" />
+                    Ask for Pending Bill
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAskForReview}
+                    className="h-9 font-semibold text-primary border-primary/30 hover:bg-primary/10 gap-1.5"
+                  >
+                    <Star className="size-3.5" />
+                    Ask for Review
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleVerifyHighwayPayment}
+                    className={cn(
+                      'h-9 font-semibold border-border gap-1.5',
+                      highwayPaymentVerified && 'border-emerald-500 text-emerald-500 bg-emerald-500/10'
+                    )}
+                  >
+                    <Car className="size-3.5 text-amber-500" />
+                    {highwayPaymentVerified ? 'Highway Paid Verified' : 'Verify Highway Payment'}
+                  </Button>
+                </div>
+              </TabsContent>
+
+              {/* Split Bill Tab */}
+              <TabsContent value="split" className="space-y-4 mt-3">
+                <div className="p-3 rounded-2xl bg-muted/30 border border-border text-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-foreground">Split Table Bill Between:</span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        className="size-7"
+                        disabled={splitCount <= 2}
+                        onClick={() => setSplitCount(splitCount - 1)}
+                      >
+                        <Minus className="size-3" />
+                      </Button>
+                      <span className="font-mono font-black text-sm px-1.5">{splitCount} Guests</span>
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        className="size-7"
+                        disabled={splitCount >= 10}
+                        onClick={() => setSplitCount(splitCount + 1)}
+                      >
+                        <Plus className="size-3" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-muted-foreground">
+                    Grand Total ₹{grandTotal.toFixed(2)} divided equally into ₹{(grandTotal / splitCount).toFixed(2)} per guest.
+                  </p>
+                </div>
+
+                {/* Per Guest Settlement list */}
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {guestSplits.map((gst, idx) => (
+                    <div
+                      key={idx}
+                      className={cn(
+                        'p-3 rounded-xl border flex items-center justify-between text-xs',
+                        gst.isPaid ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-border bg-card'
+                      )}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Users className="size-4 text-muted-foreground" />
+                        <span className="font-bold text-foreground">{gst.name}</span>
+                        {gst.isPaid && (
+                          <Badge variant="outline" className="text-[9px] border-emerald-500 text-emerald-500 bg-emerald-500/10 font-bold">
+                            Paid
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono font-bold text-foreground">₹{gst.amount.toFixed(2)}</span>
+                        <Button
+                          size="sm"
+                          variant={gst.isPaid ? 'ghost' : 'outline'}
+                          className="h-7 text-[11px] font-bold"
+                          onClick={() => {
+                            setGuestSplits((prev) =>
+                              prev.map((g, i) => (i === idx ? { ...g, isPaid: !g.isPaid } : g))
+                            )
+                          }}
+                        >
+                          {gst.isPaid ? 'Mark Unpaid' : 'Collect Share'}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </TabsContent>
+            </Tabs>
+
+            {/* Bill Summary Footer Table */}
             <div className="p-4 rounded-2xl bg-card border border-border/80 space-y-2 text-xs">
               <div className="flex justify-between text-muted-foreground">
                 <span>Subtotal</span>
@@ -452,16 +789,28 @@ export function BillSettlementModal({
                 <span>GST Tax (5%)</span>
                 <span className="font-mono">₹{taxAmount.toFixed(2)}</span>
               </div>
-              {discountAmount > 0 && (
+              {currentDiscount > 0 && (
                 <div className="flex justify-between text-emerald-600 dark:text-emerald-400 font-medium">
-                  <span>Discount</span>
-                  <span className="font-mono">-₹{discountAmount.toFixed(2)}</span>
+                  <span>Discount Applied</span>
+                  <span className="font-mono">-₹{currentDiscount.toFixed(2)}</span>
                 </div>
               )}
-              {tipAmount > 0 && (
+              {currentCover > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Cover Charges</span>
+                  <span className="font-mono">+₹{currentCover.toFixed(2)}</span>
+                </div>
+              )}
+              {currentPenalty > 0 && (
+                <div className="flex justify-between text-destructive">
+                  <span>Non-Payment Penalty Fee</span>
+                  <span className="font-mono">+₹{currentPenalty.toFixed(2)}</span>
+                </div>
+              )}
+              {currentTip > 0 && (
                 <div className="flex justify-between text-emerald-500 font-bold">
-                  <span>Customer Tip</span>
-                  <span className="font-mono">+₹{tipAmount.toFixed(2)}</span>
+                  <span>Server Tip</span>
+                  <span className="font-mono">+₹{currentTip.toFixed(2)}</span>
                 </div>
               )}
               <Separator className="my-1.5" />
@@ -477,7 +826,7 @@ export function BillSettlementModal({
         {!paySuccess && (
           <div className="p-4 border-t border-border bg-card shrink-0 space-y-2">
             <p className="text-[11px] text-muted-foreground font-semibold text-center mb-1">
-              Confirm Settlement & Free Table
+              Mark Bill as Paid & Release Table
             </p>
             <div className="grid grid-cols-2 gap-2">
               <Button
@@ -487,7 +836,7 @@ export function BillSettlementModal({
                 className="h-11 rounded-2xl font-bold text-xs gap-1.5 border-border hover:bg-muted"
               >
                 <Banknote className="size-4 text-emerald-500" />
-                <span>Mark Paid (Cash)</span>
+                <span>Mark as Paid (Cash)</span>
               </Button>
 
               <Button
@@ -497,7 +846,7 @@ export function BillSettlementModal({
                 className="h-11 rounded-2xl font-extrabold text-xs gap-1.5 bg-primary text-primary-foreground shadow-md hover:bg-primary/90"
               >
                 <QrCode className="size-4" />
-                <span>Mark Paid (UPI / Card)</span>
+                <span>Mark as Paid (UPI / Card)</span>
               </Button>
             </div>
           </div>
@@ -506,4 +855,3 @@ export function BillSettlementModal({
     </Dialog>
   )
 }
-

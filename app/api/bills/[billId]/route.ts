@@ -40,7 +40,10 @@ export async function GET(
     const taxAmount = Number(bill.taxAmount || 0)
     const discountAmount = Number(bill.discountAmount || 0)
     const tipAmount = Number(bill.tipAmount || 0)
-    const grandTotal = Number(bill.grandTotal || subtotal + taxAmount - discountAmount + tipAmount)
+    const meta = (bill.metadata as any) || {}
+    const coverCharges = Number(meta.coverCharges || 0)
+    const nonPaymentPenalty = Number(meta.nonPaymentPenalty || 0)
+    const grandTotal = Number(bill.grandTotal || subtotal + taxAmount - discountAmount + tipAmount + coverCharges + nonPaymentPenalty)
 
     return NextResponse.json({
       success: true,
@@ -59,6 +62,12 @@ export async function GET(
         taxAmount,
         discountAmount,
         tipAmount,
+        coverCharges,
+        nonPaymentPenalty,
+        partyThrower: meta.partyThrower || null,
+        splits: meta.splits || [],
+        highwayPaymentVerified: Boolean(meta.highwayPaymentVerified),
+        metadata: meta,
         grandTotal,
         paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
         createdAt: bill.createdAt.toISOString(),
@@ -101,7 +110,17 @@ export async function PATCH(
   try {
     const { billId } = await params
     const body = await request.json().catch(() => ({}))
-    const { discountAmount, customerName, customerPhone } = body
+    const {
+      discountAmount,
+      customerName,
+      customerPhone,
+      tipAmount: reqTip,
+      coverCharges,
+      nonPaymentPenalty,
+      partyThrower,
+      splits,
+      highwayPaymentVerified,
+    } = body
 
     const existing = await prisma.bill.findUnique({
       where: { id: billId },
@@ -115,24 +134,40 @@ export async function PATCH(
       return NextResponse.json({ success: false, message: 'Cannot edit a paid bill' }, { status: 400 })
     }
 
+    const prevMeta = (existing.metadata as any) || {}
+    const finalCover = coverCharges !== undefined ? Math.max(0, Number(coverCharges)) : Number(prevMeta.coverCharges || 0)
+    const finalPenalty = nonPaymentPenalty !== undefined ? Math.max(0, Number(nonPaymentPenalty)) : Number(prevMeta.nonPaymentPenalty || 0)
+    const finalPartyThrower = partyThrower !== undefined ? partyThrower : prevMeta.partyThrower || null
+    const finalSplits = splits !== undefined ? splits : prevMeta.splits || []
+    const finalHighwayVerified = highwayPaymentVerified !== undefined ? Boolean(highwayPaymentVerified) : Boolean(prevMeta.highwayPaymentVerified)
+
     const subtotal = Number(existing.subtotal || 0)
     const currentDiscount =
       discountAmount !== undefined ? Math.max(0, Number(discountAmount)) : Number(existing.discountAmount || 0)
     const taxPercentage = 0.05
     const taxable = Math.max(0, subtotal - currentDiscount)
     const taxAmount = Math.round(taxable * taxPercentage * 100) / 100
-    const tipAmount = Number(existing.tipAmount || 0)
-    const grandTotal = Math.round((taxable + taxAmount + tipAmount) * 100) / 100
+    const tipAmount = reqTip !== undefined ? Math.max(0, Number(reqTip)) : Number(existing.tipAmount || 0)
+    const grandTotal = Math.round((taxable + taxAmount + tipAmount + finalCover + finalPenalty) * 100) / 100
 
     const updated = await prisma.bill.update({
       where: { id: billId },
       data: {
         discountAmount: currentDiscount,
+        tipAmount,
         taxAmount,
         grandTotal,
         totalAmount: grandTotal,
         ...(customerName !== undefined ? { customerName } : {}),
         ...(customerPhone !== undefined ? { customerPhone } : {}),
+        metadata: {
+          ...prevMeta,
+          coverCharges: finalCover,
+          nonPaymentPenalty: finalPenalty,
+          partyThrower: finalPartyThrower,
+          splits: finalSplits,
+          highwayPaymentVerified: finalHighwayVerified,
+        },
       },
       include: {
         items: true,

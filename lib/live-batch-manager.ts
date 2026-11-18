@@ -222,6 +222,7 @@ export async function addAddonToBatch(params: {
   customerName?: string
   customerId?: string
   quantity?: number
+  bypassLock?: boolean
 }): Promise<{
   success: boolean
   batch?: LiveBatch
@@ -240,7 +241,7 @@ export async function addAddonToBatch(params: {
   } else if (params.dishName) {
     const dishKey = params.dishName.trim().toLowerCase()
     for (const b of liveBatches.values()) {
-      if (b.dishName.trim().toLowerCase() === dishKey && b.status === 'PREPARING_LOCK_WINDOW') {
+      if (b.dishName.trim().toLowerCase() === dishKey && (params.bypassLock || b.status === 'PREPARING_LOCK_WINDOW')) {
         targetBatch = b
         break
       }
@@ -255,8 +256,8 @@ export async function addAddonToBatch(params: {
     }
   }
 
-  // 1. Strict Server Timestamp Check (Race-condition proof)
-  if (now > targetBatch.timerExpiresAt || targetBatch.status !== 'PREPARING_LOCK_WINDOW') {
+  // 1. Strict Server Timestamp Check (Race-condition proof) — Skipped if bypassLock is active
+  if (!params.bypassLock && (now > targetBatch.timerExpiresAt || targetBatch.status !== 'PREPARING_LOCK_WINDOW')) {
     targetBatch.status = 'IN_KITCHEN_LOCKED'
     targetBatch.updatedAt = now
     invalidateKDSCache()

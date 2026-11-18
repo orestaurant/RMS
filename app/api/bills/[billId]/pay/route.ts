@@ -22,6 +22,12 @@ export async function POST(
       customerPhone,
       customerName,
       discountAmount,
+      tipAmount: reqTip,
+      coverCharges,
+      nonPaymentPenalty,
+      highwayPaymentVerified,
+      partyThrower,
+      splits,
     } = body
 
     const existing = await prisma.bill.findUnique({
@@ -49,12 +55,17 @@ export async function POST(
       )
     }
 
+    const prevMeta = (existing.metadata as any) || {}
+    const finalCover = coverCharges !== undefined ? Math.max(0, Number(coverCharges)) : Number(prevMeta.coverCharges || 0)
+    const finalPenalty = nonPaymentPenalty !== undefined ? Math.max(0, Number(nonPaymentPenalty)) : Number(prevMeta.nonPaymentPenalty || 0)
+    const finalHighwayVerified = highwayPaymentVerified !== undefined ? Boolean(highwayPaymentVerified) : Boolean(prevMeta.highwayPaymentVerified)
+
     const subtotal = Number(existing.subtotal || 0)
     const taxAmount = Number(existing.taxAmount || 0)
-    const tipAmount = Number(existing.tipAmount || 0)
+    const tipAmount = reqTip !== undefined ? Math.max(0, Number(reqTip)) : Number(existing.tipAmount || 0)
     const currentDiscount =
       discountAmount !== undefined ? Math.max(0, Number(discountAmount)) : Number(existing.discountAmount || 0)
-    const grandTotal = Math.round((subtotal + taxAmount - currentDiscount + tipAmount) * 100) / 100
+    const grandTotal = Math.round((subtotal + taxAmount - currentDiscount + tipAmount + finalCover + finalPenalty) * 100) / 100
 
     const now = new Date()
     const methodStr = String(paymentMethod).toUpperCase()
@@ -102,6 +113,7 @@ export async function POST(
           paymentStatus: 'completed',
           paymentMethod: methodStr,
           discountAmount: currentDiscount,
+          tipAmount,
           grandTotal,
           totalAmount: grandTotal,
           amountPaid: grandTotal,
@@ -110,6 +122,14 @@ export async function POST(
           settledAt: now,
           customerPhone: customerPhone || existing.customerPhone,
           customerName: customerName || existing.customerName,
+          metadata: {
+            ...prevMeta,
+            coverCharges: finalCover,
+            nonPaymentPenalty: finalPenalty,
+            highwayPaymentVerified: finalHighwayVerified,
+            partyThrower: partyThrower || prevMeta.partyThrower || null,
+            splits: splits || prevMeta.splits || [],
+          },
           ...(finalWaiterId ? { waiterId: finalWaiterId } : {}),
         },
         include: {

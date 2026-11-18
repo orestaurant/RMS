@@ -27,8 +27,12 @@ import {
   ArrowRight,
   User,
   ShieldCheck,
+  Users,
+  Crown,
+  BellRing,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { CustomerSplitBillModal } from './customer-split-bill-modal'
 
 interface CustomerBillModalProps {
   open: boolean
@@ -66,6 +70,20 @@ export function CustomerBillModal({
   // Guest details
   const [customerName, setCustomerName] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
+
+  // Split bill modal state
+  const [showSplitModal, setShowSplitModal] = useState(false)
+
+  // Party Thrower (Single Host Payer) state
+  const [partyThrower, setPartyThrower] = useState<{ name: string; phone?: string } | null>(null)
+  const [isAssigningHost, setIsAssigningHost] = useState(false)
+  const [hostNameInput, setHostNameInput] = useState('')
+  const [hostPhoneInput, setHostPhoneInput] = useState('')
+  const [hostAssignLoading, setHostAssignLoading] = useState(false)
+
+  // Ask for Pending Bill state
+  const [pendingBillAlertDone, setPendingBillAlertDone] = useState(false)
+  const [askBillLoading, setAskBillLoading] = useState(false)
 
   // Check if at least one order has been served to unlock tipping
   const hasServedOrder = tableOrders.some((ord) => {
@@ -142,6 +160,9 @@ export function CustomerBillModal({
         }
 
         setBill(json.data)
+        if (json.data.partyThrower || json.data.metadata?.partyThrower) {
+          setPartyThrower(json.data.partyThrower || json.data.metadata?.partyThrower)
+        }
 
         // If user already tapped a tip optimistically, sync with server immediately
         if (pendingTipRef.current !== null && pendingTipRef.current !== json.data.tipAmount) {
@@ -260,6 +281,84 @@ export function CustomerBillModal({
       setError(err.message || 'Payment processing failed.')
     } finally {
       setPayLoading(false)
+    }
+  }
+
+  // Handle Assigning Party Thrower (Single Host Payer)
+  const handleAssignPartyThrower = async () => {
+    if (!hostNameInput.trim()) return
+    try {
+      setHostAssignLoading(true)
+      const hostPayload = {
+        name: hostNameInput.trim(),
+        phone: hostPhoneInput.trim() || undefined,
+        assignedAt: new Date().toISOString(),
+      }
+
+      if (bill?.id) {
+        await fetch(`/api/bills/${bill.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ partyThrower: hostPayload }),
+        })
+      }
+
+      setPartyThrower(hostPayload)
+      setIsAssigningHost(false)
+
+      // Alert waiter about Party Thrower
+      try {
+        await fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'party_thrower_assigned',
+            type: 'alert',
+            title: `🎉 Party Thrower Assigned — ${formattedTableSpot}`,
+            body: `${hostPayload.name} (${hostPayload.phone || 'Host'}) is designated as sole payer for ${formattedTableSpot}.`,
+            metadata: {
+              tableNumber: formattedTableSpot,
+              hostName: hostPayload.name,
+              hostPhone: hostPayload.phone,
+            },
+          }),
+        })
+      } catch {}
+    } catch (err: any) {
+      console.error('Failed to assign party thrower:', err)
+      setError('Failed to assign party thrower.')
+    } finally {
+      setHostAssignLoading(false)
+    }
+  }
+
+  // Handle Ask for Pending Bill
+  const handleAskPendingBill = async () => {
+    try {
+      setAskBillLoading(true)
+      await loadBill(true)
+      setPendingBillAlertDone(true)
+
+      try {
+        await fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'pending_bill_request',
+            type: 'alert',
+            title: `🔔 Pending Bill Requested — ${formattedTableSpot}`,
+            body: `Guest requested unpaid balance breakdown (₹${grandTotal.toFixed(2)}) at ${formattedTableSpot}.`,
+            metadata: {
+              tableNumber: formattedTableSpot,
+              amount: grandTotal,
+            },
+          }),
+        })
+      } catch {}
+    } catch (err: any) {
+      console.error('Error asking for pending bill:', err)
+    } finally {
+      setAskBillLoading(false)
     }
   }
 
@@ -391,6 +490,125 @@ export function CustomerBillModal({
                 <span>Waiter notified! They are bringing your physical bill & cash change.</span>
               </div>
             )}
+
+            {pendingBillAlertDone && (
+              <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-600 dark:text-emerald-400 text-xs font-semibold flex items-center gap-2.5 animate-in fade-in">
+                <BellRing className="size-4 shrink-0 text-emerald-500" />
+                <span>Waiter notified to bring & settle your pending bill (₹{grandTotal.toFixed(2)}) at {formattedTableSpot}!</span>
+              </div>
+            )}
+
+            {/* ── 1. Party Thrower (Single Host Payer) Section ── */}
+            {partyThrower && !isAssigningHost ? (
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-transparent border border-amber-500/30 flex items-center justify-between text-xs animate-in fade-in">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="size-8 rounded-xl bg-amber-500/20 text-amber-500 flex items-center justify-center shrink-0">
+                    <Crown className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-extrabold text-foreground">🎉 Party Thrower:</span>
+                      <span className="font-black text-amber-600 dark:text-amber-400 truncate">
+                        {partyThrower.name}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground truncate">
+                      Sole host payer · Waiter collection routed to {partyThrower.name} {partyThrower.phone ? `(${partyThrower.phone})` : ''}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-[11px] text-muted-foreground hover:text-foreground shrink-0"
+                  onClick={() => setIsAssigningHost(true)}
+                >
+                  Change
+                </Button>
+              </div>
+            ) : isAssigningHost ? (
+              <div className="p-4 rounded-2xl bg-muted/40 border border-amber-500/30 space-y-3 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <Crown className="size-3.5 text-amber-500" />
+                    Assign Party Thrower (Host Payer)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsAssigningHost(false)}
+                    className="text-[11px] text-muted-foreground hover:text-foreground"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Designate one person to cover the entire table bill. Waiter and digital payment collection will route to this host.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Input
+                    placeholder="Host Name (e.g. Rahul)"
+                    value={hostNameInput}
+                    onChange={(e) => setHostNameInput(e.target.value)}
+                    className="h-8.5 text-xs bg-background"
+                  />
+                  <Input
+                    placeholder="Host Phone (optional)"
+                    value={hostPhoneInput}
+                    onChange={(e) => setHostPhoneInput(e.target.value)}
+                    className="h-8.5 text-xs bg-background"
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  disabled={hostAssignLoading || !hostNameInput.trim()}
+                  onClick={handleAssignPartyThrower}
+                  className="w-full h-8.5 text-xs font-bold bg-amber-500 hover:bg-amber-600 text-black cursor-pointer"
+                >
+                  {hostAssignLoading ? <Loader2 className="size-3 animate-spin mr-1.5" /> : null}
+                  Confirm Party Thrower
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between p-2.5 rounded-2xl bg-muted/20 border border-border/60 text-xs">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Crown className="size-3.5 text-amber-500/80" />
+                  <span className="text-[11px]">Dining with a group or host?</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAssigningHost(true)}
+                  className="text-[11px] font-bold text-primary hover:underline"
+                >
+                  + Assign Party Thrower
+                </button>
+              </div>
+            )}
+
+            {/* ── 2. Quick Action Bar: Split Bill & Ask for Pending Bill ── */}
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowSplitModal(true)}
+                className="h-9.5 text-xs font-bold gap-1.5 rounded-xl border-border/80 hover:border-primary/40 cursor-pointer"
+              >
+                <Users className="size-3.5 text-primary" />
+                <span>Split Bill</span>
+              </Button>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={askBillLoading || pendingBillAlertDone}
+                onClick={handleAskPendingBill}
+                className="h-9.5 text-xs font-bold gap-1.5 rounded-xl border-border/80 hover:border-primary/40 cursor-pointer"
+              >
+                <BellRing className={cn('size-3.5 text-amber-500', askBillLoading && 'animate-spin')} />
+                <span>{pendingBillAlertDone ? 'Bill Alerted' : 'Ask for Pending Bill'}</span>
+              </Button>
+            </div>
 
             {/* Itemized Order Breakdown */}
             <div className="space-y-2">
@@ -617,6 +835,22 @@ export function CustomerBillModal({
           </div>
         )}
       </DialogContent>
+
+      {/* Split Bill Modal */}
+      <CustomerSplitBillModal
+        open={showSplitModal}
+        onOpenChange={setShowSplitModal}
+        tableNumber={tableNumber}
+        billId={bill?.id}
+        subtotal={subtotal}
+        taxAmount={taxAmount}
+        grandTotal={grandTotal}
+        items={displayItems}
+        waiterName={waiterName}
+        onSuccess={() => {
+          onSuccess?.()
+        }}
+      />
     </Dialog>
   )
 }

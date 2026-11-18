@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   UtensilsCrossed,
@@ -18,6 +18,8 @@ import {
   Sparkles,
   ShieldCheck,
   Building2,
+  QrCode,
+  MapPin,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,17 +30,47 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { clearAuthCache } from '@/hooks/useAuthContext'
 
 interface CustomerAuthPageProps {
-  initialTab?: 'signin' | 'register'
+  initialTab?: 'guest' | 'signin' | 'register'
 }
 
-export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAuthPageProps) {
+function CustomerAuthContent({ initialTab = 'guest' }: CustomerAuthPageProps) {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState<'signin' | 'register'>(initialTab)
+  const searchParams = useSearchParams()
+
+  const urlTab = searchParams.get('tab') as 'guest' | 'signin' | 'register' | null
+  const urlTable = searchParams.get('table') || searchParams.get('tableNumber') || ''
+
+  const [activeTab, setActiveTab] = useState<'guest' | 'signin' | 'register'>(
+    urlTab || (urlTable ? 'guest' : initialTab)
+  )
 
   // Clear any existing admin cached auth context when accessing customer portal
   useEffect(() => {
     clearAuthCache()
   }, [])
+
+  // Guest Login State (Instant Table QR / Mobile Session)
+  const [guestName, setGuestName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('rms_customer_name') || ''
+    }
+    return ''
+  })
+  const [guestPhone, setGuestPhone] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('rms_customer_phone') || ''
+    }
+    return ''
+  })
+  const [guestTable, setGuestTable] = useState(() => {
+    if (urlTable) return urlTable
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('rms_customer_table') || '1'
+    }
+    return '1'
+  })
+  const [guestLoading, setGuestLoading] = useState(false)
+  const [guestError, setGuestError] = useState<string | null>(null)
 
   // Sign In State
   const [loginEmail, setLoginEmail] = useState('')
@@ -56,6 +88,56 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
   const [showRegPassword, setShowRegPassword] = useState(false)
   const [regLoading, setRegLoading] = useState(false)
   const [regError, setRegError] = useState<string | null>(null)
+
+  const handleGuestLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const nameClean = guestName.trim() || 'Guest Diner'
+    const phoneClean = guestPhone.trim()
+
+    if (phoneClean && phoneClean.replace(/[^0-9]/g, '').length < 7) {
+      setGuestError('Please enter a valid mobile number (or leave blank for instant dining).')
+      return
+    }
+
+    setGuestLoading(true)
+    setGuestError(null)
+
+    try {
+      const res = await fetch('/api/customer/auth/guest-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: nameClean,
+          phone: phoneClean || undefined,
+          tableNumber: guestTable.trim() || '1',
+        }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok || !data.success) {
+        setGuestError(data.message || 'Failed to create guest session.')
+        setGuestLoading(false)
+        return
+      }
+
+      // Persist in localStorage for instant multi-guest table awareness
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('rms_customer_name', data.customer?.name || nameClean)
+        if (phoneClean) localStorage.setItem('rms_customer_phone', phoneClean)
+        if (guestTable) localStorage.setItem('rms_customer_table', guestTable.trim())
+      }
+
+      // Route directly to active menu with pre-selected table
+      const targetUrl = guestTable
+        ? `/menu?table=${encodeURIComponent(guestTable.trim())}`
+        : '/menu'
+      window.location.href = targetUrl
+    } catch (err: any) {
+      setGuestError(err?.message || 'Network error occurred. Please try again.')
+      setGuestLoading(false)
+    }
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -85,8 +167,13 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
         return
       }
 
-      // Success: navigate directly to Live Orders default view
-      window.location.href = data.redirect || '/orders'
+      if (typeof window !== 'undefined' && data.customer) {
+        localStorage.setItem('rms_customer_name', data.customer.name || '')
+        if (data.customer.mobile) localStorage.setItem('rms_customer_phone', data.customer.mobile)
+      }
+
+      // Success: navigate directly to Menu or Live Orders view
+      window.location.href = data.redirect || (guestTable ? `/menu?table=${encodeURIComponent(guestTable)}` : '/orders')
     } catch (err: any) {
       setLoginError(err?.message || 'A network error occurred. Please try again.')
       setLoginErrorCode(null)
@@ -129,8 +216,13 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
         return
       }
 
-      // Success: navigate directly to Live Orders default view
-      window.location.href = data.redirect || '/orders'
+      if (typeof window !== 'undefined' && data.customer) {
+        localStorage.setItem('rms_customer_name', data.customer.name || regName)
+        if (regMobile) localStorage.setItem('rms_customer_phone', regMobile)
+      }
+
+      // Success: navigate directly to menu or orders view
+      window.location.href = data.redirect || (guestTable ? `/menu?table=${encodeURIComponent(guestTable)}` : '/orders')
     } catch (err: any) {
       setRegError(err?.message || 'A network error occurred. Please try again.')
       setRegLoading(false)
@@ -161,9 +253,9 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
               </Badge>
             </h1>
             <p className="text-xs text-muted-foreground mt-0.5 flex items-center justify-center gap-1">
-              <span>Access menus, reservations & dining</span>
+              <span>Instant Table Menu, Dish Booking & Live Orders</span>
               <span className="text-muted-foreground/60">•</span>
-              <span className="text-primary hover:underline text-[11px]">← Back to Home</span>
+              <span className="text-primary hover:underline text-[11px]">Home</span>
             </p>
           </div>
         </Link>
@@ -174,31 +266,137 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
             <Tabs
               value={activeTab}
               onValueChange={(val) => {
-                setActiveTab(val as 'signin' | 'register')
+                setActiveTab(val as 'guest' | 'signin' | 'register')
                 setLoginError(null)
                 setRegError(null)
+                setGuestError(null)
               }}
               className="w-full"
             >
-              <TabsList className="grid w-full grid-cols-2 mb-2">
+              <TabsList className="grid w-full grid-cols-3 mb-2">
+                <TabsTrigger value="guest" className="text-xs font-semibold cursor-pointer gap-1">
+                  <Sparkles className="size-3 text-amber-500" />
+                  <span>Guest</span>
+                </TabsTrigger>
                 <TabsTrigger value="signin" className="text-xs font-semibold cursor-pointer">
                   Sign In
                 </TabsTrigger>
                 <TabsTrigger value="register" className="text-xs font-semibold cursor-pointer">
-                  Create Account
+                  Sign Up
                 </TabsTrigger>
               </TabsList>
             </Tabs>
           </CardHeader>
 
           <CardContent className="space-y-4 pt-0">
-            {activeTab === 'signin' ? (
-              /* ─── Sign In Form ───────────────────────── */
+            {activeTab === 'guest' ? (
+              /* ─── 1. Instant Guest Login (No Password) ────── */
               <div className="space-y-4">
                 <div className="space-y-1">
-                  <CardTitle className="text-base font-semibold text-foreground">Welcome Customer</CardTitle>
+                  <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+                    <span>Quick Guest Dine-In</span>
+                    <Badge className="text-[10px] bg-primary/15 text-primary border-primary/20 py-0 h-4">
+                      No Password
+                    </Badge>
+                  </CardTitle>
                   <CardDescription className="text-xs text-muted-foreground">
-                    Sign in with your email to access the restaurant portal
+                    Enter your name & mobile to browse the live menu and book dishes immediately.
+                  </CardDescription>
+                </div>
+
+                {guestError && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive animate-in fade-in"
+                  >
+                    <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                    <span className="font-medium">{guestError}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleGuestLogin} className="space-y-3.5">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="guest-name" className="text-xs font-medium text-foreground">
+                      Your Name
+                    </Label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                      <Input
+                        id="guest-name"
+                        type="text"
+                        value={guestName}
+                        onChange={(e) => setGuestName(e.target.value)}
+                        placeholder="e.g. Aarav Sharma"
+                        required
+                        disabled={guestLoading}
+                        className="pl-9 text-sm h-10 bg-background/50"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="guest-phone" className="text-xs font-medium text-foreground">
+                      Mobile Number <span className="text-muted-foreground font-normal">(For order SMS & e-bill)</span>
+                    </Label>
+                    <div className="relative">
+                      <Phone className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                      <Input
+                        id="guest-phone"
+                        type="tel"
+                        value={guestPhone}
+                        onChange={(e) => setGuestPhone(e.target.value)}
+                        placeholder="+91 98765 43210"
+                        disabled={guestLoading}
+                        className="pl-9 text-sm h-10 bg-background/50"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="guest-table" className="text-xs font-medium text-foreground">
+                      Table / Spot Number
+                    </Label>
+                    <div className="relative">
+                      <MapPin className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                      <Input
+                        id="guest-table"
+                        type="text"
+                        value={guestTable}
+                        onChange={(e) => setGuestTable(e.target.value)}
+                        placeholder="e.g. Table 4"
+                        disabled={guestLoading}
+                        className="pl-9 text-sm h-10 bg-background/50 font-medium"
+                      />
+                    </div>
+                  </div>
+
+                  <Button
+                    type="submit"
+                    className="w-full h-11 text-sm font-bold gap-2 shadow-lg shadow-primary/25 mt-2 cursor-pointer"
+                    disabled={guestLoading || !guestName.trim()}
+                  >
+                    {guestLoading ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        <span>Starting Session...</span>
+                      </>
+                    ) : (
+                      <>
+                        <UtensilsCrossed className="size-4" />
+                        <span>Start Dining & Browse Menu</span>
+                        <ArrowRight className="size-4 ml-auto" />
+                      </>
+                    )}
+                  </Button>
+                </form>
+              </div>
+            ) : activeTab === 'signin' ? (
+              /* ─── 2. Sign In Form ───────────────────────── */
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <CardTitle className="text-base font-semibold text-foreground">Welcome Back</CardTitle>
+                  <CardDescription className="text-xs text-muted-foreground">
+                    Sign in with your email to access your rewards and dining history
                   </CardDescription>
                 </div>
 
@@ -212,7 +410,6 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
                       <span className="font-medium leading-relaxed">{loginError}</span>
                     </div>
 
-                    {/* Direct link / button to Create Guest / Customer Account flow */}
                     {(loginErrorCode === 'ACCOUNT_NOT_FOUND' || loginError.includes('create a customer account')) && (
                       <div className="pt-1 pl-6">
                         <Button
@@ -220,29 +417,14 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
                           variant="outline"
                           size="sm"
                           onClick={() => {
-                            setActiveTab('register')
-                            setRegEmail(loginEmail)
-                            setLoginError(null)
-                            setLoginErrorCode(null)
+                            setActiveTab('guest')
+                            setGuestError(null)
                           }}
                           className="h-8 text-xs font-semibold bg-destructive/15 border-destructive/30 hover:bg-destructive/25 text-destructive gap-1.5 cursor-pointer shadow-xs"
                         >
-                          <span>Create Guest Account</span>
+                          <span>Use Guest Login Instead</span>
                           <ArrowRight className="size-3" />
                         </Button>
-                      </div>
-                    )}
-
-                    {/* Direct link to Staff & Admin Sign In if staff credentials entered */}
-                    {loginError.includes('Staff & Admin Sign In') && (
-                      <div className="pt-1 pl-6">
-                        <Link
-                          href="/login"
-                          className="font-semibold underline underline-offset-2 hover:opacity-80 inline-flex items-center gap-1 text-xs"
-                        >
-                          <span>Go to Staff & Admin Sign In</span>
-                          <ArrowRight className="size-3" />
-                        </Link>
                       </div>
                     )}
                   </div>
@@ -315,12 +497,12 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
                 </form>
               </div>
             ) : (
-              /* ─── Create Account Form ───────────────── */
+              /* ─── 3. Create Account Form ───────────────── */
               <div className="space-y-4">
                 <div className="space-y-1">
                   <CardTitle className="text-base font-semibold text-foreground">Create Customer Account</CardTitle>
                   <CardDescription className="text-xs text-muted-foreground">
-                    Register to access menus, reservations, rewards and orders
+                    Register to access loyalty points, repeat orders, and priority service
                   </CardDescription>
                 </div>
 
@@ -456,9 +638,17 @@ export default function CustomerAuthPage({ initialTab = 'register' }: CustomerAu
 
         {/* Security badge */}
         <p className="text-center text-[11px] text-muted-foreground">
-          Protected by PostgreSQL & Prisma ORM • JWT HttpOnly Sessions
+          Protected by PostgreSQL & Prisma ORM • Instant Table Guest Sessions
         </p>
       </div>
     </div>
+  )
+}
+
+export default function CustomerAuthPage(props: CustomerAuthPageProps) {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center p-4">Loading...</div>}>
+      <CustomerAuthContent {...props} />
+    </Suspense>
   )
 }

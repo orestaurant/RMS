@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Users,
   Clock,
@@ -16,6 +16,18 @@ import {
   Search,
   Trash2,
   Receipt,
+  UtensilsCrossed,
+  Sparkles,
+  Share2,
+  History,
+  Zap,
+  ShieldAlert,
+  ShieldCheck,
+  Check,
+  CheckCircle2,
+  ShoppingBag,
+  SlidersHorizontal,
+  UserCheck,
 } from 'lucide-react'
 import { BillSettlementModal } from '@/components/billing/bill-settlement-modal'
 import { WaiterTipTracker } from '@/components/billing/waiter-tip-tracker'
@@ -42,7 +54,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { TableQRGenerator } from '@/components/tables/table-qr-generator'
+import { TableDishMenuModal } from '@/components/tables/table-dish-menu-modal'
+import { TakeawayQRScannerModal } from '@/components/tables/takeaway-qr-scanner-modal'
+import { WaiterHistoryModal } from '@/components/tables/waiter-history-modal'
+import { KpiDetailDrawer } from '@/components/tables/kpi-detail-drawer'
+import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 import { useAuthContext } from '@/hooks/useAuthContext'
+import { triggerNotificationFeedback } from '@/lib/sound-vibrate'
+import { checkPermission } from '@/lib/rolesAndPermission'
 
 export function formatTableDisplay(tableNumber: string | number, isVip?: boolean) {
   let s = String(tableNumber || '').trim()
@@ -140,15 +159,21 @@ const statusConfig: Record<
 function TableCard({
   table,
   onGenerateQR,
+  onShareQR,
+  onOpenMenu,
   onUpdateStatus,
   onDelete,
   onGenerateBill,
+  onAssignWaiter,
 }: {
   table: TableData
   onGenerateQR?: (tableNum: string | number) => void
+  onShareQR?: (tableNum: string | number) => void
+  onOpenMenu?: (table: TableData) => void
   onUpdateStatus?: (tableId: string, status: TableStatus) => Promise<void>
   onDelete?: (table: TableData) => void
   onGenerateBill?: (table: TableData) => void
+  onAssignWaiter?: (table: TableData) => void
 }) {
   const normStatus: TableStatus = statusConfig[table.status] ? table.status : 'available'
   const cfg = statusConfig[normStatus]
@@ -157,8 +182,9 @@ function TableCard({
 
   return (
     <div
+      onClick={() => onOpenMenu?.(table)}
       className={cn(
-        'group relative rounded-2xl border p-4 transition-all duration-200 cursor-pointer select-none flex flex-col justify-between',
+        'group relative rounded-2xl border p-4 transition-all duration-200 cursor-pointer select-none flex flex-col justify-between hover:shadow-md hover:scale-[1.01]',
         table.billRequested && 'border-amber-500/60 bg-amber-500/10 ring-2 ring-amber-500/30',
         cfg.card
       )}
@@ -186,6 +212,7 @@ function TableCard({
             </Badge>
             <DropdownMenu>
               <DropdownMenuTrigger
+                onClick={(e) => e.stopPropagation()}
                 render={
                   <Button
                     variant="ghost"
@@ -198,22 +225,75 @@ function TableCard({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
-                  onClick={() => onGenerateQR?.(table.tableNumber || table.number)}
-                  className="gap-2 font-medium text-primary"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onOpenMenu?.(table)
+                  }}
+                  className="gap-2 font-bold text-primary cursor-pointer"
+                >
+                  <UtensilsCrossed className="size-3.5" />
+                  Take Order / Dish Menu
+                </DropdownMenuItem>
+
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onAssignWaiter?.(table)
+                  }}
+                  className="gap-2 font-semibold text-blue-600 dark:text-blue-400 cursor-pointer"
+                >
+                  <UserCheck className="size-3.5" />
+                  Assign Waiter
+                </DropdownMenuItem>
+
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onShareQR?.(table.tableNumber || table.number)
+                  }}
+                  className="gap-2 font-medium text-emerald-600 dark:text-emerald-400 cursor-pointer"
+                >
+                  <Share2 className="size-3.5" />
+                  Send Booking QR (WhatsApp)
+                </DropdownMenuItem>
+
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onGenerateQR?.(table.tableNumber || table.number)
+                  }}
+                  className="gap-2 font-medium text-muted-foreground cursor-pointer"
                 >
                   <QrCode className="size-3.5" />
                   Print QR Sticker
                 </DropdownMenuItem>
 
+                <DropdownMenuSeparator />
+
                 {normStatus === 'available' && (
                   <>
-                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'occupied')}>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUpdateStatus?.(table.id, 'occupied')
+                      }}
+                    >
                       Seat Guests
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'reserved')}>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUpdateStatus?.(table.id, 'reserved')
+                      }}
+                    >
                       Mark Reserved
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'cleaning')}>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUpdateStatus?.(table.id, 'cleaning')
+                      }}
+                    >
                       Mark Cleaning
                     </DropdownMenuItem>
                   </>
@@ -221,36 +301,55 @@ function TableCard({
 
                 {normStatus === 'occupied' && (
                   <>
-                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'cleaning')}>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUpdateStatus?.(table.id, 'cleaning')
+                      }}
+                    >
                       Mark Cleaning
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'available')}>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUpdateStatus?.(table.id, 'available')
+                      }}
+                    >
                       Free Table (Available)
                     </DropdownMenuItem>
                   </>
                 )}
 
                 {normStatus === 'cleaning' && (
-                  <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'available')}>
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onUpdateStatus?.(table.id, 'available')
+                    }}
+                  >
                     Mark Available
                   </DropdownMenuItem>
                 )}
 
                 {normStatus === 'reserved' && (
                   <>
-                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'occupied')}>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUpdateStatus?.(table.id, 'occupied')
+                      }}
+                    >
                       Seat Guests
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'available')}>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUpdateStatus?.(table.id, 'available')
+                      }}
+                    >
                       Release Reservation
                     </DropdownMenuItem>
                   </>
-                )}
-
-                {normStatus === 'maintenance' && (
-                  <DropdownMenuItem onClick={() => onUpdateStatus?.(table.id, 'available')}>
-                    Mark Available
-                  </DropdownMenuItem>
                 )}
 
                 <DropdownMenuSeparator />
@@ -281,7 +380,7 @@ function TableCard({
           )}
         </div>
 
-        {/* Occupancy bar (only for occupied with known guest count) */}
+        {/* Occupancy bar */}
         {normStatus === 'occupied' && Boolean(table.guestCount) && (
           <div className="mb-3">
             <div className="h-1 w-full rounded-full bg-primary/10 overflow-hidden">
@@ -294,13 +393,32 @@ function TableCard({
         )}
 
         {/* Waiter & time */}
-        {table.waiter && (
-          <div className="flex items-center gap-1.5 mb-1.5">
+        {table.waiter ? (
+          <div
+            onClick={(e) => {
+              e.stopPropagation()
+              onAssignWaiter?.(table)
+            }}
+            className="flex items-center gap-1.5 mb-1.5 cursor-pointer group/w hover:opacity-80"
+            title="Click to change waiter"
+          >
             <div className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-[9px] font-bold text-primary">
               {table.waiter.split(' ').map((w) => w[0]).join('')}
             </div>
-            <span className="text-xs text-muted-foreground">{table.waiter}</span>
+            <span className="text-xs text-muted-foreground font-medium group-hover/w:text-primary transition-colors">{table.waiter}</span>
           </div>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onAssignWaiter?.(table)
+            }}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary mb-1.5 transition-colors cursor-pointer"
+            title="Assign Waiter to this table"
+          >
+            <UserCheck className="size-3" />
+            <span className="underline">+ Assign Waiter</span>
+          </button>
         )}
 
         {table.occupiedSince && (
@@ -343,38 +461,57 @@ function TableCard({
         )}
       </div>
 
-      {/* Available CTA */}
-      {normStatus === 'available' && (
+      {/* Action Buttons Row */}
+      <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-border/40">
         <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => onUpdateStatus?.(table.id, 'occupied')}
-          className="w-full mt-2 h-7 text-xs text-success hover:bg-success/10 hover:text-success"
-        >
-          Seat Guests
-        </Button>
-      )}
-
-      {/* Occupied / Active / Bill Requested CTA */}
-      {(normStatus === 'occupied' || table.order || table.billRequested) && (
-        <Button
-          variant="default"
+          variant="outline"
           size="sm"
           onClick={(e) => {
             e.stopPropagation()
-            onGenerateBill?.(table)
+            onOpenMenu?.(table)
           }}
-          className={cn(
-            'w-full mt-2 h-7 text-xs font-bold gap-1 shadow-xs cursor-pointer',
-            table.billRequested
-              ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse'
-              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-          )}
+          className="flex-1 h-7 text-xs font-bold gap-1 text-primary border-primary/30 hover:bg-primary/10 cursor-pointer"
         >
-          <Receipt className="size-3.5" />
-          <span>{table.billRequested ? 'Bill Requested — Settle' : 'Generate Bill'}</span>
+          <UtensilsCrossed className="size-3" />
+          <span>Menu / Order</span>
         </Button>
-      )}
+
+        {/* Available CTA */}
+        {normStatus === 'available' && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation()
+              onUpdateStatus?.(table.id, 'occupied')
+            }}
+            className="flex-1 h-7 text-xs text-success hover:bg-success/10 hover:text-success"
+          >
+            Seat
+          </Button>
+        )}
+
+        {/* Occupied / Active / Bill Requested CTA */}
+        {(normStatus === 'occupied' || table.order || table.billRequested) && (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation()
+              onGenerateBill?.(table)
+            }}
+            className={cn(
+              'flex-1 h-7 text-xs font-bold gap-1 shadow-xs cursor-pointer',
+              table.billRequested
+                ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse'
+                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+            )}
+          >
+            <Receipt className="size-3" />
+            <span>{table.billRequested ? 'Settle' : 'Bill'}</span>
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
@@ -391,6 +528,7 @@ export function TablesView() {
   const branchId = auth?.branchId
   const restaurantName = auth?.restaurantName || 'RestoSphere'
   const isWaiter = (auth?.role || '').toLowerCase() === 'waiter'
+  const role = auth?.role || 'WAITER'
 
   const [tables, setTables] = useState<TableData[]>([])
   const [loading, setLoading] = useState(true)
@@ -399,8 +537,29 @@ export function TablesView() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<TableStatus | 'all'>('all')
 
+  // Live incoming customer order requests queue (Without requiring QR scan)
+  const [pendingOrders, setPendingOrders] = useState<any[]>([])
+  const prevPendingCount = useRef(0)
+
+  // Manager Bypass & Fallback state
+  const [managerBypassActive, setManagerBypassActive] = useState(false)
+  const [isManagerLoggedIn, setIsManagerLoggedIn] = useState(true) // will fall back to false if no manager active
+
+  // Modals state
   const [qrOpen, setQrOpen] = useState(false)
   const [qrTable, setQrTable] = useState<string | number>('1')
+
+  // Dish Menu Modal state
+  const [menuTableTarget, setMenuTableTarget] = useState<TableData | null>(null)
+
+  // Takeaway QR Scanner Modal state
+  const [takeawayScannerOpen, setTakeawayScannerOpen] = useState(false)
+
+  // History Modal state
+  const [historyModalOpen, setHistoryModalOpen] = useState(false)
+
+  // KPI Detail Drawer state
+  const [kpiDrawerStatus, setKpiDrawerStatus] = useState<TableStatus | null>(null)
 
   // Add Table Modal state
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -410,6 +569,57 @@ export function TablesView() {
   const [addLoading, setAddLoading] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
 
+  // Waiter assignment state
+  const [assignTableTarget, setAssignTableTarget] = useState<TableData | null>(null)
+  const [waitersList, setWaitersList] = useState<Array<{ id: string; name: string; phone: string }>>([])
+  const [selectedWaiterId, setSelectedWaiterId] = useState<string>('')
+  const [isAssigning, setIsAssigning] = useState(false)
+
+  const handleOpenAssignWaiter = async (tbl: TableData) => {
+    setAssignTableTarget(tbl)
+    setSelectedWaiterId('')
+    try {
+      const res = await fetch(`/api/staff/waiters?branchId=${branchId || ''}`)
+      const data = await res.json()
+      if (data.success && Array.isArray(data.data)) {
+        setWaitersList(data.data)
+        const match = data.data.find((w: any) => w.name === tbl.waiter)
+        if (match) setSelectedWaiterId(match.id)
+      }
+    } catch (err) {
+      console.error('Error fetching waiters:', err)
+    }
+  }
+
+  const handleSaveWaiterAssignment = async () => {
+    if (!assignTableTarget) return
+    setIsAssigning(true)
+    try {
+      const selected = waitersList.find((w) => w.id === selectedWaiterId)
+      const res = await fetch('/api/tables/assign-waiter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tableId: assignTableTarget.id,
+          waiterId: selectedWaiterId || null,
+          waiterName: selected?.name || '',
+          branchId,
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setAssignTableTarget(null)
+        fetchTables()
+      } else {
+        alert(data.message || 'Failed to assign waiter')
+      }
+    } catch (err: any) {
+      alert(err.message || 'Assignment failed')
+    } finally {
+      setIsAssigning(false)
+    }
+  }
+
   // Delete Table Modal state
   const [deleteTableTarget, setDeleteTableTarget] = useState<TableData | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
@@ -418,7 +628,7 @@ export function TablesView() {
   // Bill Settlement Modal state
   const [settlementTarget, setSettlementTarget] = useState<TableData | null>(null)
 
-  // Fetch real tables from dynamic database API + check for active bill requests
+  // Fetch real tables from database API + check for active bill requests
   const fetchTables = useCallback(async () => {
     try {
       setLoading(true)
@@ -468,16 +678,60 @@ export function TablesView() {
     }
   }, [branchId])
 
+  // Fetch live incoming customer order requests (without scanning QR)
+  const fetchPendingOrders = useCallback(async () => {
+    try {
+      const res = await fetch('/api/orders/live')
+      if (res.ok) {
+        const json = await res.json()
+        if (json.success && Array.isArray(json.data)) {
+          const pending = json.data.filter((o: any) => o.status === 'pending')
+          // If new order arrived, trigger haptic vibration and sound chime!
+          if (pending.length > prevPendingCount.current) {
+            triggerNotificationFeedback('order')
+          }
+          prevPendingCount.current = pending.length
+          setPendingOrders(pending)
+        }
+      }
+    } catch (e) {
+      // silent background sync
+    }
+  }, [])
+
   useEffect(() => {
     fetchTables()
-    const interval = setInterval(fetchTables, 10000)
-    return () => clearInterval(interval)
-  }, [fetchTables])
+    fetchPendingOrders()
+    const intervalTables = setInterval(fetchTables, 10000)
+    const intervalOrders = setInterval(fetchPendingOrders, 3500)
+    return () => {
+      clearInterval(intervalTables)
+      clearInterval(intervalOrders)
+    }
+  }, [fetchTables, fetchPendingOrders])
+
+  // Accept incoming customer order request
+  const handleAcceptOrder = async (orderId: string, fullId?: string) => {
+    try {
+      const targetId = fullId || orderId
+      const res = await fetch(`/api/orders/${targetId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'accepted' }),
+      })
+      if (res.ok) {
+        triggerNotificationFeedback('order')
+        fetchPendingOrders()
+        fetchTables()
+      }
+    } catch (err) {
+      console.error('Error accepting order:', err)
+    }
+  }
 
   // Update table status in database
   const handleUpdateStatus = async (tableId: string, newStatus: TableStatus) => {
     try {
-      // Optimistic update
       setTables((prev) =>
         prev.map((t) => (t.id === tableId ? { ...t, status: newStatus } : t))
       )
@@ -488,12 +742,8 @@ export function TablesView() {
         body: JSON.stringify({ id: tableId, status: newStatus }),
       })
 
-      if (!res.ok) {
-        // Rollback on failure
-        fetchTables()
-      }
+      if (!res.ok) fetchTables()
     } catch (err) {
-      console.error('Error updating table:', err)
       fetchTables()
     }
   }
@@ -507,7 +757,6 @@ export function TablesView() {
       return
     }
 
-    // Normalize if user accidentally typed TT12 or similar
     const cleanTableNum = /^tt\d+/i.test(trimmed) ? trimmed.replace(/^tt(\d+)/i, 'T$1') : trimmed
 
     try {
@@ -560,7 +809,6 @@ export function TablesView() {
       setDeleteTableTarget(null)
       fetchTables()
     } catch (err: any) {
-      console.error('Delete table error:', err)
       setDeleteError(err.message || 'Failed to delete table')
     } finally {
       setDeleteLoading(false)
@@ -572,7 +820,28 @@ export function TablesView() {
     setQrOpen(true)
   }
 
-  // Collect distinct dynamic sections
+  // Send Table / Order Booking QR (WhatsApp or Web Share trigger)
+  const handleShareBookingQR = (tableNum: string | number) => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://restosphere.com'
+    const link = `${origin}/menu?table=${encodeURIComponent(tableNum)}`
+    const msg = encodeURIComponent(
+      `Welcome to ${restaurantName}! Scan or click this link to access digital menu and place table bookings & dish orders for Table ${tableNum}:\n${link}`
+    )
+
+    if (typeof navigator !== 'undefined' && (navigator as any).share) {
+      (navigator as any).share({
+        title: `${restaurantName} — Table ${tableNum}`,
+        text: `Digital Table Booking & Menu for Table ${tableNum}`,
+        url: link,
+      }).catch(() => {
+        window.open(`https://wa.me/?text=${msg}`, '_blank')
+      })
+    } else {
+      window.open(`https://wa.me/?text=${msg}`, '_blank')
+    }
+  }
+
+  // Dynamic sections
   const dynamicSections = Array.from(
     new Set(tables.map((t) => t.section.toLowerCase()).filter(Boolean))
   )
@@ -598,15 +867,168 @@ export function TablesView() {
   }
 
   return (
-    <main className="flex flex-col gap-6 p-6">
-      {/* Waiter Tip Tracker Widget - Only visible to Waiter staff */}
+    <main className="flex flex-col gap-6 p-4 sm:p-6">
+      {/* Top Banner: Waiter Tip Tracker with Compact Walk-In Mode */}
       {isWaiter && <WaiterTipTracker waiterId={auth?.id} />}
+
+      {/* Top Banner: Real-Time Live 20s Addon Banner with Bypass Support */}
+      <LiveBatchAddonBanner
+        currentTableNumber="Table 1"
+        customerName="Floor Waiter"
+        onOrderPlaced={() => fetchTables()}
+      />
+
+      {/* ── View New Order Requests Without Scanning (Live Waiter Queue) ── */}
+      {pendingOrders.length > 0 && (
+        <div className="rounded-2xl border-2 border-amber-500/50 bg-amber-500/10 p-4 sm:p-5 shadow-sm space-y-3.5 animate-in fade-in">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="size-9 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold">
+                <Zap className="size-5 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-black text-foreground">
+                    Incoming Order Requests
+                  </h3>
+                  <Badge className="bg-amber-500 text-black font-extrabold text-[10px] px-2 py-0.5">
+                    {pendingOrders.length} New Requests
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Placed automatically from customer phones — no scanning required! Click &quot;Accept Order&quot; to route immediately to Chef.
+                </p>
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchPendingOrders}
+              className="h-8 text-xs font-bold gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+            >
+              <RefreshCw className="size-3.5" />
+              Sync Requests
+            </Button>
+          </div>
+
+          {/* Cards Grid for Incoming Order Requests */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {pendingOrders.map((ord) => (
+              <Card
+                key={ord.id}
+                className="border border-amber-500/40 bg-card shadow-sm rounded-xl overflow-hidden flex flex-col justify-between"
+              >
+                <div className="p-3.5 pb-2">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500 text-amber-500 bg-amber-500/10 font-black text-xs px-2.5 py-0.5"
+                      >
+                        {typeof ord.tableNumber === 'number' || !isNaN(Number(ord.tableNumber))
+                          ? `Table ${ord.tableNumber}`
+                          : ord.tableNumber}
+                      </Badge>
+                      <div className="font-mono text-xs font-bold text-foreground mt-1">
+                        #{ord.id}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[11px] text-muted-foreground font-mono flex items-center gap-1 justify-end">
+                        <Clock className="size-3" />
+                        {ord.ticketTime || 1}m ago
+                      </span>
+                      <span className="text-xs font-black text-primary font-mono">
+                        ₹{Number(ord.total || ord.totalAmount || 0).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1 text-xs border-t border-border/50 pt-2 mt-2">
+                    {(ord.items || []).map((it: any, idx: number) => (
+                      <div key={idx} className="flex justify-between items-center text-muted-foreground">
+                        <span className="font-medium text-foreground">
+                          <span className="font-bold text-primary mr-1">{it.quantity}×</span>
+                          {it.name || it.itemName}
+                        </span>
+                        <span className="font-mono">₹{Number(it.price * it.quantity).toLocaleString('en-IN')}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {ord.notes && (
+                    <div className="mt-2 text-[11px] bg-amber-500/10 border border-amber-500/20 p-2 rounded-lg text-amber-600 dark:text-amber-400 font-medium">
+                      ⚠ Special Notes: {ord.notes}
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-3 pt-0 border-t border-border/50 flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="flex-1 h-9 font-extrabold text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 shadow-sm cursor-pointer"
+                    onClick={() => handleAcceptOrder(ord.id, ord.fullId)}
+                  >
+                    <Check className="size-3.5" />
+                    Accept Order
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* QR Code Generator Modal */}
       <TableQRGenerator
         isOpen={qrOpen}
         onClose={() => setQrOpen(false)}
         initialTable={qrTable}
         restaurantName={restaurantName}
+      />
+
+      {/* Interactive Table Dish Menu Selector Modal */}
+      {menuTableTarget && (
+        <TableDishMenuModal
+          open={!!menuTableTarget}
+          onOpenChange={(open) => {
+            if (!open) setMenuTableTarget(null)
+          }}
+          tableNumber={menuTableTarget.tableNumber || menuTableTarget.number}
+          tableId={menuTableTarget.id}
+          isVip={menuTableTarget.section.toLowerCase().includes('vip')}
+          onOrderPlaced={() => {
+            fetchTables()
+            fetchPendingOrders()
+          }}
+        />
+      )}
+
+      {/* Takeaway QR Scanner Modal */}
+      <TakeawayQRScannerModal
+        open={takeawayScannerOpen}
+        onOpenChange={setTakeawayScannerOpen}
+        onOrderLoaded={() => fetchTables()}
+      />
+
+      {/* Waiter History Modal */}
+      <WaiterHistoryModal
+        open={historyModalOpen}
+        onOpenChange={setHistoryModalOpen}
+      />
+
+      {/* KPI Detail Drawer */}
+      <KpiDetailDrawer
+        open={!!kpiDrawerStatus}
+        onOpenChange={(open) => {
+          if (!open) setKpiDrawerStatus(null)
+        }}
+        status={kpiDrawerStatus}
+        tables={tables}
+        onSelectTableForOrder={(tbl) => setMenuTableTarget(tbl)}
+        onSelectTableForBill={(tbl) => setSettlementTarget(tbl)}
+        onUpdateTableStatus={handleUpdateStatus}
       />
 
       {/* Add Table Dialog */}
@@ -674,28 +1096,34 @@ export function TablesView() {
         </DialogContent>
       </Dialog>
 
-      {/* Stats row (interactive filters) */}
+      {/* ── Clickable KPI Cards Row ── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {statsItems.map((s) => {
           const isSelected = statusFilter === s.key
           return (
             <Card
               key={s.key}
-              onClick={() => setStatusFilter(isSelected ? 'all' : s.key)}
+              onClick={() => {
+                setStatusFilter(isSelected ? 'all' : s.key)
+                setKpiDrawerStatus(s.key)
+              }}
               className={cn(
-                'cursor-pointer transition-all hover:scale-[1.01]',
+                'cursor-pointer transition-all hover:scale-[1.02] shadow-2xs hover:shadow-md select-none',
                 isSelected
                   ? 'ring-2 ring-primary border-primary bg-primary/10'
                   : s.key === 'occupied'
-                  ? 'border-primary/30 bg-primary/5'
+                  ? 'border-primary/30 bg-primary/5 hover:border-primary/60'
                   : ''
               )}
             >
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-xs text-muted-foreground">{s.label}</p>
-                    <p className="text-2xl font-bold mt-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs text-muted-foreground font-semibold">{s.label}</p>
+                      <span className="text-[10px] text-primary underline">Inspect</span>
+                    </div>
+                    <p className="text-2xl font-black mt-0.5 font-mono">
                       {loading ? (
                         <span className="inline-block size-6 animate-pulse bg-muted rounded" />
                       ) : (
@@ -712,7 +1140,7 @@ export function TablesView() {
       </div>
 
       {/* Section tabs + actions */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <Tabs value={section} onValueChange={(v) => setSection(v)}>
           <TabsList>
             <TabsTrigger value="all">All ({tables.length})</TabsTrigger>
@@ -726,41 +1154,91 @@ export function TablesView() {
 
         <div className="flex items-center gap-2 flex-wrap">
           {/* Quick Search */}
-          <div className="relative w-36 sm:w-48">
+          <div className="relative w-36 sm:w-44">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search table..."
-              className="pl-8 h-8 text-xs"
+              className="pl-8 h-8 text-xs rounded-xl"
             />
           </div>
 
+          {/* Manager Bypass & Override Toggle */}
+          <button
+            type="button"
+            onClick={() => setManagerBypassActive(!managerBypassActive)}
+            className={cn(
+              'h-8 px-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-all cursor-pointer',
+              managerBypassActive
+                ? 'bg-amber-500/20 text-amber-500 border-amber-500/50 shadow-2xs'
+                : 'bg-muted/30 text-muted-foreground border-border hover:text-foreground'
+            )}
+            title="Bypass Manager: Enables waiter override controls for discounts, live orders, and billing"
+          >
+            {managerBypassActive ? (
+              <>
+                <ShieldCheck className="size-3.5 text-amber-500" />
+                <span>Bypass Active</span>
+              </>
+            ) : (
+              <>
+                <ShieldAlert className="size-3.5" />
+                <span>Bypass Manager</span>
+              </>
+            )}
+          </button>
+
+          {/* Takeaway QR Scanner Action */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setTakeawayScannerOpen(true)}
+            className="h-8 gap-1.5 text-xs font-bold border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
+          >
+            <ShoppingBag className="size-3.5" />
+            <span>Scan Takeaway QR</span>
+          </Button>
+
+          {/* History Action */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setHistoryModalOpen(true)}
+            className="h-8 gap-1.5 text-xs font-bold border-border hover:bg-muted"
+          >
+            <History className="size-3.5" />
+            <span>History</span>
+          </Button>
+
+          {/* Table QR Codes */}
           <Button
             variant="outline"
             size="sm"
             onClick={() => handleOpenQR(tables[0]?.tableNumber || 1)}
-            className="h-8 gap-1.5 border-primary/40 text-primary hover:bg-primary/10 shadow-sm"
+            className="h-8 gap-1.5 text-xs border-border"
           >
             <QrCode className="size-3.5" />
-            Table QR Codes
+            <span>Print QRs</span>
           </Button>
 
           <Button
             variant="outline"
             size="sm"
-            onClick={() => fetchTables()}
+            onClick={() => {
+              fetchTables()
+              fetchPendingOrders()
+            }}
             disabled={loading}
             className="h-8 gap-1.5"
             title="Refresh tables"
           >
             <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-            Refresh
           </Button>
 
           <Button size="sm" onClick={() => setIsAddOpen(true)} className="h-8 gap-1.5">
             <Plus className="size-3.5" />
-            Add Table
+            <span>Add Table</span>
           </Button>
         </div>
       </div>
@@ -825,9 +1303,12 @@ export function TablesView() {
             <TableCard
               key={table.id}
               table={table}
+              onOpenMenu={(tbl) => setMenuTableTarget(tbl)}
+              onShareQR={(num) => handleShareBookingQR(num)}
               onGenerateQR={handleOpenQR}
               onUpdateStatus={handleUpdateStatus}
               onGenerateBill={(tbl) => setSettlementTarget(tbl)}
+              onAssignWaiter={handleOpenAssignWaiter}
               onDelete={(tbl) => {
                 setDeleteError(null)
                 setDeleteTableTarget(tbl)
@@ -874,15 +1355,6 @@ export function TablesView() {
                 </Badge>
               </div>
 
-              {deleteTableTarget.status === 'occupied' && (
-                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs flex items-start gap-2">
-                  <AlertCircle className="size-4 shrink-0 mt-0.5" />
-                  <span>
-                    <strong>Warning:</strong> This table currently has active guests or an order. Deleting it will release the table spot.
-                  </span>
-                </div>
-              )}
-
               {deleteError && (
                 <div className="p-2.5 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-xs">
                   {deleteError}
@@ -926,11 +1398,59 @@ export function TablesView() {
           tableId={settlementTarget.id}
           tableNumber={settlementTarget.tableNumber || settlementTarget.number}
           waiterName={settlementTarget.waiter}
+          isHighwayOrder={settlementTarget.section.toLowerCase().includes('highway')}
           onSuccess={() => {
             fetchTables()
           }}
         />
       )}
+
+      {/* Assign Waiter Modal */}
+      <Dialog open={!!assignTableTarget} onOpenChange={(open) => !open && setAssignTableTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              <div className="size-8 rounded-lg bg-blue-500/10 text-blue-600 flex items-center justify-center">
+                <UserCheck className="size-4" />
+              </div>
+              <DialogTitle>Assign Waiter to Table {assignTableTarget?.tableNumber || assignTableTarget?.number}</DialogTitle>
+            </div>
+            <DialogDescription className="text-xs">
+              Select an active waiter to assign to this table. All orders and billing will be automatically attributed to them.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-3 space-y-3">
+            <Label className="text-xs font-semibold">Select Waiter</Label>
+            <select
+              value={selectedWaiterId}
+              onChange={(e) => setSelectedWaiterId(e.target.value)}
+              className="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">-- Unassigned (No Waiter) --</option>
+              {waitersList.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} {w.phone ? `(${w.phone})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setAssignTableTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={isAssigning}
+              onClick={handleSaveWaiterAssignment}
+              className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+            >
+              {isAssigning ? 'Saving...' : 'Confirm Assignment'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   )
 }

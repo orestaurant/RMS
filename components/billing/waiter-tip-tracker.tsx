@@ -45,6 +45,7 @@ export function WaiterTipTracker({ waiterId, className }: WaiterTipTrackerProps)
   const [data, setData] = useState<WaiterTipsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState(false)
+  const [isCompact, setIsCompact] = useState(true) // Default compact to save screen real estate for walk-ins
 
   const fetchTips = useCallback(async () => {
     try {
@@ -88,6 +89,47 @@ export function WaiterTipTracker({ waiterId, className }: WaiterTipTrackerProps)
   // If not a waiter or no data, do not render widget
   if (!data || !data.waiter) {
     return null
+  }
+
+  // Minimized Compact View for Walk-In Customer tables (saves vertical screen space)
+  if (isCompact) {
+    return (
+      <div
+        className={cn(
+          'flex items-center justify-between gap-3 px-3.5 py-1.5 rounded-xl border border-emerald-500/25 bg-emerald-500/10 backdrop-blur-xs shadow-2xs text-xs',
+          className
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <Heart className="size-3.5 fill-emerald-500 text-emerald-500 shrink-0" />
+          <span className="font-semibold text-foreground">
+            Tips: <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">₹{todayTips.toFixed(0)}</span>
+          </span>
+          <span className="text-[10px] text-muted-foreground hidden sm:inline">
+            · All-Time: ₹{allTimeTips.toFixed(0)}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={fetchTips}
+            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+            title="Refresh tips"
+          >
+            <RefreshCw className={cn('size-3', loading && 'animate-spin')} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsCompact(false)}
+            className="h-6 px-2 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20"
+          >
+            Expand Tip UI
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -151,6 +193,16 @@ export function WaiterTipTracker({ waiterId, className }: WaiterTipTrackerProps)
                 title="Refresh tips"
               >
                 <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsCompact(true)}
+                className="h-8 px-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+                title="Minimize tip tracker for walk-in tables"
+              >
+                Minimize
               </Button>
 
               {recentList.length > 0 && (

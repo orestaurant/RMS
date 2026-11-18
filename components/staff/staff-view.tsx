@@ -28,7 +28,9 @@ import {
   Calendar,
   Crown,
   Trash2,
+  Sliders,
 } from 'lucide-react'
+import { RolesPermissionsView } from './roles-permissions-view'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -126,6 +128,7 @@ function getPageNumbers(current: number, total: number): (number | 'ellipsis')[]
 
 export function StaffView() {
   const { auth } = useAuthContext()
+  const [activeMainTab, setActiveMainTab] = useState<'directory' | 'permissions'>('directory')
 
   // Role permissions: Super Admin vs Admin
   const currentRoleUpper = String(auth?.role || '').toUpperCase()
@@ -630,6 +633,32 @@ export function StaffView() {
         </div>
       </div>
 
+      {/* Main Tab Switcher */}
+      <div className="flex items-center gap-2 border-b border-border/80 pb-2">
+        <Button
+          size="sm"
+          variant={activeMainTab === 'directory' ? 'default' : 'ghost'}
+          onClick={() => setActiveMainTab('directory')}
+          className="gap-2 text-xs font-semibold"
+        >
+          <Users className="size-4" />
+          Staff Directory
+        </Button>
+        <Button
+          size="sm"
+          variant={activeMainTab === 'permissions' ? 'default' : 'ghost'}
+          onClick={() => setActiveMainTab('permissions')}
+          className="gap-2 text-xs font-semibold"
+        >
+          <Sliders className="size-4" />
+          Roles & Permissions Matrix (RBAC & Bypass)
+        </Button>
+      </div>
+
+      {activeMainTab === 'permissions' ? (
+        <RolesPermissionsView />
+      ) : (
+        <>
       {/* Live Stats Overview */}
       <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7">
         <Card className="p-4 border-border/60 bg-card/60 backdrop-blur-sm">
@@ -1112,6 +1141,8 @@ export function StaffView() {
           </div>
         </div>
       </Card>
+      </>
+      )}
 
       {/* ========================================================================= */}
       {/* 1. EDIT ROLE & STATUS MODAL (ASSIGN ROLE)                                */}

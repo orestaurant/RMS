@@ -646,6 +646,21 @@ export function MenuManagement() {
                   />
                 </div>
 
+                {/* Dish Photo Thumbnail */}
+                {item.image && (
+                  <div className="size-9 rounded-lg overflow-hidden shrink-0 border border-border/80 bg-muted/40 hidden sm:block">
+                    <img
+                      src={item.image}
+                      alt={item.name}
+                      referrerPolicy="no-referrer"
+                      className="size-full object-cover"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = 'none'
+                      }}
+                    />
+                  </div>
+                )}
+
                 {/* Name, Tag, Description */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">

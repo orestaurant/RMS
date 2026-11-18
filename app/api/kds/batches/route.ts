@@ -97,9 +97,9 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // 2. Customer One-Tap +1 Add-on within 20s window
+    // 2. Customer or Waiter One-Tap +1 Add-on (with optional bypassLock)
     if (action === 'addon') {
-      const { batchId, dishName, tableNumber, customerName, quantity } = body
+      const { batchId, dishName, tableNumber, customerName, quantity, bypassLock } = body
 
       // Try reading customer session if available
       const customerSession = await getCustomerSession(request)
@@ -113,6 +113,7 @@ export async function POST(request: NextRequest) {
         customerName: resolvedCustomerName,
         customerId: resolvedCustomerId,
         quantity: quantity || 1,
+        bypassLock: Boolean(bypassLock),
       })
 
       if (!result.success) {

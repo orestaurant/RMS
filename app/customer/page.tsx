@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
 
 export default function CustomerIndexPage() {
-  redirect('/customer/register')
+  redirect('/customer/auth?tab=guest')
 }

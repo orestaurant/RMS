@@ -86,6 +86,8 @@ model Organization {
   tableQrTokens            TableQrToken[]
   tips                     Tip[]
   users                    User[]
+  feedbackIntegrationSettings FeedbackIntegrationSetting[]
+  customerFeedbacks           CustomerFeedback[]
 
   @@index([slug])
   @@index([status])
@@ -148,6 +150,8 @@ model Restaurant {
   tableLayouts             TableLayout[]
   tableQrTokens            TableQrToken[]
   tips                     Tip[]
+  feedbackIntegrationSetting FeedbackIntegrationSetting?
+  customerFeedbacks          CustomerFeedback[]
 
   @@unique([organizationId, slug], name: "idx_restaurant_org_slug")
   @@index([organizationId])
@@ -404,6 +408,9 @@ model Customer {
   orders            Order[]
   payments          Payment[]
   reservations      Reservation[]
+  googleSubId       String?                @db.VarChar(255)
+  isGoogleVerified  Boolean                @default(false)
+  feedbacks         CustomerFeedback[]
 
   @@unique([organizationId, phone], name: "idx_customer_org_phone")
   @@index([organizationId])
@@ -1842,3 +1849,70 @@ model DashboardNotification {
   @@index([rawMaterialId])
   @@index([isRead])
 }
+
+model FeedbackIntegrationSetting {
+  id                    String        @id @default(uuid()) @db.Uuid
+  restaurantId          String        @unique @db.Uuid
+  organizationId        String        @db.Uuid
+  googleClientId        String?       @db.VarChar(255)
+  googleClientSecret    String?       @db.VarChar(255)
+  googleRedirectUri     String?       @db.VarChar(255)
+  googlePlaceReviewUrl  String?       @db.VarChar(500)
+  isGoogleEnabled       Boolean       @default(true)
+  facebookPageUrl       String?       @db.VarChar(500)
+  facebookAppId         String?       @db.VarChar(255)
+  facebookAppSecret     String?       @db.VarChar(255)
+  isFacebookEnabled     Boolean       @default(false)
+  instagramProfileUrl   String?       @db.VarChar(500)
+  instagramAppId        String?       @db.VarChar(255)
+  instagramAppSecret    String?       @db.VarChar(255)
+  isInstagramEnabled    Boolean       @default(false)
+  reviewDiscountPercent Decimal       @default(10.00) @db.Decimal(5, 2)
+  reviewDiscountEnabled Boolean       @default(true)
+  metadata              Json          @default("{}")
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  deletedAt             DateTime?
+  organization          Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  restaurant            Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId])
+  @@index([organizationId])
+}
+
+model CustomerFeedback {
+  id                        String        @id @default(uuid()) @db.Uuid
+  restaurantId              String        @db.Uuid
+  organizationId            String?       @db.Uuid
+  customerId                String?       @db.Uuid
+  customerName              String?       @db.VarChar(255)
+  customerEmail             String?       @db.VarChar(255)
+  customerPhotoUrl          String?       @db.Text
+  googleSubId               String?       @db.VarChar(255)
+  isGoogleVerified          Boolean       @default(false)
+  rating                    Int           @default(5)
+  foodRating                Int?
+  serviceRating             Int?
+  ambienceRating            Int?
+  comment                   String?       @db.Text
+  reviewPlatform            String        @default("google") @db.VarChar(50)
+  hasSubmittedExternalReview Boolean      @default(false)
+  discountCode              String?       @db.VarChar(100)
+  discountClaimed           Boolean       @default(false)
+  tableNumber               String?       @db.VarChar(50)
+  orderId                   String?       @db.Uuid
+  status                    String        @default("published") @db.VarChar(50)
+  metadata                  Json          @default("{}")
+  createdAt                 DateTime      @default(now())
+  updatedAt                 DateTime      @updatedAt
+  deletedAt                 DateTime?
+  customer                  Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  organization              Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  restaurant                Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId])
+  @@index([customerId])
+  @@index([googleSubId])
+  @@index([isGoogleVerified])
+}
+
