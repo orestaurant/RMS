@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { extractAuthContext } from '@/api/middleware/auth'
+import { resolveOAuthRedirectUri } from '@/lib/oauth-utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,24 +32,39 @@ export async function GET(request: NextRequest) {
       console.warn('Could not read feedback settings from DB, using fallback:', dbErr)
     }
 
-    // Fallbacks from environment variables
-    const origin = request.nextUrl.origin || 'http://localhost:3000'
-    const defaultRedirectUri = process.env.GOOGLE_REDIRECT_URI || `${origin}/api/auth/feedback/google/callback`
-    const defaultClientId = process.env.GOOGLE_CLIENT_ID || ''
-    const defaultClientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
+    // Fallbacks from environment variables & canonical OAuth resolvers
+    const defaultClientId = (process.env.GOOGLE_CLIENT_ID || '').trim()
+    const defaultClientSecret = (process.env.GOOGLE_CLIENT_SECRET || '').trim()
     const defaultGooglePlaceReviewUrl = process.env.GOOGLE_PLACE_REVIEW_URL || ''
+    const defaultRedirectUri = resolveOAuthRedirectUri(
+      request,
+      'google',
+      settings?.googleRedirectUri || process.env.GOOGLE_REDIRECT_URI
+    )
 
     const isGoogleConfigured = Boolean(settings?.googleClientId || defaultClientId)
     const googleClientId = settings?.googleClientId || defaultClientId
-    const googleRedirectUri = settings?.googleRedirectUri || defaultRedirectUri
+    const googleRedirectUri = defaultRedirectUri
     const googlePlaceReviewUrl = settings?.googlePlaceReviewUrl ?? defaultGooglePlaceReviewUrl
     const isGoogleEnabled = settings?.isGoogleEnabled ?? true
 
-    // Meta (Facebook) placeholder data
-    const isFacebookConfigured = Boolean(settings?.facebookPageUrl || settings?.facebookAppId)
-    const isFacebookEnabled = settings?.isFacebookEnabled ?? false
-    const facebookPageUrl = settings?.facebookPageUrl || ''
-    const facebookAppId = settings?.facebookAppId || ''
+    // Meta (Facebook) credentials & settings with env fallback
+    const defaultMetaAppId = process.env.META_APP_ID || process.env.FACEBOOK_APP_ID || ''
+    const defaultMetaAppSecret = process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET || ''
+    const defaultMetaReviewUrl = process.env.META_REVIEW_URL || process.env.FACEBOOK_PAGE_URL || ''
+
+    const facebookPageUrl = (settings?.facebookPageUrl !== undefined && settings?.facebookPageUrl !== null && settings?.facebookPageUrl !== '')
+      ? settings.facebookPageUrl
+      : defaultMetaReviewUrl
+    const facebookAppId = (settings?.facebookAppId !== undefined && settings?.facebookAppId !== null && settings?.facebookAppId !== '')
+      ? settings.facebookAppId
+      : defaultMetaAppId
+    const effectiveFacebookSecret = settings?.facebookAppSecret || defaultMetaAppSecret
+    const hasMetaConfigured = Boolean(facebookAppId || facebookPageUrl)
+    const isFacebookEnabled = settings?.isFacebookEnabled !== undefined
+      ? (settings.facebookAppId ? settings.isFacebookEnabled : (settings.isFacebookEnabled || hasMetaConfigured))
+      : hasMetaConfigured
+    const isFacebookConfigured = Boolean(facebookPageUrl || facebookAppId)
 
     // Instagram placeholder data
     const isInstagramConfigured = Boolean(settings?.instagramProfileUrl || settings?.instagramAppId)
@@ -124,10 +140,26 @@ export async function GET(request: NextRequest) {
         },
         facebook: {
           pageUrl: facebookPageUrl,
+          metaReviewUrl: facebookPageUrl,
           appId: facebookAppId,
-          appSecretMasked: maskSecret(settings?.facebookAppSecret),
-          hasSecret: Boolean(settings?.facebookAppSecret),
+          metaAppId: facebookAppId,
+          appSecretMasked: maskSecret(effectiveFacebookSecret),
+          metaAppSecretMasked: maskSecret(effectiveFacebookSecret),
+          hasSecret: Boolean(effectiveFacebookSecret),
           isEnabled: isFacebookEnabled,
+          metaReviewsEnabled: isFacebookEnabled,
+          isConfigured: isFacebookConfigured,
+        },
+        meta: {
+          pageUrl: facebookPageUrl,
+          metaReviewUrl: facebookPageUrl,
+          appId: facebookAppId,
+          metaAppId: facebookAppId,
+          appSecretMasked: maskSecret(effectiveFacebookSecret),
+          metaAppSecretMasked: maskSecret(effectiveFacebookSecret),
+          hasSecret: Boolean(effectiveFacebookSecret),
+          isEnabled: isFacebookEnabled,
+          metaReviewsEnabled: isFacebookEnabled,
           isConfigured: isFacebookConfigured,
         },
         instagram: {
@@ -172,11 +204,16 @@ export async function POST(request: NextRequest) {
       googleClientSecret = body.googleClientSecret.trim()
     }
 
-    // Resolve Facebook app secret
-    let facebookAppSecret = existing?.facebookAppSecret || null
-    if (body.facebookAppSecret && !body.facebookAppSecret.includes('••••')) {
-      facebookAppSecret = body.facebookAppSecret.trim()
+    // Resolve Facebook / Meta app secret
+    const incomingFacebookSecret = body.metaAppSecret !== undefined ? body.metaAppSecret : body.facebookAppSecret
+    let facebookAppSecret = existing?.facebookAppSecret || process.env.META_APP_SECRET || null
+    if (incomingFacebookSecret && !incomingFacebookSecret.includes('••••')) {
+      facebookAppSecret = incomingFacebookSecret.trim()
     }
+
+    const incomingFacebookPageUrl = body.metaReviewUrl !== undefined ? body.metaReviewUrl : body.facebookPageUrl
+    const incomingFacebookAppId = body.metaAppId !== undefined ? body.metaAppId : body.facebookAppId
+    const incomingFacebookEnabled = body.metaReviewsEnabled !== undefined ? body.metaReviewsEnabled : body.isFacebookEnabled
 
     // Resolve Instagram app secret
     let instagramAppSecret = existing?.instagramAppSecret || null
@@ -191,10 +228,10 @@ export async function POST(request: NextRequest) {
       googlePlaceReviewUrl: body.googlePlaceReviewUrl !== undefined ? body.googlePlaceReviewUrl.trim() : existing?.googlePlaceReviewUrl,
       isGoogleEnabled: body.isGoogleEnabled !== undefined ? Boolean(body.isGoogleEnabled) : existing?.isGoogleEnabled ?? true,
 
-      facebookPageUrl: body.facebookPageUrl !== undefined ? body.facebookPageUrl.trim() : existing?.facebookPageUrl,
-      facebookAppId: body.facebookAppId !== undefined ? body.facebookAppId.trim() : existing?.facebookAppId,
+      facebookPageUrl: incomingFacebookPageUrl !== undefined ? (incomingFacebookPageUrl ? incomingFacebookPageUrl.trim() : null) : existing?.facebookPageUrl,
+      facebookAppId: incomingFacebookAppId !== undefined ? (incomingFacebookAppId ? incomingFacebookAppId.trim() : null) : existing?.facebookAppId,
       facebookAppSecret,
-      isFacebookEnabled: body.isFacebookEnabled !== undefined ? Boolean(body.isFacebookEnabled) : existing?.isFacebookEnabled ?? false,
+      isFacebookEnabled: incomingFacebookEnabled !== undefined ? Boolean(incomingFacebookEnabled) : existing?.isFacebookEnabled ?? false,
 
       instagramProfileUrl: body.instagramProfileUrl !== undefined ? body.instagramProfileUrl.trim() : existing?.instagramProfileUrl,
       instagramAppId: body.instagramAppId !== undefined ? body.instagramAppId.trim() : existing?.instagramAppId,

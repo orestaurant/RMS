@@ -36,8 +36,14 @@ export async function GET(request: NextRequest) {
     const isGoogleEnabled = settings?.isGoogleEnabled ?? true
     const reviewDiscountPercent = settings?.reviewDiscountPercent ? Number(settings.reviewDiscountPercent) : 10
     const reviewDiscountEnabled = settings?.reviewDiscountEnabled ?? true
-    const facebookPageUrl = settings?.facebookPageUrl || ''
-    const isFacebookEnabled = settings?.isFacebookEnabled ?? false
+    const defaultMetaReviewUrl = process.env.META_REVIEW_URL || process.env.FACEBOOK_PAGE_URL || 'https://www.facebook.com'
+    const facebookPageUrl = (settings?.facebookPageUrl !== undefined && settings?.facebookPageUrl !== null && settings?.facebookPageUrl !== '')
+      ? settings.facebookPageUrl
+      : defaultMetaReviewUrl
+    const hasMetaConfigured = Boolean(settings?.facebookAppId || process.env.META_APP_ID)
+    const isFacebookEnabled = settings?.isFacebookEnabled !== undefined
+      ? (settings.facebookAppId ? settings.isFacebookEnabled : (settings.isFacebookEnabled || hasMetaConfigured))
+      : hasMetaConfigured
     const instagramProfileUrl = settings?.instagramProfileUrl || ''
     const isInstagramEnabled = settings?.isInstagramEnabled ?? false
 
@@ -97,6 +103,8 @@ export async function GET(request: NextRequest) {
           reviewDiscountEnabled,
           isFacebookEnabled,
           facebookPageUrl,
+          metaReviewsEnabled: isFacebookEnabled,
+          metaReviewUrl: facebookPageUrl,
           isInstagramEnabled,
           instagramProfileUrl,
         },
@@ -220,14 +228,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 5. Fetch Place review URL for the customer to post directly on Google
+    // 5. Fetch Place review URL and Meta review URL for customer
     let placeReviewUrl = process.env.GOOGLE_PLACE_REVIEW_URL || ''
+    const defaultMetaReviewUrl = process.env.META_REVIEW_URL || process.env.FACEBOOK_PAGE_URL || 'https://www.facebook.com'
+    let metaReviewUrl = defaultMetaReviewUrl
+    let metaReviewsEnabled = Boolean(process.env.META_APP_ID)
+
     try {
       const settings = await prisma.feedbackIntegrationSetting.findUnique({
         where: { restaurantId },
       })
       if (settings?.googlePlaceReviewUrl) {
         placeReviewUrl = settings.googlePlaceReviewUrl
+      }
+      if (settings?.facebookPageUrl) {
+        metaReviewUrl = settings.facebookPageUrl
+      }
+      if (settings?.isFacebookEnabled !== undefined) {
+        metaReviewsEnabled = settings.facebookAppId ? settings.isFacebookEnabled : (settings.isFacebookEnabled || Boolean(process.env.META_APP_ID))
       }
     } catch (e) {
       // ignore
@@ -240,6 +258,10 @@ export async function POST(request: NextRequest) {
       discountCode,
       isGoogleVerified: verified,
       googlePlaceReviewUrl: placeReviewUrl,
+      facebookPageUrl: metaReviewUrl,
+      metaReviewUrl,
+      isFacebookEnabled: metaReviewsEnabled,
+      metaReviewsEnabled,
     })
   } catch (error: any) {
     console.error('Error submitting feedback:', error)

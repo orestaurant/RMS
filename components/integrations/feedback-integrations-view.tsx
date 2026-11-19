@@ -47,6 +47,8 @@ export function FeedbackIntegrationsView() {
   const [facebookAppId, setFacebookAppId] = useState('')
   const [facebookAppSecret, setFacebookAppSecret] = useState('')
   const [showFacebookSecret, setShowFacebookSecret] = useState(false)
+  const [facebookRedirectUri, setFacebookRedirectUri] = useState('http://localhost:3000/api/auth/feedback/facebook/callback')
+  const [copiedFacebookRedirect, setCopiedFacebookRedirect] = useState(false)
   const [isFacebookEnabled, setIsFacebookEnabled] = useState(false)
 
   // Instagram State
@@ -80,15 +82,23 @@ export function FeedbackIntegrationsView() {
         if (d.google) {
           setGoogleClientId(d.google.clientId || '')
           setGoogleClientSecret(d.google.clientSecretMasked || '')
-          setGoogleRedirectUri(d.google.redirectUri || 'http://localhost:3000/api/auth/feedback/google/callback')
+          const defaultGoogleUri = typeof window !== 'undefined'
+            ? `${window.location.origin}/api/auth/callback/google`
+            : 'https://rms-nu-mauve.vercel.app/api/auth/callback/google'
+          setGoogleRedirectUri(
+            d.google.redirectUri && !d.google.redirectUri.includes('localhost')
+              ? d.google.redirectUri
+              : defaultGoogleUri
+          )
           setGooglePlaceReviewUrl(d.google.placeReviewUrl || '')
           setIsGoogleEnabled(d.google.isEnabled)
         }
-        if (d.facebook) {
-          setFacebookPageUrl(d.facebook.pageUrl || '')
-          setFacebookAppId(d.facebook.appId || '')
-          setFacebookAppSecret(d.facebook.appSecretMasked || '')
-          setIsFacebookEnabled(d.facebook.isEnabled)
+        const metaData = d.meta || d.facebook
+        if (metaData) {
+          setFacebookPageUrl(metaData.metaReviewUrl || metaData.pageUrl || '')
+          setFacebookAppId(metaData.metaAppId || metaData.appId || '')
+          setFacebookAppSecret(metaData.metaAppSecretMasked || metaData.appSecretMasked || '')
+          setIsFacebookEnabled(Boolean(metaData.metaReviewsEnabled ?? metaData.isEnabled))
         }
         if (d.instagram) {
           setInstagramProfileUrl(d.instagram.profileUrl || '')
@@ -113,12 +123,21 @@ export function FeedbackIntegrationsView() {
 
   useEffect(() => {
     fetchSettings()
+    if (typeof window !== 'undefined') {
+      setFacebookRedirectUri(`${window.location.origin}/api/auth/callback/facebook`)
+    }
   }, [])
 
   const handleCopyRedirectUri = () => {
     navigator.clipboard.writeText(googleRedirectUri)
     setCopiedRedirect(true)
     setTimeout(() => setCopiedRedirect(false), 2000)
+  }
+
+  const handleCopyFacebookRedirect = () => {
+    navigator.clipboard.writeText(facebookRedirectUri)
+    setCopiedFacebookRedirect(true)
+    setTimeout(() => setCopiedFacebookRedirect(false), 2000)
   }
 
   const handleSave = async (e: React.FormEvent) => {
@@ -135,9 +154,14 @@ export function FeedbackIntegrationsView() {
         googlePlaceReviewUrl,
         isGoogleEnabled,
 
-        facebookPageUrl,
-        facebookAppId,
-        facebookAppSecret,
+        // Meta (Facebook) Reviews Settings
+        metaReviewUrl: facebookPageUrl.trim(),
+        facebookPageUrl: facebookPageUrl.trim(),
+        metaAppId: facebookAppId.trim(),
+        facebookAppId: facebookAppId.trim(),
+        metaAppSecret: facebookAppSecret.trim(),
+        facebookAppSecret: facebookAppSecret.trim(),
+        metaReviewsEnabled: isFacebookEnabled,
         isFacebookEnabled,
 
         instagramProfileUrl,
@@ -463,7 +487,7 @@ export function FeedbackIntegrationsView() {
           </CardContent>
         </Card>
 
-        {/* 2. Meta (Facebook) Reviews (Placeholder Card) */}
+        {/* 2. Meta (Facebook) Reviews Card */}
         <Card className="border-border/80 shadow-xs overflow-hidden">
           <div className="bg-muted/40 p-5 border-b border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
@@ -474,12 +498,18 @@ export function FeedbackIntegrationsView() {
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-base font-bold text-foreground">Meta (Facebook) Reviews</h3>
-                  <Badge variant="outline" className="text-blue-600 border-blue-500/30 text-xs">
-                    Optional / Direct URL
-                  </Badge>
+                  {isFacebookEnabled ? (
+                    <Badge className="bg-[#1877F2]/10 text-[#1877F2] border-[#1877F2]/25 text-xs">
+                      Active
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-muted-foreground text-xs">
+                      Disabled
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Direct Facebook Business Page review shortlink (works without requiring API keys)
+                  Direct Facebook Business Page review link & Meta Graph API integration
                 </p>
               </div>
             </div>
@@ -487,7 +517,7 @@ export function FeedbackIntegrationsView() {
             {/* Enable/Disable Toggle */}
             <div className="flex items-center gap-3 shrink-0">
               <span className="text-xs font-semibold text-foreground">
-                {isFacebookEnabled ? 'Enabled' : 'Disabled'}
+                {isFacebookEnabled ? 'Active' : 'Disabled'}
               </span>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input
@@ -509,10 +539,10 @@ export function FeedbackIntegrationsView() {
                 </Label>
                 {facebookPageUrl && (
                   <a
-                    href={facebookPageUrl}
+                    href={facebookPageUrl.startsWith('http') ? facebookPageUrl : `https://${facebookPageUrl}`}
                     target="_blank"
-                    rel="noreferrer"
-                    className="text-[11px] text-blue-600 hover:underline inline-flex items-center gap-1 font-medium"
+                    rel="noopener noreferrer"
+                    className="text-[11px] text-[#1877F2] hover:underline inline-flex items-center gap-1 font-medium"
                   >
                     Test Facebook Page <ExternalLink className="size-3" />
                   </a>
@@ -525,36 +555,47 @@ export function FeedbackIntegrationsView() {
                 placeholder="e.g. https://www.facebook.com/your-restaurant/reviews"
                 className="text-xs font-mono"
               />
+              {facebookPageUrl && !facebookPageUrl.startsWith('http://') && !facebookPageUrl.startsWith('https://') && (
+                <p className="text-[11px] text-amber-500 font-medium">
+                  Note: Please include https:// so the link opens properly for customers.
+                </p>
+              )}
               <p className="text-[11px] text-muted-foreground">
-                Optional: Guests can click to visit and recommend your restaurant on Facebook.
+                When enabled, diners will see a direct button to review and recommend your restaurant on Facebook.
               </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
               <div className="space-y-1.5">
-                <Label htmlFor="facebook-app-id" className="text-xs font-medium text-muted-foreground">
-                  Meta App ID (Optional)
-                </Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="facebook-app-id" className="text-xs font-semibold">
+                    Meta App ID
+                  </Label>
+                  <span className="text-[11px] text-muted-foreground font-mono">From Meta for Developers</span>
+                </div>
                 <Input
                   id="facebook-app-id"
                   value={facebookAppId}
                   onChange={(e) => setFacebookAppId(e.target.value)}
-                  placeholder="Optional App ID"
+                  placeholder="e.g. 1170742322161378"
                   className="text-xs font-mono"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="facebook-app-secret" className="text-xs font-medium text-muted-foreground">
-                  Meta App Secret (Optional)
-                </Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="facebook-app-secret" className="text-xs font-semibold">
+                    Meta App Secret
+                  </Label>
+                  <span className="text-[11px] text-muted-foreground">Keep confidential</span>
+                </div>
                 <div className="relative">
                   <Input
                     id="facebook-app-secret"
                     type={showFacebookSecret ? 'text' : 'password'}
                     value={facebookAppSecret}
                     onChange={(e) => setFacebookAppSecret(e.target.value)}
-                    placeholder="Optional App Secret"
+                    placeholder="Enter Meta App Secret"
                     className="text-xs font-mono pr-10"
                   />
                   <button
@@ -565,6 +606,45 @@ export function FeedbackIntegrationsView() {
                     {showFacebookSecret ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
+              </div>
+            </div>
+
+            {/* Authorized Meta Redirect URI */}
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="facebook-redirect-uri" className="text-xs font-semibold">
+                  Authorized Meta OAuth Redirect URI (Callback)
+                </Label>
+                <span className="text-[11px] text-muted-foreground">Add to Meta App Dashboard &gt; Facebook Login &gt; Valid OAuth Redirect URIs</span>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  id="facebook-redirect-uri"
+                  value={facebookRedirectUri}
+                  onChange={(e) => setFacebookRedirectUri(e.target.value)}
+                  className="font-mono text-xs bg-muted/40"
+                  readOnly
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopyFacebookRedirect}
+                  className="gap-1.5 shrink-0 text-xs font-semibold cursor-pointer"
+                  title="Copy Redirect URI to clipboard"
+                >
+                  {copiedFacebookRedirect ? (
+                    <>
+                      <Check className="size-3.5 text-emerald-500" />
+                      <span>Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="size-3.5" />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </Button>
               </div>
             </div>
           </CardContent>

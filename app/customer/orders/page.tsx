@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -65,18 +65,22 @@ interface CustomerOrder {
 }
 
 const statusBadgeStyles: Record<string, { label: string; className: string }> = {
-  pending: { label: 'Pending Approval', className: 'bg-warning/15 text-warning border-warning/30' },
-  PENDING: { label: 'Pending Approval', className: 'bg-warning/15 text-warning border-warning/30' },
+  pending: { label: 'Pending Approval', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30' },
+  PENDING: { label: 'Pending Approval', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30' },
+  accepted: { label: 'Accepted by Kitchen', className: 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30' },
+  ACCEPTED: { label: 'Accepted by Kitchen', className: 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30' },
   confirmed: { label: 'Confirmed', className: 'bg-primary/15 text-primary border-primary/30' },
   CONFIRMED: { label: 'Confirmed', className: 'bg-primary/15 text-primary border-primary/30' },
-  preparing: { label: 'In Kitchen', className: 'bg-chart-4/15 text-chart-4 border-chart-4/30' },
-  PREPARING: { label: 'In Kitchen', className: 'bg-chart-4/15 text-chart-4 border-chart-4/30' },
-  ready: { label: 'Ready for Pickup', className: 'bg-chart-2/15 text-chart-2 border-chart-2/30' },
-  READY: { label: 'Ready for Pickup', className: 'bg-chart-2/15 text-chart-2 border-chart-2/30' },
-  served: { label: 'Served', className: 'bg-success/15 text-success border-success/30' },
-  SERVED: { label: 'Served', className: 'bg-success/15 text-success border-success/30' },
-  completed: { label: 'Completed', className: 'bg-success/20 text-success border-success/40' },
-  COMPLETED: { label: 'Completed', className: 'bg-success/20 text-success border-success/40' },
+  preparing: { label: 'In Kitchen (Cooking)', className: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30' },
+  PREPARING: { label: 'In Kitchen (Cooking)', className: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30' },
+  cooking: { label: 'In Kitchen (Cooking)', className: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30' },
+  COOKING: { label: 'In Kitchen (Cooking)', className: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30' },
+  ready: { label: 'Ready for Pickup', className: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' },
+  READY: { label: 'Ready for Pickup', className: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' },
+  served: { label: 'Served', className: 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30' },
+  SERVED: { label: 'Served', className: 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30' },
+  completed: { label: 'Completed', className: 'bg-emerald-600/20 text-emerald-600 dark:text-emerald-400 border-emerald-600/40' },
+  COMPLETED: { label: 'Completed', className: 'bg-emerald-600/20 text-emerald-600 dark:text-emerald-400 border-emerald-600/40' },
   cancelled: { label: 'Cancelled', className: 'bg-destructive/15 text-destructive border-destructive/30' },
   CANCELLED: { label: 'Cancelled', className: 'bg-destructive/15 text-destructive border-destructive/30' },
 }
@@ -85,77 +89,99 @@ export default function CustomerOrdersPage() {
   const router = useRouter()
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
-  const [loading, setLoading] = useState(true)
-  const [actionLoading, setActionLoading] = useState(false)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | 'queue' | 'live' | 'completed'>('all')
   const [showSongModal, setShowSongModal] = useState<boolean>(false)
 
-  // Real-time tick for dish timing countdowns
+  const isInitialMountRef = useRef(true)
+  const ordersCacheRef = useRef<string>('')
+
+  // Real-time tick for dish timing countdowns (15s interval is optimal, avoiding 1s re-render thrashing)
   const [liveNow, setLiveNow] = useState<number>(Date.now())
   useEffect(() => {
     const t = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         setLiveNow(Date.now())
       }
-    }, 1000)
+    }, 15000)
     return () => clearInterval(t)
   }, [])
 
-  const queueCount = orders.filter((o) => ['pending', 'confirmed'].includes(o.status.toLowerCase())).length
-  const liveCount = orders.filter((o) => ['preparing', 'ready'].includes(o.status.toLowerCase())).length
+  const queueCount = orders.filter((o) => ['pending', 'confirmed', 'accepted'].includes(o.status.toLowerCase())).length
+  const liveCount = orders.filter((o) => ['preparing', 'cooking', 'ready'].includes(o.status.toLowerCase())).length
 
   const filteredOrders = orders.filter((o) => {
     const st = o.status.toLowerCase()
-    if (statusFilter === 'queue') return ['pending', 'confirmed'].includes(st)
-    if (statusFilter === 'live') return ['preparing', 'ready'].includes(st)
+    if (statusFilter === 'queue') return ['pending', 'confirmed', 'accepted'].includes(st)
+    if (statusFilter === 'live') return ['preparing', 'cooking', 'ready'].includes(st)
     if (statusFilter === 'completed') return ['served', 'completed', 'cancelled'].includes(st)
     return true
   })
 
-  // Fetch customer profile & orders
-  const loadData = useCallback(async () => {
+  // Fetch customer profile & orders with non-blocking background synchronization
+  const loadData = useCallback(async (isSilent = false) => {
     try {
-      setLoading(true)
+      if (!isSilent && isInitialMountRef.current) {
+        setInitialLoading(true)
+      } else if (!isSilent) {
+        setIsRefreshing(true)
+      }
+
+      const fetchMe = isInitialMountRef.current || !isSilent
       const [meRes, ordersRes] = await Promise.all([
-        fetch('/api/customer/auth/me'),
+        fetchMe ? fetch('/api/customer/auth/me') : Promise.resolve(null),
         fetch('/api/customer/orders'),
       ])
 
-      if (meRes.status === 401 || ordersRes.status === 401) {
+      if ((meRes && meRes.status === 401) || ordersRes.status === 401) {
         router.push('/customer/auth')
         return
       }
 
-      const meData = await meRes.json()
-      const ordersData = await ordersRes.json()
-
-      if (meData.success && meData.customer) {
-        setProfile(meData.customer)
+      if (meRes) {
+        const meData = await meRes.json()
+        if (meData.success && meData.customer) {
+          setProfile(meData.customer)
+        }
       }
 
+      const ordersData = await ordersRes.json()
       if (ordersData.success && Array.isArray(ordersData.orders)) {
-        setOrders(ordersData.orders)
+        // Fast serialization comparison to prevent duplicate state updates & unnecessary DOM renders
+        const newOrdersStr = JSON.stringify(ordersData.orders)
+        if (newOrdersStr !== ordersCacheRef.current) {
+          ordersCacheRef.current = newOrdersStr
+          setOrders(ordersData.orders)
+        }
       }
     } catch (err: any) {
       console.error('Failed to load customer orders data:', err)
-      setFeedback({ type: 'error', message: 'Failed to load order records. Please refresh.' })
+      if (!isSilent) {
+        setFeedback({ type: 'error', message: 'Failed to load order records. Please refresh.' })
+      }
     } finally {
-      setLoading(false)
+      setInitialLoading(false)
+      setIsRefreshing(false)
+      isInitialMountRef.current = false
     }
   }, [router])
 
   useEffect(() => {
-    loadData()
+    // Initial load
+    loadData(false)
+
+    // Silent background polling every 6 seconds without flashing loading skeletons
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        loadData()
+        loadData(true)
       }
-    }, 4000)
+    }, 6000)
 
     const handleVis = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        loadData()
+        loadData(true)
       }
     }
     if (typeof document !== 'undefined') {
@@ -169,45 +195,6 @@ export default function CustomerOrdersPage() {
       }
     }
   }, [loadData])
-
-  // Place dynamic test order
-  const handlePlaceTestOrder = async () => {
-    setActionLoading(true)
-    setFeedback(null)
-
-    try {
-      const res = await fetch('/api/customer/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-
-      const data = await res.json()
-
-      if (!res.ok || !data.success) {
-        setFeedback({
-          type: 'error',
-          message: data.message || 'Failed to place test order.',
-        })
-        setActionLoading(false)
-        return
-      }
-
-      setFeedback({
-        type: 'success',
-        message: `Order #${data.order.orderNumber} placed successfully! It is now live in the restaurant system.`,
-      })
-
-      // Reload fresh orders and customer stats
-      await loadData()
-    } catch (err: any) {
-      setFeedback({
-        type: 'error',
-        message: err?.message || 'Error communicating with ordering API.',
-      })
-    } finally {
-      setActionLoading(false)
-    }
-  }
 
   // Logout handler
   const handleLogout = async () => {
@@ -265,11 +252,11 @@ export default function CustomerOrdersPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={loadData}
-              disabled={loading}
-              className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => loadData(false)}
+              disabled={isRefreshing}
+              className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
             >
-              <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+              <RefreshCw className={cn('size-3.5', isRefreshing && 'animate-spin')} />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
             <Button
@@ -400,24 +387,15 @@ export default function CustomerOrdersPage() {
                 <span>Review & 10% Off</span>
               </Button>
             </Link>
-
-            <Button
-              onClick={handlePlaceTestOrder}
-              disabled={actionLoading}
-              className="gap-2 h-10 font-semibold shadow-md shadow-primary/20 text-sm"
-            >
-              {actionLoading ? (
-                <>
-                  <RefreshCw className="size-4 animate-spin" />
-                  <span>Submitting Order...</span>
-                </>
-              ) : (
-                <>
-                  <Plus className="size-4" />
-                  <span>Place New Test Order</span>
-                </>
-              )}
-            </Button>
+            <Link href="/menu">
+              <Button
+                variant="default"
+                className="gap-1.5 h-10 font-semibold shadow-md shadow-primary/20 text-xs cursor-pointer"
+              >
+                <UtensilsCrossed className="size-4" />
+                <span>Browse Menu</span>
+              </Button>
+            </Link>
           </div>
         </div>
 
@@ -480,7 +458,7 @@ export default function CustomerOrdersPage() {
         </div>
 
         {/* ── Orders Listing ─────────────────────────────────── */}
-        {loading ? (
+        {initialLoading ? (
           <div className="space-y-4">
             {[1, 2, 3].map((i) => (
               <div key={i} className="h-32 w-full rounded-xl shimmer border border-border/40" />
@@ -501,13 +479,15 @@ export default function CustomerOrdersPage() {
               </h4>
               <p className="text-xs text-muted-foreground max-w-sm mt-1 mb-5">
                 {statusFilter === 'all'
-                  ? 'You haven\'t placed any dining or delivery orders yet. Click below to place your first order!'
+                  ? 'You haven\'t placed any dining or delivery orders yet. Explore our fresh menu to place an order!'
                   : 'Your orders will appear here automatically as their status updates in real time.'}
               </p>
-              <Button onClick={handlePlaceTestOrder} disabled={actionLoading} className="gap-2">
-                <Plus className="size-4" />
-                <span>Place New Test Order</span>
-              </Button>
+              <Link href="/menu">
+                <Button className="gap-2 font-semibold">
+                  <UtensilsCrossed className="size-4" />
+                  <span>Browse Menu & Order</span>
+                </Button>
+              </Link>
             </CardContent>
           </Card>
         ) : (
@@ -521,6 +501,12 @@ export default function CustomerOrdersPage() {
                 dateStyle: 'medium',
                 timeStyle: 'short',
               })
+
+              const ordStatus = String(order.status || '').toLowerCase().trim()
+              const isOrderPending = !ordStatus || ordStatus === 'pending'
+              const isOrderCooking = ordStatus === 'accepted' || ordStatus === 'confirmed' || ordStatus === 'preparing' || ordStatus === 'cooking'
+              const isOrderReady = ordStatus === 'ready'
+              const isOrderServed = ordStatus === 'served' || ordStatus === 'completed'
 
               return (
                 <Card
@@ -587,12 +573,6 @@ export default function CustomerOrdersPage() {
                           const elapsedMins = Math.max(0, Math.floor((liveNow - orderStartTime) / 60000))
                           const remainingMins = Math.max(1, dishPrepMinutes - elapsedMins)
 
-                          const ordStatus = String(order.status || '').toLowerCase().trim()
-                          const isDishPending = ordStatus === 'pending'
-                          const isDishCooking = ordStatus === 'accepted' || ordStatus === 'confirmed' || ordStatus === 'preparing' || ordStatus === 'cooking'
-                          const isDishReady = ordStatus === 'ready'
-                          const isDishServed = ordStatus === 'served' || ordStatus === 'completed'
-
                           return (
                             <div
                               key={item.id}
@@ -609,25 +589,25 @@ export default function CustomerOrdersPage() {
 
                               {/* Real-time Dish Timing & Status Badge */}
                               <div className="flex items-center justify-between text-[10px]">
-                                {isDishPending && (
+                                {isOrderPending && (
                                   <Badge variant="outline" className="text-[10px] font-bold bg-amber-500/15 text-amber-500 border-amber-500/30 gap-1 px-1.5 py-0 h-4">
                                     <Clock className="size-2.5 animate-spin text-amber-500" />
                                     <span>Pending Approval</span>
                                   </Badge>
                                 )}
-                                {isDishCooking && (
+                                {isOrderCooking && (
                                   <Badge variant="outline" className="text-[10px] font-extrabold bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30 gap-1 px-1.5 py-0 h-4">
                                     <Flame className="size-2.5 text-orange-500 animate-pulse" />
                                     <span>Preparing ({remainingMins} mins left)</span>
                                   </Badge>
                                 )}
-                                {isDishReady && (
+                                {isOrderReady && (
                                   <Badge variant="outline" className="text-[10px] font-bold bg-emerald-500/15 text-emerald-500 border-emerald-500/30 gap-1 px-1.5 py-0 h-4">
                                     <Sparkles className="size-2.5 text-emerald-500" />
                                     <span>Ready</span>
                                   </Badge>
                                 )}
-                                {isDishServed && (
+                                {isOrderServed && (
                                   <Badge variant="outline" className="text-[10px] font-bold bg-sky-500/15 text-sky-500 border-sky-500/30 gap-1 px-1.5 py-0 h-4">
                                     <UtensilsCrossed className="size-2.5 text-sky-500" />
                                     <span>Served</span>
@@ -649,9 +629,27 @@ export default function CustomerOrdersPage() {
                       <Receipt className="size-3.5 text-primary" />
                       <span>Restaurant: {order.branchName || 'RestoSphere Flagship'}</span>
                     </div>
-                    <span className="text-[11px] text-success font-medium">
-                      Status: Active in Kitchen Pipeline
-                    </span>
+                    {isOrderPending ? (
+                      <span className="text-[11px] text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1.5">
+                        <Clock className="size-3 text-amber-500 animate-spin" />
+                        Status: Pending Kitchen Approval
+                      </span>
+                    ) : isOrderCooking ? (
+                      <span className="text-[11px] text-orange-600 dark:text-orange-400 font-semibold flex items-center gap-1.5">
+                        <Flame className="size-3 text-orange-500 animate-pulse" />
+                        Status: Cooking in Kitchen
+                      </span>
+                    ) : isOrderReady ? (
+                      <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1.5">
+                        <Sparkles className="size-3 text-emerald-500" />
+                        Status: Ready for Pickup
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground font-medium flex items-center gap-1.5">
+                        <CheckCircle2 className="size-3 text-success" />
+                        Status: {order.status ? order.status.toUpperCase() : 'SERVED'}
+                      </span>
+                    )}
                   </CardFooter>
                 </Card>
               )

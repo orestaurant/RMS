@@ -79,13 +79,38 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Strict account-based filter: Exclude any walk-in, anonymous, table-only, or other customers' orders
+    // Resolve detailed customer profile for robust matching across QR, online, and table orders
+    const customerRecord = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, email: true, phone: true, name: true },
+    })
+
+    const cleanEmail = (customerRecord?.email || customerEmail || '').trim().toLowerCase()
+    const cleanPhone = (customerRecord?.phone || '').trim()
+
+    // Query all orders placed by this customer account:
+    // Either directly linked by customerId, or matching their verified email/phone
+    const orConditions: any[] = [{ customerId: customerId }]
+    if (cleanEmail) {
+      orConditions.push({
+        customer: { email: { equals: cleanEmail, mode: 'insensitive' as const } },
+      })
+      orConditions.push({
+        metadata: { path: ['customerEmail'], equals: cleanEmail },
+      })
+    }
+    if (cleanPhone) {
+      orConditions.push({
+        customer: { phone: cleanPhone },
+      })
+      orConditions.push({
+        metadata: { path: ['customerPhone'], equals: cleanPhone },
+      })
+    }
+
     const orders = await prisma.order.findMany({
       where: {
-        customerId: customerId,
-        NOT: [
-          { customerId: null },
-        ],
+        OR: orConditions,
         deletedAt: null,
       },
       include: {
@@ -113,12 +138,29 @@ export async function GET(request: NextRequest) {
       },
     })
 
+    // Auto-link any matching unlinked orders to customerId in the background
+    const unlinkedOrderIds = orders
+      .filter((o) => !o.customerId)
+      .map((o) => o.id)
+    if (unlinkedOrderIds.length > 0) {
+      prisma.order
+        .updateMany({
+          where: { id: { in: unlinkedOrderIds }, customerId: null },
+          data: { customerId: customerId },
+        })
+        .catch((err) => console.warn('Could not auto-link orders to customerId:', err))
+    }
+
     const formattedOrders = orders.map((order) => {
       const totalVal = Number(order.total || order.totalAmount || 0)
+      const rawStatus = String(order.status || '').toLowerCase().trim()
+      // If the order has not been approved in kitchen display (status is pending or missing), ensure it says 'pending'
+      const finalStatus = rawStatus ? order.status : 'pending'
+
       return {
         id: order.id,
         orderNumber: order.orderNumber,
-        status: order.status,
+        status: finalStatus,
         total: totalVal,
         totalAmount: totalVal,
         source: order.source || 'ONLINE',
@@ -126,9 +168,9 @@ export async function GET(request: NextRequest) {
         paymentStatus: order.paymentStatus,
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,
-        customerId: order.customerId,
-        customerEmail: order.customer?.email || customerEmail || null,
-        tableNumber: order.table?.tableNumber || null,
+        customerId: order.customerId || customerId,
+        customerEmail: order.customer?.email || cleanEmail || null,
+        tableNumber: order.table?.tableNumber || (order.metadata as any)?.tableNumber || null,
         branchName: order.branch?.name || 'Main Branch',
         items: order.items.map((item) => ({
           id: item.id,

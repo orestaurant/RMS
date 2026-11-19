@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { resolveOAuthRedirectUri } from '@/lib/oauth-utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,8 +18,8 @@ export async function GET(request: NextRequest) {
     const restaurantId = searchParams.get('restaurantId') || ''
 
     // 1. Fetch Google credentials from database or fall back to environment variables
-    let clientId = process.env.GOOGLE_CLIENT_ID || ''
-    let redirectUri = process.env.GOOGLE_REDIRECT_URI || `${request.nextUrl.origin}/api/auth/feedback/google/callback`
+    let clientId = (process.env.GOOGLE_CLIENT_ID || '').trim()
+    let dbRedirectUri: string | null = null
 
     if (restaurantId) {
       try {
@@ -26,10 +27,10 @@ export async function GET(request: NextRequest) {
           where: { restaurantId },
         })
         if (settings?.googleClientId) {
-          clientId = settings.googleClientId
+          clientId = settings.googleClientId.trim()
         }
         if (settings?.googleRedirectUri) {
-          redirectUri = settings.googleRedirectUri
+          dbRedirectUri = settings.googleRedirectUri.trim()
         }
       } catch (dbErr) {
         console.warn('Could not load feedback settings from DB, using env fallback:', dbErr)
@@ -46,17 +47,25 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // 2. Prepare OAuth state with metadata to preserve context across Google redirect
+    // 2. Resolve canonical redirect URI (automatically handles production vs localhost & proxy headers)
+    const redirectUri = resolveOAuthRedirectUri(
+      request,
+      'google',
+      dbRedirectUri || process.env.GOOGLE_REDIRECT_URI
+    )
+
+    // 3. Prepare OAuth state with metadata + exact redirectUri to preserve context across Google redirect
     const statePayload = {
       returnUrl,
       tableNumber,
       orderId,
       restaurantId,
+      redirectUri,
       timestamp: Date.now(),
     }
     const state = Buffer.from(JSON.stringify(statePayload)).toString('base64url')
 
-    // 3. Build Google OAuth authorization URL
+    // 4. Build Google OAuth authorization URL
     const googleAuthUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
     googleAuthUrl.searchParams.set('client_id', clientId)
     googleAuthUrl.searchParams.set('redirect_uri', redirectUri)

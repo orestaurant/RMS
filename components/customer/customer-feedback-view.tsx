@@ -27,6 +27,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { cn } from '@/lib/utils'
 
 function FeedbackViewContent() {
   const router = useRouter()
@@ -35,6 +36,9 @@ function FeedbackViewContent() {
   const urlTable = searchParams.get('table') || searchParams.get('tableNumber') || ''
   const urlOrderId = searchParams.get('orderId') || ''
   const googleVerifiedParam = searchParams.get('google_verified') === '1'
+  const facebookVerifiedParam = searchParams.get('facebook_verified') === '1' || searchParams.get('meta_verified') === '1'
+  const isVerifiedParam = googleVerifiedParam || facebookVerifiedParam
+  const reviewPlatformParam = searchParams.get('review_platform') || (facebookVerifiedParam ? 'facebook' : 'google')
   const reviewerNameParam = searchParams.get('reviewer_name') || ''
   const reviewerEmailParam = searchParams.get('reviewer_email') || ''
   const reviewerPhotoParam = searchParams.get('reviewer_photo') || ''
@@ -51,7 +55,8 @@ function FeedbackViewContent() {
   const [comment, setComment] = useState('')
 
   // Verification & Profile State
-  const [isGoogleVerified, setIsGoogleVerified] = useState(googleVerifiedParam)
+  const [isGoogleVerified, setIsGoogleVerified] = useState(isVerifiedParam)
+  const [reviewPlatform, setReviewPlatform] = useState<string>(reviewPlatformParam)
   const [customerName, setCustomerName] = useState(reviewerNameParam)
   const [customerEmail, setCustomerEmail] = useState(reviewerEmailParam)
   const [customerPhoto, setCustomerPhoto] = useState(reviewerPhotoParam)
@@ -62,6 +67,8 @@ function FeedbackViewContent() {
   const [isGoogleEnabled, setIsGoogleEnabled] = useState(true)
   const [reviewDiscountPercent, setReviewDiscountPercent] = useState(10)
   const [facebookPageUrl, setFacebookPageUrl] = useState('')
+  const [metaReviewUrl, setMetaReviewUrl] = useState('https://www.facebook.com')
+  const [metaReviewsEnabled, setMetaReviewsEnabled] = useState(true)
 
   // UI Flow State
   const [loading, setLoading] = useState(true)
@@ -85,10 +92,14 @@ function FeedbackViewContent() {
             setGooglePlaceReviewUrl(d.settings.googlePlaceReviewUrl || '')
             setIsGoogleEnabled(d.settings.isGoogleEnabled ?? true)
             setReviewDiscountPercent(d.settings.reviewDiscountPercent || 10)
-            setFacebookPageUrl(d.settings.facebookPageUrl || '')
+            const resolvedMetaUrl = d.settings.metaReviewUrl || d.settings.facebookPageUrl || ''
+            const resolvedMetaEnabled = Boolean(d.settings.metaReviewsEnabled ?? d.settings.isFacebookEnabled)
+            setFacebookPageUrl(resolvedMetaUrl)
+            setMetaReviewUrl(resolvedMetaUrl)
+            setMetaReviewsEnabled(resolvedMetaEnabled)
           }
 
-          if (d.isGoogleVerified || googleVerifiedParam) {
+          if (d.isGoogleVerified || isVerifiedParam) {
             setIsGoogleVerified(true)
             if (d.customer) {
               if (!customerName) setCustomerName(d.customer.name || '')
@@ -105,7 +116,7 @@ function FeedbackViewContent() {
     }
 
     init()
-  }, [urlTable, urlOrderId, googleVerifiedParam])
+  }, [urlTable, urlOrderId, isVerifiedParam])
 
   // Handle Google OAuth Initiation
   const handleGoogleLogin = () => {
@@ -115,6 +126,16 @@ function FeedbackViewContent() {
       orderId: urlOrderId,
     })
     window.location.href = `/api/auth/feedback/google?${query.toString()}`
+  }
+
+  // Handle Meta (Facebook) OAuth Initiation
+  const handleFacebookLogin = () => {
+    const query = new URLSearchParams({
+      returnUrl: '/customer/feedback',
+      table: tableNumber,
+      orderId: urlOrderId,
+    })
+    window.location.href = `/api/auth/feedback/facebook?${query.toString()}`
   }
 
   // Handle Feedback Submission
@@ -137,7 +158,7 @@ function FeedbackViewContent() {
         customerName: customerName || 'Valued Guest',
         customerEmail: customerEmail || undefined,
         customerPhotoUrl: customerPhoto || undefined,
-        reviewPlatform: 'google',
+        reviewPlatform,
       }
 
       const res = await fetch('/api/customer/feedback', {
@@ -155,6 +176,14 @@ function FeedbackViewContent() {
       if (data.googlePlaceReviewUrl) {
         setGooglePlaceReviewUrl(data.googlePlaceReviewUrl)
       }
+      if (data.metaReviewUrl || data.facebookPageUrl) {
+        const resolvedMetaUrl = data.metaReviewUrl || data.facebookPageUrl || ''
+        setMetaReviewUrl(resolvedMetaUrl)
+        setFacebookPageUrl(resolvedMetaUrl)
+      }
+      if (data.metaReviewsEnabled !== undefined || data.isFacebookEnabled !== undefined) {
+        setMetaReviewsEnabled(Boolean(data.metaReviewsEnabled ?? data.isFacebookEnabled))
+      }
       setSubmitted(true)
     } catch (err: any) {
       setErrorMessage(err?.message || 'Error submitting feedback. Please try again.')
@@ -170,6 +199,15 @@ function FeedbackViewContent() {
       setTimeout(() => setCopiedCode(false), 2000)
     }
   }
+
+  const effectiveMetaReviewUrl = metaReviewUrl || facebookPageUrl
+  const isValidUrl = (url?: string | null) => {
+    if (!url) return false
+    const trimmed = url.trim()
+    return trimmed.startsWith('http://') || trimmed.startsWith('https://')
+  }
+  const showGoogleReviewAction = Boolean(isGoogleEnabled && isValidUrl(googlePlaceReviewUrl))
+  const showMetaReviewAction = Boolean(metaReviewsEnabled && isValidUrl(effectiveMetaReviewUrl))
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background via-muted/20 to-background flex flex-col justify-between p-4 sm:p-6 md:p-8">
@@ -192,7 +230,9 @@ function FeedbackViewContent() {
         {authErrorParam && (
           <div className="p-3.5 rounded-xl border border-destructive/40 bg-destructive/10 text-destructive text-xs flex items-center gap-2">
             <AlertCircle className="size-4 shrink-0" />
-            <span>Google authentication failed. Please try again.</span>
+            <span>
+              {authErrorParam.includes('facebook') ? 'Meta (Facebook)' : 'Google'} authentication failed. Please try again.
+            </span>
           </div>
         )}
 
@@ -243,46 +283,88 @@ function FeedbackViewContent() {
               </p>
             </div>
 
-            {/* Direct Google Place Review Action */}
-            {googlePlaceReviewUrl && (
-              <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 space-y-2.5 text-left">
-                <div className="flex items-center gap-2">
-                  <div className="size-6 rounded-md bg-white p-1 flex items-center justify-center">
-                    <svg viewBox="0 0 24 24" className="w-full h-full">
-                      <path
-                        fill="#4285F4"
-                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                      />
-                    </svg>
+            {/* External Review Actions (Google Maps & Meta / Facebook) */}
+            {(showGoogleReviewAction || showMetaReviewAction) && (
+              <div
+                className={cn(
+                  'gap-3 text-left',
+                  showGoogleReviewAction && showMetaReviewAction
+                    ? 'grid grid-cols-1 sm:grid-cols-2'
+                    : 'space-y-3'
+                )}
+              >
+                {/* Direct Google Place Review Action */}
+                {showGoogleReviewAction && (
+                  <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 flex flex-col justify-between space-y-2.5">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className="size-6 rounded-md bg-white p-1 flex items-center justify-center shrink-0 shadow-2xs">
+                          <svg viewBox="0 0 24 24" className="w-full h-full">
+                            <path
+                              fill="#4285F4"
+                              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                            />
+                            <path
+                              fill="#34A853"
+                              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                            />
+                            <path
+                              fill="#FBBC05"
+                              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                            />
+                            <path
+                              fill="#EA4335"
+                              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                            />
+                          </svg>
+                        </div>
+                        <span className="text-xs font-bold text-foreground">Post Review on Google Maps</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Support our local chefs by publishing your rating directly onto Google Maps:
+                      </p>
+                    </div>
+                    <a
+                      href={googlePlaceReviewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full pt-1"
+                    >
+                      <Button className="w-full gap-2 bg-[#4285F4] hover:bg-[#3367D6] text-white font-bold text-xs h-9 cursor-pointer transition-colors shadow-2xs">
+                        <ExternalLink className="size-3.5" />
+                        Open Google Maps Review Box
+                      </Button>
+                    </a>
                   </div>
-                  <span className="text-xs font-bold text-foreground">Post Review on Google Maps</span>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Support our local chefs by publishing your rating directly onto Google Maps:
-                </p>
-                <a
-                  href={googlePlaceReviewUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="block w-full"
-                >
-                  <Button className="w-full gap-2 bg-[#4285F4] hover:bg-[#3367D6] text-white font-bold text-xs h-9 cursor-pointer">
-                    <ExternalLink className="size-3.5" />
-                    Open Google Maps Review Box
-                  </Button>
-                </a>
+                )}
+
+                {/* Direct Meta (Facebook) Review Action */}
+                {showMetaReviewAction && (
+                  <div className="p-4 rounded-xl bg-[#1877F2]/10 border border-[#1877F2]/25 flex flex-col justify-between space-y-2.5">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className="size-6 rounded-md bg-[#1877F2] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs">
+                          f
+                        </div>
+                        <span className="text-xs font-bold text-foreground">Review on Meta (Facebook)</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Recommend our restaurant and share your thoughts on our official Facebook Page:
+                      </p>
+                    </div>
+                    <a
+                      href={effectiveMetaReviewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full pt-1"
+                    >
+                      <Button className="w-full gap-2 bg-[#1877F2] hover:bg-[#166fe5] text-white font-bold text-xs h-9 cursor-pointer transition-colors shadow-2xs">
+                        <ExternalLink className="size-3.5" />
+                        Open Facebook Reviews
+                      </Button>
+                    </a>
+                  </div>
+                )}
               </div>
             )}
 
@@ -314,7 +396,7 @@ function FeedbackViewContent() {
                   {isGoogleVerified ? (
                     <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-[11px] gap-1 font-semibold">
                       <CheckCircle2 className="size-3" />
-                      Google Verified
+                      {reviewPlatform === 'facebook' ? 'Meta Verified' : 'Google Verified'}
                     </Badge>
                   ) : (
                     <Badge variant="outline" className="text-xs text-muted-foreground font-medium">
@@ -338,48 +420,75 @@ function FeedbackViewContent() {
                         <p className="text-xs font-bold text-foreground truncate">{customerName}</p>
                         <ShieldCheck className="size-3.5 text-emerald-500 shrink-0" />
                       </div>
-                      <p className="text-[11px] text-muted-foreground truncate">{customerEmail}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">{customerEmail || 'Verified Social Identity'}</p>
                     </div>
-                    <Badge className="bg-emerald-500 text-white text-[10px] py-0.5 shrink-0">
-                      10% Discount Qualified
-                    </Badge>
+                    {reviewPlatform === 'facebook' ? (
+                      <Badge className="bg-[#1877F2]/10 text-[#1877F2] border-[#1877F2]/30 text-[10px] gap-1 py-0.5 shrink-0">
+                        <div className="size-2.5 rounded-2xs bg-[#1877F2] text-white flex items-center justify-center font-bold text-[7px] leading-none">f</div>
+                        Meta Verified
+                      </Badge>
+                    ) : (
+                      <Badge className="bg-emerald-500 text-white text-[10px] py-0.5 shrink-0">
+                        10% Discount Qualified
+                      </Badge>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-3">
                     <p className="text-xs text-muted-foreground">
-                      Signing in with your Google account confirms your authentic dining experience and unlocks a{' '}
+                      Signing in with your Google or Meta (Facebook) account confirms your authentic dining experience and unlocks a{' '}
                       <span className="font-bold text-foreground">{reviewDiscountPercent}% discount voucher</span>.
                     </p>
 
-                    <Button
-                      type="button"
-                      onClick={handleGoogleLogin}
-                      className="w-full gap-3 bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 font-semibold text-xs h-10 shadow-xs cursor-pointer transition-all"
-                    >
-                      <svg viewBox="0 0 24 24" className="size-4 shrink-0">
-                        <path
-                          fill="#4285F4"
-                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                        />
-                        <path
-                          fill="#34A853"
-                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                        />
-                        <path
-                          fill="#FBBC05"
-                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                        />
-                        <path
-                          fill="#EA4335"
-                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                        />
-                      </svg>
-                      <span>Sign in with Google to Verify & Claim 10% Off</span>
-                    </Button>
+                    <div className={cn(
+                      'gap-2.5',
+                      isGoogleEnabled && metaReviewsEnabled ? 'grid grid-cols-1 sm:grid-cols-2' : 'flex flex-col'
+                    )}>
+                      {isGoogleEnabled && (
+                        <Button
+                          type="button"
+                          onClick={handleGoogleLogin}
+                          className="w-full gap-2.5 bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 font-semibold text-xs h-10 shadow-xs cursor-pointer transition-all"
+                        >
+                          <svg viewBox="0 0 24 24" className="size-4 shrink-0">
+                            <path
+                              fill="#4285F4"
+                              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                            />
+                            <path
+                              fill="#34A853"
+                              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                            />
+                            <path
+                              fill="#FBBC05"
+                              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                            />
+                            <path
+                              fill="#EA4335"
+                              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                            />
+                          </svg>
+                          <span>Sign in with Google</span>
+                        </Button>
+                      )}
+
+                      {metaReviewsEnabled && (
+                        <Button
+                          type="button"
+                          onClick={handleFacebookLogin}
+                          className="w-full gap-2.5 bg-[#1877F2] hover:bg-[#166fe5] text-white font-semibold text-xs h-10 shadow-xs cursor-pointer transition-all"
+                        >
+                          <div className="size-4 rounded-xs bg-white text-[#1877F2] font-black flex items-center justify-center text-xs leading-none">
+                            f
+                          </div>
+                          <span>Sign in with Facebook</span>
+                        </Button>
+                      )}
+                    </div>
 
                     <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/80">
                       <ShieldCheck className="size-3 text-emerald-500" />
-                      <span>Zero spam · Verified Google identity guarantees instant discount</span>
+                      <span>Zero spam · Verified identity guarantees instant discount</span>
                     </div>
                   </div>
                 )}
@@ -548,7 +657,7 @@ function FeedbackViewContent() {
                   </div>
 
                   {/* Direct Place Link Preview */}
-                  {googlePlaceReviewUrl && (
+                  {showGoogleReviewAction && (
                     <div className="p-3 rounded-lg bg-blue-500/5 border border-blue-500/20 flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2">
                         <MapPin className="size-4 text-blue-500 shrink-0" />
@@ -559,10 +668,32 @@ function FeedbackViewContent() {
                       <a
                         href={googlePlaceReviewUrl}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="text-blue-600 dark:text-blue-400 font-semibold hover:underline inline-flex items-center gap-1 text-[11px]"
                       >
                         Open Maps <ExternalLink className="size-3" />
+                      </a>
+                    </div>
+                  )}
+
+                  {/* Direct Meta (Facebook) Link Preview */}
+                  {showMetaReviewAction && (
+                    <div className="p-3 rounded-lg bg-[#1877F2]/5 border border-[#1877F2]/20 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <div className="size-4 rounded bg-[#1877F2] text-white flex items-center justify-center font-bold text-[10px] shrink-0">
+                          f
+                        </div>
+                        <span className="text-[11px] text-muted-foreground">
+                          Also post publicly to RestoSphere Facebook Page
+                        </span>
+                      </div>
+                      <a
+                        href={effectiveMetaReviewUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#1877F2] dark:text-blue-400 font-semibold hover:underline inline-flex items-center gap-1 text-[11px]"
+                      >
+                        Open Facebook <ExternalLink className="size-3" />
                       </a>
                     </div>
                   )}
