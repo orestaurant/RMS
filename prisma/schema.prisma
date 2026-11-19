@@ -1730,6 +1730,8 @@ enum UserRoleEnum {
   CHEF
   INVENTORY_MANAGER
   VENDOR
+  DJ
+  dj
 }
 
 enum OrderStatusEnum {

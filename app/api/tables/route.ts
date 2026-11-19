@@ -108,6 +108,7 @@ export async function GET(request: NextRequest) {
         rawSection: t.section || 'Indoor',
         status: displayStatus,
         waiter: meta.waiter || undefined,
+        waiterId: meta.waiterId || undefined,
         occupiedSince: activeOrder?.createdAt
           ? new Date(activeOrder.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
           : meta.occupiedSince || undefined,

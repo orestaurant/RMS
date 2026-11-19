@@ -14,6 +14,7 @@ const ALLOWED_ROLES = [
   'ADMIN',
   'SUPER_ADMIN',
   'CUSTOMER',
+  'DJ',
 ] as const
 
 /**
@@ -290,7 +291,7 @@ export async function POST(request: NextRequest) {
         })
 
     // 2. For operational staff roles, attach staff profile safely
-    const isStaffRole = ['WAITER', 'COUNTER_MANAGER', 'CHEF', 'INVENTORY_MANAGER', 'VENDOR'].includes(cleanRole)
+    const isStaffRole = ['WAITER', 'COUNTER_MANAGER', 'CHEF', 'INVENTORY_MANAGER', 'VENDOR', 'DJ'].includes(cleanRole)
     if (isStaffRole && orgId && firstRestaurant) {
       try {
         const empSuffix = `${Date.now().toString().slice(-5)}${Math.floor(10 + Math.random() * 90)}`

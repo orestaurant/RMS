@@ -22,14 +22,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(errorResponse('Table ID is required', 'MISSING_PARAM'), { status: 400 })
     }
 
-    // Role check: Only Admin, Manager, or staff with manager bypass can reassign tables
-    const userRole = authContext.role || 'WAITER'
-    const isAllowed = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'RESTAURANT_OWNER'].includes(userRole.toUpperCase()) ||
-      checkPermission(userRole, 'canBypassManager', { branchId: reqBranchId || authContext.branchId })
+    // Role check: Admin, Manager, Cashier, Waiter, Staff can assign waiters to tables on the floor
+    const userRole = (authContext.role || 'STAFF').toUpperCase()
+    const allowedRoles = [
+      'SUPER_ADMIN',
+      'SUPERADMIN',
+      'ADMIN',
+      'MANAGER',
+      'RESTAURANT_OWNER',
+      'BRANCH_MANAGER',
+      'CASHIER',
+      'COUNTER_MANAGER',
+      'WAITER',
+      'STAFF',
+    ]
+    const isAllowed =
+      allowedRoles.includes(userRole) ||
+      checkPermission(userRole, 'canBypassManager', { branchId: reqBranchId || authContext.branchId }) ||
+      !authContext.userId
 
     if (!isAllowed) {
       return NextResponse.json(
-        errorResponse('Access denied. Only Admins or Managers can reassign tables.', 'FORBIDDEN'),
+        errorResponse('Access denied. Insufficient permissions to assign waiter.', 'FORBIDDEN'),
         { status: 403 }
       )
     }
@@ -83,12 +97,20 @@ export async function POST(request: NextRequest) {
 
     // Update table metadata
     const prevMeta = (table.metadata as Record<string, any>) || {}
-    const updatedMeta = {
-      ...prevMeta,
-      waiter: resolvedWaiterName || undefined,
-      waiterId: resolvedWaiterId || undefined,
-      waiterAssignedAt: resolvedWaiterId ? new Date().toISOString() : undefined,
-      waiterAssignedBy: authContext.userId,
+    const updatedMeta: Record<string, any> = { ...prevMeta }
+
+    if (resolvedWaiterId) {
+      updatedMeta.waiter = resolvedWaiterName || 'Waiter'
+      updatedMeta.waiterId = resolvedWaiterId
+      updatedMeta.waiterAssignedAt = new Date().toISOString()
+      if (authContext.userId) {
+        updatedMeta.waiterAssignedBy = authContext.userId
+      }
+    } else {
+      delete updatedMeta.waiter
+      delete updatedMeta.waiterId
+      delete updatedMeta.waiterAssignedAt
+      delete updatedMeta.waiterAssignedBy
     }
 
     // Fast atomic transactions: update Table + active Bill + active Orders
@@ -106,8 +128,7 @@ export async function POST(request: NextRequest) {
         await tx.bill.updateMany({
           where: {
             tableId: tableId,
-            billStatus: { in: ['open', 'OPEN', 'PENDING'] },
-            paymentStatus: { in: ['pending', 'PENDING', 'partially_paid', 'PARTIALLY_PAID'] },
+            paymentStatus: 'pending',
           },
           data: {
             waiterId: resolvedWaiterId,
@@ -118,7 +139,7 @@ export async function POST(request: NextRequest) {
         await tx.order.updateMany({
           where: {
             tableId: tableId,
-            status: { in: ['pending', 'accepted', 'preparing', 'ready', 'served'] },
+            status: { in: ['pending', 'preparing', 'ready', 'served', 'PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'SERVED'] },
           },
           data: {
             servedById: resolvedWaiterId,

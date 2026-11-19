@@ -13,6 +13,7 @@ export interface UserStatsResult {
     INVENTORY_MANAGER: number
     VENDOR: number
     CUSTOMER: number
+    DJ: number
   }
 }
 
@@ -66,6 +67,7 @@ export async function getOrComputeUserStats(force = false): Promise<UserStatsRes
     INVENTORY_MANAGER: 0,
     VENDOR: 0,
     CUSTOMER: 0,
+    DJ: 0,
   }
 
   for (const group of roleGroups) {

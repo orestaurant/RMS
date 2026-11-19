@@ -18,6 +18,9 @@ import {
   Car,
   Plus,
   Star,
+  Music,
+  Headphones,
+  Disc3,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -26,6 +29,7 @@ import { StatCard } from '@/components/ui/stat-card'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import { cn } from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
+import { SongRequestModal } from '@/components/customer/song-request-modal'
 
 interface CustomerProfile {
   id: string
@@ -78,6 +82,7 @@ export function CustomerDashboardView() {
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
   const [loading, setLoading] = useState(true)
+  const [showSongModal, setShowSongModal] = useState(false)
 
   const customerName = auth?.name || profile?.name || 'Customer'
   const hour = new Date().getHours()
@@ -245,6 +250,37 @@ export function CustomerDashboardView() {
             <ArrowRight className="size-3.5" />
           </Button>
         </Link>
+      </div>
+
+      {/* ── Live DJ Booth Song Request Banner ──────────────── */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-pink-500/15 via-rose-500/10 to-purple-500/15 border border-pink-500/30 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="size-10 rounded-xl bg-gradient-to-tr from-pink-500 to-rose-500 text-white flex items-center justify-center shrink-0 shadow-sm shadow-pink-500/25">
+            <Music className="size-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-foreground">
+                Request a Song to Live DJ Booth 🎵
+              </h2>
+              <Badge className="bg-pink-500 text-white text-[10px] py-0 font-bold">
+                Live DJ
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Choose your favorite track, add a dedication for your table, and watch the status in real-time as the DJ plays it.
+            </p>
+          </div>
+        </div>
+        <Button
+          size="sm"
+          onClick={() => setShowSongModal(true)}
+          className="shrink-0 w-full sm:w-auto font-bold text-xs gap-1.5 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white shadow-xs cursor-pointer"
+        >
+          <Headphones className="size-3.5" />
+          <span>Send DJ Request</span>
+          <ArrowRight className="size-3.5" />
+        </Button>
       </div>
 
       {/* ── Customer Metric Cards (Zero Admin/Revenue Numbers) ── */}
@@ -553,10 +589,38 @@ export function CustomerDashboardView() {
                 </div>
                 <ArrowRight className="size-3.5 text-muted-foreground group-hover:translate-x-0.5 transition-transform" />
               </Link>
+
+              {/* DJ Song Request */}
+              <button
+                type="button"
+                onClick={() => setShowSongModal(true)}
+                className="w-full flex items-center justify-between p-3 rounded-lg border border-border/70 hover:bg-muted/40 transition-colors group cursor-pointer text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="size-8 rounded-lg bg-pink-500/10 text-pink-500 flex items-center justify-center">
+                    <Music className="size-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground group-hover:text-pink-500 transition-colors">
+                      DJ Song Request Booth
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">Request tracks & dedications live</p>
+                  </div>
+                </div>
+                <ArrowRight className="size-3.5 text-muted-foreground group-hover:translate-x-0.5 transition-transform" />
+              </button>
             </CardContent>
           </Card>
         </div>
       </div>
+
+      {/* Live DJ Song Request Modal */}
+      <SongRequestModal
+        open={showSongModal}
+        onOpenChange={setShowSongModal}
+        tableNumber="Table 1"
+        guestName={customerName}
+      />
     </div>
   )
 }

@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
       // Clean up any conflicting customer record with this staff email if one was created during tests
       prisma.customer.deleteMany({
         where: { email: { equals: email, mode: 'insensitive' } },
-      }).catch(() => {})
+      }).catch(() => { })
     } else {
       // 3. User was not found in staff table: Check if this is a Customer trying to log in
       const customerAccount = await prisma.customer.findFirst({
@@ -106,9 +106,10 @@ export async function POST(request: NextRequest) {
     })
 
     const roleUpper = String(user.role || '').toUpperCase()
+    const isDJ = roleUpper === 'DJ'
     const isWaiter = roleUpper === 'WAITER'
     const isChef = roleUpper === 'CHEF'
-    const redirectUrl = isWaiter ? '/tables' : isChef ? '/kitchen' : '/dashboard'
+    const redirectUrl = isDJ ? '/dj' : isWaiter ? '/tables' : isChef ? '/kitchen' : '/dashboard'
 
     const response = NextResponse.json(
       {

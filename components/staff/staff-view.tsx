@@ -29,6 +29,7 @@ import {
   Crown,
   Trash2,
   Sliders,
+  Disc3,
 } from 'lucide-react'
 import { RolesPermissionsView } from './roles-permissions-view'
 import { Button } from '@/components/ui/button'
@@ -82,6 +83,7 @@ export interface UserStats {
     INVENTORY_MANAGER: number
     VENDOR: number
     CUSTOMER: number
+    DJ: number
   }
 }
 
@@ -93,6 +95,7 @@ const SUPPORTED_ROLES = [
   { value: 'CHEF', label: 'Chef', icon: ChefHat, color: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
   { value: 'INVENTORY_MANAGER', label: 'Inventory Manager', icon: Boxes, color: 'bg-purple-500/10 text-purple-400 border-purple-500/30' },
   { value: 'VENDOR', label: 'Vendor', icon: Truck, color: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
+  { value: 'DJ', label: 'DJ (Disc Jockey)', icon: Disc3, color: 'bg-pink-500/10 text-pink-400 border-pink-500/30' },
 ] as const
 
 /**
@@ -148,6 +151,7 @@ export function StaffView() {
         { value: 'CHEF', label: 'Chef' },
         { value: 'INVENTORY_MANAGER', label: 'Inventory Manager' },
         { value: 'VENDOR', label: 'Vendor' },
+        { value: 'DJ', label: 'DJ (Disc Jockey)' },
         { value: 'SUPER_ADMIN', label: 'Super Admin' },
       ]
     : [
@@ -156,6 +160,7 @@ export function StaffView() {
         { value: 'CHEF', label: 'Chef' },
         { value: 'INVENTORY_MANAGER', label: 'Inventory Manager' },
         { value: 'VENDOR', label: 'Vendor' },
+        { value: 'DJ', label: 'DJ (Disc Jockey)' },
       ]
 
   const [users, setUsers] = useState<ManagedUser[]>([])
@@ -756,6 +761,20 @@ export function StaffView() {
             </div>
           </div>
         </Card>
+
+        <Card className="p-4 border-pink-500/30 bg-pink-500/5 backdrop-blur-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">DJs</p>
+              <p className="text-2xl font-bold text-pink-400 mt-1">
+                {stats?.roles?.DJ ?? 0}
+              </p>
+            </div>
+            <div className="p-2.5 rounded-lg bg-pink-500/10 text-pink-400">
+              <Disc3 className="size-5" />
+            </div>
+          </div>
+        </Card>
       </div>
 
       {/* Filter and Search Bar */}
@@ -804,6 +823,7 @@ export function StaffView() {
               <option value="CHEF">Chef</option>
               <option value="INVENTORY_MANAGER">Inventory Manager</option>
               <option value="VENDOR">Vendor</option>
+              <option value="DJ">DJ (Disc Jockey)</option>
             </select>
 
             {/* Status Filter Dropdown */}

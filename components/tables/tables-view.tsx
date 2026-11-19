@@ -99,6 +99,7 @@ export interface TableData {
   capacity: number
   status: TableStatus
   waiter?: string
+  waiterId?: string
   occupiedSince?: string
   guestCount?: number
   order?: { id: string; status: string }
@@ -579,46 +580,103 @@ export function TablesView() {
   const [waitersList, setWaitersList] = useState<Array<{ id: string; name: string; phone: string }>>([])
   const [selectedWaiterId, setSelectedWaiterId] = useState<string>('')
   const [isAssigning, setIsAssigning] = useState(false)
+  const [waitersLoading, setWaitersLoading] = useState(false)
 
   const handleOpenAssignWaiter = async (tbl: TableData) => {
     setAssignTableTarget(tbl)
-    setSelectedWaiterId('')
+    setSelectedWaiterId(tbl.waiterId || '')
+    setWaitersLoading(true)
     try {
-      const res = await fetch(`/api/staff/waiters?branchId=${branchId || ''}`)
+      const res = await fetch(`/api/staff/waiters?branchId=${encodeURIComponent(branchId || '')}`)
       const data = await res.json()
       if (data.success && Array.isArray(data.data)) {
         setWaitersList(data.data)
-        const match = data.data.find((w: any) => w.name === tbl.waiter)
-        if (match) setSelectedWaiterId(match.id)
+        const match = data.data.find(
+          (w: any) =>
+            (tbl.waiterId && w.id === tbl.waiterId) ||
+            (tbl.waiter && w.name.trim().toLowerCase() === tbl.waiter.trim().toLowerCase())
+        )
+        if (match) {
+          setSelectedWaiterId(match.id)
+        } else if (!tbl.waiter && !tbl.waiterId) {
+          setSelectedWaiterId('')
+        }
       }
     } catch (err) {
       console.error('Error fetching waiters:', err)
+    } finally {
+      setWaitersLoading(false)
     }
   }
 
   const handleSaveWaiterAssignment = async () => {
     if (!assignTableTarget) return
     setIsAssigning(true)
+    const targetTableId = assignTableTarget.id
+    const prevWaiter = assignTableTarget.waiter
+    const prevWaiterId = assignTableTarget.waiterId
+
     try {
       const selected = waitersList.find((w) => w.id === selectedWaiterId)
+      const newWaiterName = selected?.name || ''
+      const newWaiterId = selectedWaiterId || null
+
+      // Optimistic update for instant UI responsiveness
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === targetTableId
+            ? {
+                ...t,
+                waiter: newWaiterName || undefined,
+                waiterId: newWaiterId || undefined,
+              }
+            : t
+        )
+      )
+      setAssignTableTarget(null)
+
       const res = await fetch('/api/tables/assign-waiter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tableId: assignTableTarget.id,
-          waiterId: selectedWaiterId || null,
-          waiterName: selected?.name || '',
+          tableId: targetTableId,
+          waiterId: newWaiterId,
+          waiterName: newWaiterName,
           branchId,
         }),
       })
       const data = await res.json()
-      if (data.success) {
-        setAssignTableTarget(null)
-        fetchTables()
-      } else {
+      if (!data.success) {
+        // Rollback on failure
+        setTables((prev) =>
+          prev.map((t) =>
+            t.id === targetTableId
+              ? {
+                  ...t,
+                  waiter: prevWaiter,
+                  waiterId: prevWaiterId,
+                }
+              : t
+          )
+        )
         alert(data.message || 'Failed to assign waiter')
+      } else {
+        // Background re-sync
+        fetchTables()
       }
     } catch (err: any) {
+      // Rollback on network/client error
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === targetTableId
+            ? {
+                ...t,
+                waiter: prevWaiter,
+                waiterId: prevWaiterId,
+              }
+            : t
+        )
+      )
       alert(err.message || 'Assignment failed')
     } finally {
       setIsAssigning(false)
@@ -1426,18 +1484,34 @@ export function TablesView() {
           </DialogHeader>
 
           <div className="py-3 space-y-3">
-            <Label className="text-xs font-semibold">Select Waiter</Label>
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-semibold">Select Waiter</Label>
+              {waitersLoading && (
+                <span className="text-[11px] text-muted-foreground animate-pulse">Fetching staff...</span>
+              )}
+            </div>
             <select
               value={selectedWaiterId}
               onChange={(e) => setSelectedWaiterId(e.target.value)}
-              className="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              disabled={waitersLoading || isAssigning}
+              className="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
             >
               <option value="">-- Unassigned (No Waiter) --</option>
-              {waitersList.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name} {w.phone ? `(${w.phone})` : ''}
+              {waitersLoading ? (
+                <option disabled value="__loading__">
+                  Loading active waiters...
                 </option>
-              ))}
+              ) : waitersList.length === 0 ? (
+                <option disabled value="__empty__">
+                  No active waiters found
+                </option>
+              ) : (
+                waitersList.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name} {w.phone ? `(${w.phone})` : ''}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 

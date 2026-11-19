@@ -23,6 +23,7 @@ import {
   Truck,
   Globe,
   Star,
+  Disc3,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -57,6 +58,7 @@ export function AppSidebar() {
 
   const userRole = auth?.role || (loading ? '' : 'STAFF')
   const userRoleUpper = String(userRole).toUpperCase()
+  const isDJ = userRoleUpper === 'DJ'
   const isWaiter = userRoleUpper === 'WAITER'
   const isChef = userRoleUpper === 'CHEF'
   const isCustomer = userRoleUpper === 'CUSTOMER'
@@ -97,7 +99,7 @@ export function AppSidebar() {
   // Dynamic user data
   const userName = loading
     ? 'Loading...'
-    : auth?.name || (isCustomer ? 'Customer' : isWaiter ? 'Waiter' : isChef ? 'Chef' : isVendor ? 'Vendor' : isInventoryManager ? 'Inventory Manager' : isAdmin ? 'Admin' : 'Staff')
+    : auth?.name || (isCustomer ? 'Customer' : isDJ ? 'DJ' : isWaiter ? 'Waiter' : isChef ? 'Chef' : isVendor ? 'Vendor' : isInventoryManager ? 'Inventory Manager' : isAdmin ? 'Admin' : 'Staff')
   const userEmail = loading ? '' : auth?.email || ''
   const initials =
     userName && userName !== 'Loading...'
@@ -116,6 +118,17 @@ export function AppSidebar() {
   // 3. CUSTOMER: Customer operations and menu without internal settings
   // 4. ADMIN/SUPER_ADMIN: Full system control across operations, kitchen, and business settings
   const navGroups = (() => {
+    if (isDJ) {
+      return [
+        {
+          label: 'DJ BOOTH',
+          items: [
+            { label: 'DJ Dashboard', href: '/dj', icon: Disc3 },
+          ],
+        },
+      ]
+    }
+
     if (isChef) {
       return [
         {
@@ -295,8 +308,8 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               size="lg"
-              tooltip={isCustomer ? "Go to Home Page" : isWaiter ? "Go to Tables" : isVendor ? "Vendor Dashboard" : "Go to Home Page"}
-              render={<Link href={isCustomer ? '/' : isWaiter ? '/tables' : isVendor ? '/vendor/dashboard' : '/'} />}
+              tooltip={isCustomer ? "Go to Home Page" : isWaiter ? "Go to Tables" : isDJ ? "DJ Dashboard" : isVendor ? "Vendor Dashboard" : "Go to Home Page"}
+              render={<Link href={isCustomer ? '/' : isWaiter ? '/tables' : isDJ ? '/dj' : isVendor ? '/vendor/dashboard' : '/'} />}
               className="hover:bg-sidebar-accent/50 w-full"
             >
               <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-tr from-orange-500 to-amber-500 text-white shrink-0 shadow-sm shadow-orange-500/25">
@@ -307,7 +320,7 @@ export function AppSidebar() {
                   Resto<span className="text-orange-500">Sphere</span>
                 </span>
                 <span className="text-xs text-muted-foreground truncate">
-                  {isCustomer ? 'Customer Portal' : isWaiter ? 'Waiter Console' : isVendor ? 'Vendor Portal' : isInventoryManager ? 'Inventory Portal' : 'Restaurant OS'}
+                  {isCustomer ? 'Customer Portal' : isWaiter ? 'Waiter Console' : isDJ ? 'DJ Console' : isVendor ? 'Vendor Portal' : isInventoryManager ? 'Inventory Portal' : 'Restaurant OS'}
                 </span>
               </div>
             </SidebarMenuButton>

@@ -39,7 +39,6 @@ export async function GET(request: NextRequest) {
       { type: 'zomato', name: 'Zomato', icon: '🔴', portalName: 'Zomato Merchant Partner' },
       { type: 'swiggy', name: 'Swiggy', icon: '🟠', portalName: 'Swiggy Partner Central' },
       { type: 'uber_eats', name: 'Uber Eats', icon: '🟢', portalName: 'Uber Eats Restaurant Manager' },
-      { type: 'ondc', name: 'ONDC', icon: '🔵', portalName: 'ONDC Open Network' },
     ]
 
     const result = supportedAggregators.map((agg) => {
@@ -100,7 +99,7 @@ export async function POST(request: NextRequest) {
     }
 
     const normType = String(aggregatorType).toLowerCase() as AggregatorEnum
-    if (!['zomato', 'swiggy', 'uber_eats', 'ondc'].includes(normType)) {
+    if (!['zomato', 'swiggy', 'uber_eats'].includes(normType)) {
       return NextResponse.json(errorResponse('Invalid aggregatorType', 'INVALID_PARAM'), { status: 400 })
     }
 

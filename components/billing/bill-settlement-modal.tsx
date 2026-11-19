@@ -826,7 +826,7 @@ export function BillSettlementModal({
         {!paySuccess && (
           <div className="p-4 border-t border-border bg-card shrink-0 space-y-2">
             <p className="text-[11px] text-muted-foreground font-semibold text-center mb-1">
-              Mark Bill as Paid & Release Table
+              Paid & Release Table
             </p>
             <div className="grid grid-cols-2 gap-2">
               <Button
@@ -836,7 +836,7 @@ export function BillSettlementModal({
                 className="h-11 rounded-2xl font-bold text-xs gap-1.5 border-border hover:bg-muted"
               >
                 <Banknote className="size-4 text-emerald-500" />
-                <span>Mark as Paid (Cash)</span>
+                <span>Paid (Cash)</span>
               </Button>
 
               <Button
@@ -846,7 +846,7 @@ export function BillSettlementModal({
                 className="h-11 rounded-2xl font-extrabold text-xs gap-1.5 bg-primary text-primary-foreground shadow-md hover:bg-primary/90"
               >
                 <QrCode className="size-4" />
-                <span>Mark as Paid (UPI / Card)</span>
+                <span>Paid (UPI / Card)</span>
               </Button>
             </div>
           </div>

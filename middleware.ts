@@ -39,10 +39,11 @@ export async function middleware(request: NextRequest) {
   const isAdminStaff = !!adminPayload?.userId && roleUpper !== 'CUSTOMER'
   const isWaiter = isAdminStaff && roleUpper === 'WAITER'
   const isChef = isAdminStaff && roleUpper === 'CHEF'
+  const isDJ = isAdminStaff && roleUpper === 'DJ'
   const customerAuth = await isCustomerAuthenticated(request)
 
   // Default redirect path based on user role
-  const defaultAuthRedirect = isWaiter ? '/tables' : isChef ? '/kitchen' : '/dashboard'
+  const defaultAuthRedirect = isDJ ? '/dj' : isWaiter ? '/tables' : isChef ? '/kitchen' : '/dashboard'
 
   // 1. Customer Auth Pages (/customer/auth, /customer/login, /customer/register)
   // Must ALWAYS be presented as the independent Customer & Guest Portal sign-in / registration
@@ -95,7 +96,44 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // 4. Waiter & Chef Role Route Security
+  // 4. Waiter, Chef & DJ Role Route Security
+  if (isDJ) {
+    if (pathname === '/dashboard' || pathname === '/dashboard/') {
+      return NextResponse.redirect(new URL('/dj', request.url))
+    }
+    const isRestrictedForDJ =
+      pathname === '/settings' ||
+      pathname.startsWith('/settings/') ||
+      pathname === '/dashboard/settings' ||
+      pathname.startsWith('/dashboard/settings/') ||
+      pathname === '/staff' ||
+      pathname.startsWith('/staff/') ||
+      pathname === '/pos' ||
+      pathname.startsWith('/pos/') ||
+      pathname === '/inventory' ||
+      pathname.startsWith('/inventory/') ||
+      pathname === '/inventory-manager' ||
+      pathname.startsWith('/inventory-manager/') ||
+      pathname === '/vendor' ||
+      pathname.startsWith('/vendor/') ||
+      pathname === '/analytics' ||
+      pathname.startsWith('/analytics/') ||
+      pathname === '/billing' ||
+      pathname.startsWith('/billing/') ||
+      pathname === '/crm' ||
+      pathname.startsWith('/crm/') ||
+      pathname === '/kitchen' ||
+      pathname.startsWith('/kitchen/') ||
+      pathname === '/tables' ||
+      pathname.startsWith('/tables/') ||
+      pathname === '/reservations' ||
+      pathname.startsWith('/reservations/')
+
+    if (isRestrictedForDJ) {
+      return NextResponse.redirect(new URL('/dj', request.url))
+    }
+  }
+
   if (isWaiter || isChef) {
     const fallbackRoute = isChef ? '/kitchen' : '/tables'
     if (pathname === '/dashboard' || pathname === '/dashboard/') {
@@ -116,11 +154,41 @@ export async function middleware(request: NextRequest) {
       pathname === '/analytics' ||
       pathname.startsWith('/analytics/') ||
       pathname === '/crm' ||
-      pathname.startsWith('/crm/')
+      pathname.startsWith('/crm/') ||
+      pathname === '/dj' ||
+      pathname.startsWith('/dj/') ||
+      pathname === '/dashboard/dj' ||
+      pathname.startsWith('/dashboard/dj/')
 
     if (isRestricted) {
       return NextResponse.redirect(new URL(fallbackRoute, request.url))
     }
+  }
+
+  // 4b. Dedicated DJ Dashboard Route Access (/dj, /dashboard/dj)
+  const isDjRoute =
+    pathname === '/dj' ||
+    pathname.startsWith('/dj/') ||
+    pathname === '/dashboard/dj' ||
+    pathname.startsWith('/dashboard/dj/')
+
+  if (isDjRoute) {
+    if (customerAuth && !isAdminStaff) {
+      return NextResponse.redirect(new URL('/customer-dashboard', request.url))
+    }
+    if (!isAdminStaff) {
+      return NextResponse.redirect(new URL('/login', request.url))
+    }
+    const canAccessDj =
+      isDJ ||
+      ['ADMIN', 'SUPER_ADMIN', 'SUPERADMIN', 'RESTAURANT_OWNER', 'BRANCH_MANAGER'].includes(roleUpper)
+    if (!canAccessDj) {
+      return NextResponse.redirect(new URL(defaultAuthRedirect, request.url))
+    }
+    if (pathname === '/dashboard/dj' || pathname.startsWith('/dashboard/dj/')) {
+      return NextResponse.redirect(new URL('/dj', request.url))
+    }
+    return NextResponse.next()
   }
 
   // 5. Strict Isolation: Block Customer sessions and unauthenticated users from accessing Admin & Staff Dashboard and Staff-Only Routes
@@ -225,6 +293,10 @@ export const config = {
     '/staff',
     '/billing/:path*',
     '/billing',
+    '/dj/:path*',
+    '/dj',
+    '/dashboard/dj/:path*',
+    '/dashboard/dj',
     '/login',
     '/customer/:path*',
     '/customer',

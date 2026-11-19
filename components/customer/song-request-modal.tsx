@@ -34,8 +34,10 @@ export interface SongRequest {
   id: string
   songTitle: string
   artist?: string
+  language?: string
   tableNumber: string
   guestName: string
+  requestedBy?: string
   notes?: string
   status: 'pending' | 'queued' | 'playing' | 'played' | 'declined'
   createdAt: string
@@ -84,6 +86,7 @@ export function SongRequestModal({
 }: SongRequestModalProps) {
   const [songTitle, setSongTitle] = useState('')
   const [artist, setArtist] = useState('')
+  const [language, setLanguage] = useState('')
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
@@ -147,9 +150,11 @@ export function SongRequestModal({
         body: JSON.stringify({
           songTitle: songTitle.trim(),
           artist: artist.trim() || undefined,
+          language: language.trim() || undefined,
           tableNumber: cleanTable,
           guestName: guestName.trim() || 'Guest',
           notes: notes.trim() || undefined,
+          requestedBy: 'Customer',
         }),
       })
 
@@ -165,6 +170,7 @@ export function SongRequestModal({
       })
       setSongTitle('')
       setArtist('')
+      setLanguage('')
       setNotes('')
       fetchRequests()
     } catch (err: any) {
@@ -244,18 +250,34 @@ export function SongRequestModal({
               </div>
             </div>
 
-            <div className="space-y-1">
-              <Label htmlFor="song-artist" className="text-xs font-medium text-foreground">
-                Artist / Band <span className="text-muted-foreground font-normal">(Optional)</span>
-              </Label>
-              <Input
-                id="song-artist"
-                placeholder="e.g. Arijit Singh, Dua Lipa..."
-                value={artist}
-                onChange={(e) => setArtist(e.target.value)}
-                disabled={submitting}
-                className="text-xs h-9.5 rounded-xl bg-background"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className="space-y-1">
+                <Label htmlFor="song-artist" className="text-xs font-medium text-foreground">
+                  Artist / Band <span className="text-muted-foreground font-normal">(Optional)</span>
+                </Label>
+                <Input
+                  id="song-artist"
+                  placeholder="e.g. Arijit Singh..."
+                  value={artist}
+                  onChange={(e) => setArtist(e.target.value)}
+                  disabled={submitting}
+                  className="text-xs h-9.5 rounded-xl bg-background"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="song-lang" className="text-xs font-medium text-foreground">
+                  Language <span className="text-muted-foreground font-normal">(Optional)</span>
+                </Label>
+                <Input
+                  id="song-lang"
+                  placeholder="e.g. Hindi, English..."
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  disabled={submitting}
+                  className="text-xs h-9.5 rounded-xl bg-background"
+                />
+              </div>
             </div>
 
             <div className="space-y-1">

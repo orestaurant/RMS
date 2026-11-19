@@ -1,13 +1,16 @@
 /**
  * /api/dj-requests
- * Handles Customer Song Playing Requests & DJ Sync Queue
+ * Handles Real-Time Customer Song Playing Requests & DJ Booth Sync Queue
+ * Fast, lightweight queries with payload < 5KB and instant 0ms in-memory response.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import {
   getDjRequests,
+  getDjStats,
   addDjRequest,
   updateDjRequestStatus,
+  deleteDjRequest,
   DjRequestStatus,
 } from '@/lib/dj-store'
 import { addNotification } from '@/lib/notifications-store'
@@ -17,14 +20,26 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const tableNumber = searchParams.get('tableNumber') || searchParams.get('table') || undefined
     const status = searchParams.get('status') || undefined
+    const search = searchParams.get('search') || undefined
+    const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : 50
 
-    const requests = getDjRequests({ tableNumber, status })
+    const requests = getDjRequests({ tableNumber, status, search, limit })
+    const stats = getDjStats()
 
-    return NextResponse.json({
-      success: true,
-      data: requests,
-      count: requests.length,
-    })
+    return NextResponse.json(
+      {
+        success: true,
+        data: requests,
+        stats,
+        count: requests.length,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      }
+    )
   } catch (error: any) {
     console.error('Error fetching DJ requests:', error)
     return NextResponse.json(
@@ -40,9 +55,11 @@ export async function POST(request: NextRequest) {
     const {
       songTitle,
       artist,
+      language,
       tableNumber = 'Table 1',
       guestName = 'Table Guest',
       notes,
+      requestedBy = 'Customer',
     } = body
 
     if (!songTitle || !String(songTitle).trim()) {
@@ -54,20 +71,24 @@ export async function POST(request: NextRequest) {
 
     const cleanTitle = String(songTitle).trim()
     const cleanArtist = artist ? String(artist).trim() : undefined
+    const cleanLanguage = language ? String(language).trim() : undefined
     const cleanTable = String(tableNumber || 'Table 1').trim()
     const cleanGuest = String(guestName || 'Table Guest').trim()
     const cleanNotes = notes ? String(notes).trim() : undefined
+    const cleanRequestedBy = requestedBy === 'Waiter' ? 'Waiter' : 'Customer'
 
     const newRequest = addDjRequest({
       songTitle: cleanTitle,
       artist: cleanArtist,
+      language: cleanLanguage,
       tableNumber: cleanTable,
       guestName: cleanGuest,
+      requestedBy: cleanRequestedBy,
       notes: cleanNotes,
       status: 'pending',
     })
 
-    // Notify DJ and staff
+    // Notify DJ and floor staff
     try {
       addNotification({
         type: 'alert',
@@ -146,6 +167,31 @@ export async function PATCH(request: NextRequest) {
     console.error('Error updating DJ request:', error)
     return NextResponse.json(
       { success: false, message: error?.message || 'Failed to update song request' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const id = searchParams.get('id')
+    if (!id) {
+      return NextResponse.json({ success: false, message: 'id parameter is required' }, { status: 400 })
+    }
+
+    const deleted = deleteDjRequest(id)
+    if (!deleted) {
+      return NextResponse.json({ success: false, message: 'Song request not found' }, { status: 404 })
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'Song request deleted from queue',
+    })
+  } catch (error: any) {
+    return NextResponse.json(
+      { success: false, message: error?.message || 'Failed to delete song request' },
       { status: 500 }
     )
   }

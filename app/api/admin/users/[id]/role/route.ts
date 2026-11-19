@@ -13,6 +13,7 @@ const ALLOWED_ROLES = [
   'ADMIN',
   'SUPER_ADMIN',
   'CUSTOMER',
+  'DJ',
 ] as const
 
 /**

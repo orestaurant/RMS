@@ -12,6 +12,7 @@ export type AppRole =
   | 'CASHIER'
   | 'STAFF'
   | 'CUSTOMER'
+  | 'DJ'
 
 export type WaiterPermission =
   | 'canApplyDiscount'
@@ -86,6 +87,18 @@ const ROLE_PERMISSIONS: Record<string, Record<WaiterPermission, boolean>> = {
     canApplyPenalty: false,
     canEditDishAvailability: false,
     canVerifyHighwayPayment: true,
+  },
+  DJ: {
+    canApplyDiscount: false,
+    canBypassManager: false,
+    canAddDish: false,
+    canSplitBill: false,
+    canBypassLiveOrder: false,
+    canDeleteTable: false,
+    canApplyCoverCharge: false,
+    canApplyPenalty: false,
+    canEditDishAvailability: false,
+    canVerifyHighwayPayment: false,
   },
 }
 
