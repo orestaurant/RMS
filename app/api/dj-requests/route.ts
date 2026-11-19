@@ -23,8 +23,8 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search') || undefined
     const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : 50
 
-    const requests = getDjRequests({ tableNumber, status, search, limit })
-    const stats = getDjStats()
+    const requests = await getDjRequests({ tableNumber, status, search, limit })
+    const stats = await getDjStats()
 
     return NextResponse.json(
       {
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
     const cleanNotes = notes ? String(notes).trim() : undefined
     const cleanRequestedBy = requestedBy === 'Waiter' ? 'Waiter' : 'Customer'
 
-    const newRequest = addDjRequest({
+    const newRequest = await addDjRequest({
       songTitle: cleanTitle,
       artist: cleanArtist,
       language: cleanLanguage,
@@ -137,7 +137,7 @@ export async function PATCH(request: NextRequest) {
       )
     }
 
-    const updated = updateDjRequestStatus(id, status)
+    const updated = await updateDjRequestStatus(id, status)
     if (!updated) {
       return NextResponse.json(
         { success: false, message: 'Song request not found' },
@@ -180,7 +180,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'id parameter is required' }, { status: 400 })
     }
 
-    const deleted = deleteDjRequest(id)
+    const deleted = await deleteDjRequest(id)
     if (!deleted) {
       return NextResponse.json({ success: false, message: 'Song request not found' }, { status: 404 })
     }

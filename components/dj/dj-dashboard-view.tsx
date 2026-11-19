@@ -21,6 +21,7 @@ import {
   MessageSquare,
   AlertCircle,
   SlidersHorizontal,
+  History,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -40,6 +41,7 @@ export interface DjRequestItem {
   requestedBy: 'Customer' | 'Waiter'
   notes?: string
   status: DjRequestStatus
+  playedAt?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -73,8 +75,8 @@ const statusConfig: Record<
     icon: Flame,
   },
   played: {
-    label: 'Completed / Played',
-    badgeClass: 'bg-muted text-muted-foreground border-border',
+    label: 'Song Played ✓',
+    badgeClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 font-bold',
     icon: CheckCircle2,
   },
   declined: {
@@ -98,6 +100,20 @@ function formatTimeAgo(isoString: string): string {
   }
 }
 
+function formatPlayedTime(isoString?: string | null): string {
+  if (!isoString) return 'Played recently'
+  try {
+    const date = new Date(isoString)
+    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const diffMins = Math.floor((Date.now() - date.getTime()) / 60000)
+    if (diffMins < 1) return `Played just now (${timeStr})`
+    if (diffMins < 60) return `Played ${diffMins}m ago (${timeStr})`
+    return `Played at ${timeStr}`
+  } catch {
+    return 'Played'
+  }
+}
+
 export function DjDashboardView() {
   const [requests, setRequests] = useState<DjRequestItem[]>([])
   const [stats, setStats] = useState<DjStats>({
@@ -110,16 +126,19 @@ export function DjDashboardView() {
   })
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'playing' | 'completed'>('pending')
+  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'playing' | 'completed' | 'history'>('pending')
   const [searchQuery, setSearchQuery] = useState('')
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
   const [actionFeedback, setActionFeedback] = useState<string | null>(null)
+
+  // Track previous pending count for audio/toast alerts on incoming requests
+  const prevPendingCountRef = useRef<number | null>(null)
 
   // Keep a ref to requests for safe optimistic rollbacks
   const requestsRef = useRef<DjRequestItem[]>([])
   requestsRef.current = requests
 
-  // Optimized lightweight fetch (<5KB)
+  // Optimized lightweight fetch (<5KB) with persistent state preservation
   const fetchRequests = useCallback(async (isSilent = false) => {
     try {
       if (!isSilent) setRefreshing(true)
@@ -129,6 +148,15 @@ export function DjDashboardView() {
       if (json.success && Array.isArray(json.data)) {
         setRequests(json.data)
         if (json.stats) {
+          // Detect new incoming customer request for audio/visual feedback
+          if (
+            prevPendingCountRef.current !== null &&
+            json.stats.pending > prevPendingCountRef.current
+          ) {
+            setActionFeedback(`🔔 New Song Request Received from Dine-in Guest!`)
+            setTimeout(() => setActionFeedback(null), 5000)
+          }
+          prevPendingCountRef.current = json.stats.pending
           setStats(json.stats)
         }
       }
@@ -143,6 +171,26 @@ export function DjDashboardView() {
   // Initial load
   useEffect(() => {
     fetchRequests()
+  }, [fetchRequests])
+
+  // Cross-tab instantaneous 0ms synchronization via BroadcastChannel
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null
+    try {
+      bc = new BroadcastChannel('rms-dj-channel')
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'NEW_DJ_REQUEST' || event.data?.type === 'DJ_REQUEST_UPDATED') {
+          fetchRequests(true)
+        }
+      }
+    } catch {
+      // BroadcastChannel not available in older environments
+    }
+    return () => {
+      try {
+        bc?.close()
+      } catch {}
+    }
   }, [fetchRequests])
 
   // Fast visibility-aware polling (every 4 seconds, pauses when tab is in background)
@@ -161,11 +209,18 @@ export function DjDashboardView() {
     const previousRequests = [...requestsRef.current]
     setActionLoadingId(id)
 
+    const nowIso = new Date().toISOString()
+
     // 1. Optimistic local update (instant response!)
     setRequests((prev) =>
       prev.map((item) =>
         item.id === id
-          ? { ...item, status: newStatus, updatedAt: new Date().toISOString() }
+          ? {
+              ...item,
+              status: newStatus,
+              playedAt: newStatus === 'played' ? nowIso : item.playedAt,
+              updatedAt: nowIso,
+            }
           : item
       )
     )
@@ -193,10 +248,20 @@ export function DjDashboardView() {
         throw new Error(json.message || 'Failed to update song status')
       }
 
+      // Notify other open tabs/windows
+      try {
+        const bc = new BroadcastChannel('rms-dj-channel')
+        bc.postMessage({ type: 'DJ_REQUEST_UPDATED', id, status: newStatus })
+        bc.close()
+      } catch {}
+
       const songItem = previousRequests.find((r) => r.id === id)
-      const statusLabel = statusConfig[newStatus]?.label || newStatus
+      const statusLabel =
+        newStatus === 'played'
+          ? 'Marked as Played & Added to History ✓'
+          : statusConfig[newStatus]?.label || newStatus
       setActionFeedback(`Updated "${songItem?.songTitle || 'Song'}" to ${statusLabel}`)
-      setTimeout(() => setActionFeedback(null), 3000)
+      setTimeout(() => setActionFeedback(null), 3500)
     } catch (err: any) {
       // Rollback on failure
       setRequests(previousRequests)
@@ -213,6 +278,7 @@ export function DjDashboardView() {
     if (activeTab === 'pending' && item.status !== 'pending') return false
     if (activeTab === 'playing' && item.status !== 'playing' && item.status !== 'queued') return false
     if (activeTab === 'completed' && item.status !== 'played' && item.status !== 'declined') return false
+    if (activeTab === 'history' && item.status !== 'played') return false
 
     // Search query filter
     if (searchQuery.trim()) {
@@ -307,18 +373,18 @@ export function DjDashboardView() {
                 className="h-8 rounded-xl text-xs font-bold gap-1 bg-white/20 hover:bg-white/30 text-white border-0 cursor-pointer"
               >
                 <CheckCircle2 className="size-3.5" />
-                <span>Mark Played</span>
+                <span>Mark Played (Move to History)</span>
               </Button>
             </div>
           </div>
         )}
       </div>
 
-      {/* FEEDBACK TOAST */}
+      {/* FEEDBACK TOAST / LIVE ALERT */}
       {actionFeedback && (
         <div
           role="status"
-          className="p-3.5 rounded-2xl bg-gradient-to-r from-pink-500/15 to-purple-500/15 border border-pink-500/30 text-foreground text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top-1"
+          className="p-3.5 rounded-2xl bg-gradient-to-r from-pink-500/15 via-purple-500/15 to-emerald-500/15 border border-pink-500/30 text-foreground text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top-1 shadow-sm"
         >
           <Sparkles className="size-4 text-pink-500 shrink-0" />
           <span>{actionFeedback}</span>
@@ -326,13 +392,13 @@ export function DjDashboardView() {
       )}
 
       {/* 2. STATS KPI ROW */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <Card
           onClick={() => setActiveTab('pending')}
           className={cn(
             'p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-sm',
             activeTab === 'pending'
-              ? 'border-amber-500/50 bg-amber-500/10 shadow-sm shadow-amber-500/10'
+              ? 'border-amber-500/50 bg-amber-500/10 shadow-sm shadow-amber-500/10 ring-1 ring-amber-500/30'
               : 'border-border/60 bg-card/60 hover:bg-muted/40'
           )}
         >
@@ -352,7 +418,7 @@ export function DjDashboardView() {
           className={cn(
             'p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-sm',
             activeTab === 'playing'
-              ? 'border-indigo-500/50 bg-indigo-500/10 shadow-sm shadow-indigo-500/10'
+              ? 'border-indigo-500/50 bg-indigo-500/10 shadow-sm shadow-indigo-500/10 ring-1 ring-indigo-500/30'
               : 'border-border/60 bg-card/60 hover:bg-muted/40'
           )}
         >
@@ -372,7 +438,7 @@ export function DjDashboardView() {
           className={cn(
             'p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-sm',
             activeTab === 'playing'
-              ? 'border-emerald-500/50 bg-emerald-500/10 shadow-sm shadow-emerald-500/10'
+              ? 'border-emerald-500/50 bg-emerald-500/10 shadow-sm shadow-emerald-500/10 ring-1 ring-emerald-500/30'
               : 'border-border/60 bg-card/60 hover:bg-muted/40'
           )}
         >
@@ -388,21 +454,21 @@ export function DjDashboardView() {
         </Card>
 
         <Card
-          onClick={() => setActiveTab('completed')}
+          onClick={() => setActiveTab('history')}
           className={cn(
             'p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-sm',
-            activeTab === 'completed'
-              ? 'border-primary/50 bg-primary/10 shadow-sm shadow-primary/10'
+            activeTab === 'history' || activeTab === 'completed'
+              ? 'border-purple-500/50 bg-purple-500/10 shadow-sm shadow-purple-500/10 ring-1 ring-purple-500/30'
               : 'border-border/60 bg-card/60 hover:bg-muted/40'
           )}
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold text-muted-foreground">Completed</p>
-              <p className="text-2xl font-black text-foreground mt-1">{stats.played}</p>
+              <p className="text-xs font-semibold text-muted-foreground">History (Played)</p>
+              <p className="text-2xl font-black text-purple-400 mt-1">{stats.played}</p>
             </div>
-            <div className="size-9 rounded-xl bg-muted text-muted-foreground flex items-center justify-center">
-              <CheckCircle2 className="size-4" />
+            <div className="size-9 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center">
+              <History className="size-4" />
             </div>
           </div>
         </Card>
@@ -412,7 +478,7 @@ export function DjDashboardView() {
           className={cn(
             'p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-sm col-span-2 sm:col-span-1',
             activeTab === 'all'
-              ? 'border-pink-500/50 bg-pink-500/10 shadow-sm shadow-pink-500/10'
+              ? 'border-pink-500/50 bg-pink-500/10 shadow-sm shadow-pink-500/10 ring-1 ring-pink-500/30'
               : 'border-border/60 bg-card/60 hover:bg-muted/40'
           )}
         >
@@ -500,6 +566,24 @@ export function DjDashboardView() {
                 {stats.total}
               </span>
             </button>
+
+            {/* DEDICATED HISTORY TAB (Exact spot requested by user right after All) */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('history')}
+              className={cn(
+                'px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 border',
+                activeTab === 'history'
+                  ? 'bg-purple-600 text-white border-purple-500 shadow-md shadow-purple-600/20'
+                  : 'text-purple-400 border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/20 hover:text-purple-300'
+              )}
+            >
+              <History className="size-3.5" />
+              <span>History</span>
+              <span className="px-1.5 py-0.2 rounded-md bg-purple-500/30 text-white text-[10px] font-bold">
+                {stats.played}
+              </span>
+            </button>
           </div>
 
           {/* Search Box */}
@@ -524,12 +608,21 @@ export function DjDashboardView() {
         </div>
       </Card>
 
-      {/* 4. LIVE SONG REQUEST QUEUE */}
+      {/* 4. LIVE SONG REQUEST QUEUE / HISTORY VIEW */}
       <div className="space-y-3">
         <div className="flex items-center justify-between px-1">
           <h2 className="text-sm font-extrabold text-foreground flex items-center gap-2">
-            <Radio className="size-4 text-pink-500 animate-pulse" />
-            <span>Live Song Request Stream ({filteredRequests.length})</span>
+            {activeTab === 'history' ? (
+              <>
+                <History className="size-4 text-purple-400" />
+                <span>Song Play History ({filteredRequests.length})</span>
+              </>
+            ) : (
+              <>
+                <Radio className="size-4 text-pink-500 animate-pulse" />
+                <span>Live Song Request Stream ({filteredRequests.length})</span>
+              </>
+            )}
           </h2>
           <span className="text-xs text-muted-foreground">Auto-syncs every 4s</span>
         </div>
@@ -543,12 +636,20 @@ export function DjDashboardView() {
         ) : filteredRequests.length === 0 ? (
           <div className="p-12 text-center rounded-3xl border border-dashed border-border/80 bg-card/40 space-y-3">
             <div className="size-14 rounded-2xl bg-muted/60 text-muted-foreground mx-auto flex items-center justify-center">
-              <Music className="size-7 opacity-60" />
+              {activeTab === 'history' ? (
+                <History className="size-7 opacity-60 text-purple-400" />
+              ) : (
+                <Music className="size-7 opacity-60" />
+              )}
             </div>
-            <h3 className="text-base font-bold text-foreground">No song requests in this view</h3>
+            <h3 className="text-base font-bold text-foreground">
+              {activeTab === 'history' ? 'No song history yet' : 'No song requests in this view'}
+            </h3>
             <p className="text-xs text-muted-foreground max-w-sm mx-auto">
               {searchQuery
                 ? `No requests matching "${searchQuery}". Try clearing the search.`
+                : activeTab === 'history'
+                ? 'When a requested song is finished or marked "Completed", it will appear here in the Played History.'
                 : activeTab === 'pending'
                 ? 'No pending requests right now! All incoming guest songs have been queued or played.'
                 : 'Song requests will appear here live as guests order tracks from their tables.'}
@@ -570,6 +671,7 @@ export function DjDashboardView() {
               const cfg = statusConfig[item.status] || statusConfig.pending
               const Icon = cfg.icon
               const isUpdating = actionLoadingId === item.id
+              const isPlayed = item.status === 'played'
 
               return (
                 <div
@@ -577,11 +679,13 @@ export function DjDashboardView() {
                   className={cn(
                     'p-4 rounded-3xl border transition-all flex flex-col justify-between gap-4 backdrop-blur-sm',
                     item.status === 'playing'
-                      ? 'border-emerald-500/50 bg-emerald-500/5 shadow-md shadow-emerald-500/10'
+                      ? 'border-emerald-500/50 bg-emerald-500/5 shadow-md shadow-emerald-500/10 ring-1 ring-emerald-500/30'
                       : item.status === 'queued'
                       ? 'border-indigo-500/40 bg-indigo-500/5'
                       : item.status === 'pending'
                       ? 'border-amber-500/40 bg-amber-500/5'
+                      : isPlayed
+                      ? 'border-purple-500/30 bg-purple-500/5'
                       : 'border-border/60 bg-card/60'
                   )}
                 >
@@ -596,10 +700,12 @@ export function DjDashboardView() {
                               ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/25 animate-pulse'
                               : item.status === 'queued'
                               ? 'bg-indigo-500 text-white shadow-md shadow-indigo-500/25'
+                              : isPlayed
+                              ? 'bg-purple-600 text-white shadow-md shadow-purple-600/25'
                               : 'bg-muted text-foreground'
                           )}
                         >
-                          <Music className="size-5" />
+                          {isPlayed ? <CheckCircle2 className="size-5" /> : <Music className="size-5" />}
                         </div>
                         <div className="min-w-0">
                           <h3 className="text-sm md:text-base font-extrabold text-foreground truncate leading-snug">
@@ -636,6 +742,14 @@ export function DjDashboardView() {
                       </Badge>
                     </div>
 
+                    {/* HISTORY PLAYED TIMESTAMP BANNER */}
+                    {isPlayed && (
+                      <div className="p-2 px-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 font-semibold flex items-center gap-2">
+                        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-400" />
+                        <span>{formatPlayedTime(item.playedAt || item.updatedAt)}</span>
+                      </div>
+                    )}
+
                     {/* Dedication Note / Message */}
                     {item.notes && (
                       <div className="p-2.5 rounded-2xl bg-pink-500/10 border border-pink-500/20 text-xs text-pink-400 flex items-start gap-2">
@@ -667,7 +781,7 @@ export function DjDashboardView() {
 
                       <span className="flex items-center gap-1">
                         <Clock className="size-3 text-muted-foreground" />
-                        <span>{formatTimeAgo(item.createdAt)}</span>
+                        <span>Requested {formatTimeAgo(item.createdAt)}</span>
                       </span>
                     </div>
                   </div>
@@ -711,7 +825,21 @@ export function DjDashboardView() {
                         className="h-8 rounded-xl text-xs font-bold gap-1.5 cursor-pointer hover:bg-muted"
                       >
                         <CheckCircle2 className="size-3.5 text-emerald-500" />
-                        <span>Completed</span>
+                        <span>Completed (Mark Played)</span>
+                      </Button>
+                    )}
+
+                    {/* Play Again / Re-queue Button for History Tab */}
+                    {isPlayed && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isUpdating}
+                        onClick={() => handleUpdateStatus(item.id, 'queued')}
+                        className="h-8 rounded-xl text-xs font-bold gap-1.5 border-purple-500/40 text-purple-400 hover:bg-purple-500/10 cursor-pointer"
+                      >
+                        <RotateCw className="size-3.5" />
+                        <span>Play Again / Re-queue</span>
                       </Button>
                     )}
 

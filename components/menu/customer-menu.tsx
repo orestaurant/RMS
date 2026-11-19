@@ -1001,14 +1001,6 @@ export function CustomerMenu() {
                   <h1 className="text-base font-black tracking-tight leading-none text-foreground truncate">
                     RestoSphere
                   </h1>
-                  <span className={cn(
-                    "hidden sm:inline-block text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border shrink-0",
-                    orderMode === 'drive_in'
-                      ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
-                      : "bg-primary/10 text-primary border-primary/20"
-                  )}>
-                    {orderMode === 'drive_in' ? 'Car Drive-In' : 'Dine-in'}
-                  </span>
                 </div>
                 <p className="text-[11px] text-muted-foreground font-medium mt-0.5 truncate">
                   {orderMode === 'drive_in' ? 'Highway Food Cart / Car Ordering' : 'Table Self-Ordering Menu'}
@@ -1307,7 +1299,14 @@ export function CustomerMenu() {
 
       {/* 3. DINE-IN TABLE SELECTION / EDIT MODAL */}
       {showTableModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowTableModal(false)
+            }
+          }}
+        >
           <div className="relative w-full max-w-sm bg-card border border-border shadow-2xl rounded-3xl p-6 text-center space-y-4">
             <div className="flex justify-end absolute top-4 right-4">
               <Button
@@ -1808,7 +1807,15 @@ export function CustomerMenu() {
 
       {/* 4b. CUSTOMIZE DISH MODAL (Spices, Veg/Non-Veg, Sauces, Cheese, Chef Notes) */}
       {customizingItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setCustomizingItem(null)
+              setEditingCartKey(null)
+            }
+          }}
+        >
           <div className="relative w-full max-w-lg bg-card border border-border shadow-2xl rounded-3xl overflow-hidden p-5 sm:p-6 text-left space-y-4 max-h-[92vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-start justify-between pb-3 border-b border-border/70">

@@ -1918,3 +1918,24 @@ model CustomerFeedback {
   @@index([isGoogleVerified])
 }
 
+model DjSongRequest {
+  id           String    @id @default(uuid()) @db.Uuid
+  songTitle    String    @db.VarChar(255)
+  artist       String?   @db.VarChar(255)
+  language     String?   @db.VarChar(100)
+  tableNumber  String    @db.VarChar(50)
+  guestName    String    @db.VarChar(255)
+  requestedBy  String    @default("Customer") @db.VarChar(50)
+  notes        String?   @db.Text
+  status       String    @default("pending") @db.VarChar(50)
+  playedAt     DateTime?
+  restaurantId String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([status])
+  @@index([tableNumber])
+  @@index([createdAt])
+}
+
+

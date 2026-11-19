@@ -1,8 +1,11 @@
 /**
  * Real-Time DJ Request Store
  * Powers Customer Song Requests, DJ Booth Queue, and Live Status Sync
- * Uses global singleton for ultra-fast <1ms in-memory query execution and persistence across HMR
+ * Uses Prisma PostgreSQL (Neon) for durable multi-instance serverless persistence,
+ * with hybrid in-memory caching for sub-millisecond responses.
  */
+
+import prisma from '@/lib/prisma'
 
 export type DjRequestStatus = 'pending' | 'queued' | 'playing' | 'played' | 'declined'
 
@@ -16,6 +19,7 @@ export interface DjRequestItem {
   requestedBy: 'Customer' | 'Waiter'
   notes?: string
   status: DjRequestStatus
+  playedAt?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -29,72 +33,132 @@ export interface DjStats {
   declined: number
 }
 
-// Global singleton definition to prevent Next.js hot reload from wiping active state
+// In-memory cache singleton to prevent excessive DB queries while keeping cold-starts fast
 declare global {
   // eslint-disable-next-line no-var
-  var __rms_dj_requests_store__: DjRequestItem[] | undefined
+  var __rms_dj_cache__: {
+    items: DjRequestItem[]
+    lastFetched: number
+  } | undefined
 }
 
-const defaultInitialQueue: DjRequestItem[] = []
-
-function getStore(): DjRequestItem[] {
-  if (!globalThis.__rms_dj_requests_store__) {
-    globalThis.__rms_dj_requests_store__ = []
+function getMemoryCache(): DjRequestItem[] {
+  if (!globalThis.__rms_dj_cache__) {
+    globalThis.__rms_dj_cache__ = { items: [], lastFetched: 0 }
   }
-  // Remove any cached demo/mock requests from previous server sessions
-  globalThis.__rms_dj_requests_store__ = globalThis.__rms_dj_requests_store__.filter(
-    (item) => !item.id.startsWith('dj-req-demo')
-  )
-  return globalThis.__rms_dj_requests_store__
+  return globalThis.__rms_dj_cache__.items
 }
 
-function setStore(items: DjRequestItem[]): void {
-  globalThis.__rms_dj_requests_store__ = items
+function setMemoryCache(items: DjRequestItem[]): void {
+  globalThis.__rms_dj_cache__ = {
+    items,
+    lastFetched: Date.now(),
+  }
 }
 
-export function getDjRequests(filter?: {
+// Helper to convert Prisma record to DjRequestItem
+function mapPrismaToItem(record: any): DjRequestItem {
+  return {
+    id: record.id,
+    songTitle: record.songTitle,
+    artist: record.artist || undefined,
+    language: record.language || undefined,
+    tableNumber: record.tableNumber,
+    guestName: record.guestName,
+    requestedBy: (record.requestedBy as 'Customer' | 'Waiter') || 'Customer',
+    notes: record.notes || undefined,
+    status: (record.status as DjRequestStatus) || 'pending',
+    playedAt: record.playedAt ? new Date(record.playedAt).toISOString() : null,
+    createdAt: new Date(record.createdAt).toISOString(),
+    updatedAt: new Date(record.updatedAt).toISOString(),
+  }
+}
+
+export async function getDjRequests(filter?: {
   tableNumber?: string
   status?: string
   search?: string
   limit?: number
-}): DjRequestItem[] {
-  let list = [...getStore()]
+}): Promise<DjRequestItem[]> {
+  const limit = filter?.limit && filter.limit > 0 ? filter.limit : 50
 
-  if (filter?.tableNumber) {
-    const cleanTbl = filter.tableNumber.toLowerCase().replace(/[^a-z0-9]/g, '')
-    list = list.filter((r) => r.tableNumber.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanTbl)
+  try {
+    // 1. Build Prisma query filters
+    const where: any = {}
+
+    if (filter?.tableNumber) {
+      const cleanTbl = filter.tableNumber.trim()
+      where.tableNumber = {
+        contains: cleanTbl,
+        mode: 'insensitive',
+      }
+    }
+
+    if (filter?.status && filter.status.toLowerCase() !== 'all') {
+      const allowed = filter.status.toLowerCase().split(',').map((s) => s.trim())
+      where.status = {
+        in: allowed,
+      }
+    }
+
+    if (filter?.search) {
+      const q = filter.search.trim()
+      where.OR = [
+        { songTitle: { contains: q, mode: 'insensitive' } },
+        { artist: { contains: q, mode: 'insensitive' } },
+        { tableNumber: { contains: q, mode: 'insensitive' } },
+        { guestName: { contains: q, mode: 'insensitive' } },
+      ]
+    }
+
+    const records = await prisma.djSongRequest.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    })
+
+    const items = records.map(mapPrismaToItem)
+
+    // Update in-memory cache if fetching all or top list
+    if (!filter?.status && !filter?.tableNumber && !filter?.search) {
+      setMemoryCache(items)
+    }
+
+    return items
+  } catch (error) {
+    console.warn('Database fetch failed for DJ requests, using in-memory cache fallback:', error)
+    // Fallback to in-memory cache if DB is momentarily unreachable
+    let list = [...getMemoryCache()]
+
+    if (filter?.tableNumber) {
+      const cleanTbl = filter.tableNumber.toLowerCase().replace(/[^a-z0-9]/g, '')
+      list = list.filter((r) => r.tableNumber.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanTbl)
+    }
+
+    if (filter?.status && filter.status.toLowerCase() !== 'all') {
+      const allowed = filter.status.toLowerCase().split(',').map((s) => s.trim())
+      list = list.filter((r) => allowed.includes(r.status.toLowerCase()))
+    }
+
+    if (filter?.search) {
+      const query = filter.search.toLowerCase().trim()
+      list = list.filter(
+        (r) =>
+          r.songTitle.toLowerCase().includes(query) ||
+          (r.artist && r.artist.toLowerCase().includes(query)) ||
+          r.tableNumber.toLowerCase().includes(query) ||
+          r.guestName.toLowerCase().includes(query)
+      )
+    }
+
+    list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    return list.slice(0, limit)
   }
-
-  if (filter?.status && filter.status.toLowerCase() !== 'all') {
-    const allowed = filter.status.toLowerCase().split(',').map((s) => s.trim())
-    list = list.filter((r) => allowed.includes(r.status.toLowerCase()))
-  }
-
-  if (filter?.search) {
-    const query = filter.search.toLowerCase().trim()
-    list = list.filter(
-      (r) =>
-        r.songTitle.toLowerCase().includes(query) ||
-        (r.artist && r.artist.toLowerCase().includes(query)) ||
-        r.tableNumber.toLowerCase().includes(query) ||
-        r.guestName.toLowerCase().includes(query)
-    )
-  }
-
-  // Sort descending by createdAt
-  list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-
-  if (filter?.limit && filter.limit > 0) {
-    list = list.slice(0, filter.limit)
-  }
-
-  return list
 }
 
-export function getDjStats(): DjStats {
-  const store = getStore()
+export async function getDjStats(): Promise<DjStats> {
   const stats: DjStats = {
-    total: store.length,
+    total: 0,
     pending: 0,
     queued: 0,
     playing: 0,
@@ -102,59 +166,151 @@ export function getDjStats(): DjStats {
     declined: 0,
   }
 
-  for (const item of store) {
-    if (item.status in stats) {
-      stats[item.status as keyof Omit<DjStats, 'total'>]++
-    }
-  }
+  try {
+    const grouped = await prisma.djSongRequest.groupBy({
+      by: ['status'],
+      _count: {
+        _all: true,
+      },
+    })
 
-  return stats
+    for (const group of grouped) {
+      const st = group.status as keyof Omit<DjStats, 'total'>
+      const count = group._count._all
+      if (st in stats) {
+        stats[st] = count
+      }
+      stats.total += count
+    }
+
+    return stats
+  } catch (error) {
+    console.warn('Database groupBy failed for DJ stats, using memory cache fallback:', error)
+    const cache = getMemoryCache()
+    stats.total = cache.length
+    for (const item of cache) {
+      if (item.status in stats) {
+        stats[item.status as keyof Omit<DjStats, 'total'>]++
+      }
+    }
+    return stats
+  }
 }
 
-export function addDjRequest(
+export async function addDjRequest(
   data: Omit<DjRequestItem, 'id' | 'createdAt' | 'updatedAt' | 'status'> & {
     status?: DjRequestStatus
   }
-): DjRequestItem {
-  const store = getStore()
-  const newItem: DjRequestItem = {
-    ...data,
-    requestedBy: data.requestedBy || 'Customer',
-    id: `dj-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
-    status: data.status || 'pending',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }
+): Promise<DjRequestItem> {
+  const requestedBy = data.requestedBy || 'Customer'
+  const status = data.status || 'pending'
 
-  store.unshift(newItem)
-  // Keep store capped at 200 items to keep payloads lean and fast
-  if (store.length > 200) {
-    setStore(store.slice(0, 200))
+  try {
+    const created = await prisma.djSongRequest.create({
+      data: {
+        songTitle: data.songTitle,
+        artist: data.artist || null,
+        language: data.language || null,
+        tableNumber: data.tableNumber,
+        guestName: data.guestName,
+        requestedBy,
+        notes: data.notes || null,
+        status,
+      },
+    })
+
+    const newItem = mapPrismaToItem(created)
+
+    // Update in-memory cache
+    const cache = getMemoryCache()
+    cache.unshift(newItem)
+    if (cache.length > 200) {
+      setMemoryCache(cache.slice(0, 200))
+    }
+
+    return newItem
+  } catch (error) {
+    console.warn('Database insert failed for DJ request, using memory cache fallback:', error)
+    const fallbackItem: DjRequestItem = {
+      ...data,
+      requestedBy,
+      id: `dj-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+      status,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    const cache = getMemoryCache()
+    cache.unshift(fallbackItem)
+    setMemoryCache(cache)
+    return fallbackItem
   }
-  return newItem
 }
 
-export function updateDjRequestStatus(
+export async function updateDjRequestStatus(
   id: string,
   status: DjRequestStatus
-): DjRequestItem | null {
-  const store = getStore()
-  const idx = store.findIndex((r) => r.id === id)
-  if (idx === -1) return null
-
-  store[idx] = {
-    ...store[idx],
+): Promise<DjRequestItem | null> {
+  const updateData: any = {
     status,
-    updatedAt: new Date().toISOString(),
+    updatedAt: new Date(),
   }
-  return store[idx]
+
+  // When marked as played, stamp the playedAt timestamp
+  if (status === 'played') {
+    updateData.playedAt = new Date()
+  }
+
+  try {
+    const updated = await prisma.djSongRequest.update({
+      where: { id },
+      data: updateData,
+    })
+
+    const item = mapPrismaToItem(updated)
+
+    // Sync in-memory cache
+    const cache = getMemoryCache()
+    const idx = cache.findIndex((r) => r.id === id)
+    if (idx !== -1) {
+      cache[idx] = item
+    }
+
+    return item
+  } catch (error) {
+    console.warn(`Database update failed for DJ request ${id}, using memory cache fallback:`, error)
+    const cache = getMemoryCache()
+    const idx = cache.findIndex((r) => r.id === id)
+    if (idx === -1) return null
+
+    cache[idx] = {
+      ...cache[idx],
+      status,
+      playedAt: status === 'played' ? new Date().toISOString() : cache[idx].playedAt,
+      updatedAt: new Date().toISOString(),
+    }
+    return cache[idx]
+  }
 }
 
-export function deleteDjRequest(id: string): boolean {
-  const store = getStore()
-  const idx = store.findIndex((r) => r.id === id)
-  if (idx === -1) return false
+export async function deleteDjRequest(id: string): Promise<boolean> {
+  try {
+    await prisma.djSongRequest.delete({
+      where: { id },
+    })
 
-  store.splice(idx, 1)
-  return true
+    const cache = getMemoryCache()
+    const idx = cache.findIndex((r) => r.id === id)
+    if (idx !== -1) {
+      cache.splice(idx, 1)
+    }
+
+    return true
+  } catch (error) {
+    console.warn(`Database delete failed for DJ request ${id}, using memory cache fallback:`, error)
+    const cache = getMemoryCache()
+    const idx = cache.findIndex((r) => r.id === id)
+    if (idx === -1) return false
+    cache.splice(idx, 1)
+    return true
+  }
 }

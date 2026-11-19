@@ -67,8 +67,8 @@ const statusBadgeConfig: Record<string, { label: string; className: string; icon
     icon: Flame,
   },
   played: {
-    label: 'Played',
-    className: 'bg-muted text-muted-foreground border-border',
+    label: 'Song Played ✓',
+    className: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 font-semibold',
     icon: CheckCircle2,
   },
   declined: {
@@ -173,6 +173,13 @@ export function SongRequestModal({
       setLanguage('')
       setNotes('')
       fetchRequests()
+
+      // Instant 0ms cross-tab notification for DJ Booth
+      try {
+        const bc = new BroadcastChannel('rms-dj-channel')
+        bc.postMessage({ type: 'NEW_DJ_REQUEST', data: json.data })
+        bc.close()
+      } catch {}
     } catch (err: any) {
       setFeedback({
         type: 'error',
