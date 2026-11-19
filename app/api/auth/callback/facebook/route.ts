@@ -81,16 +81,15 @@ export async function GET(request: NextRequest) {
     let appSecret = (process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET || '').trim()
     let dbRedirectUri: string | null = null
 
-    if (restaurantId) {
-      try {
-        const settings = await prisma.feedbackIntegrationSetting.findUnique({
-          where: { restaurantId },
-        })
-        if (settings?.facebookAppId) appId = settings.facebookAppId.trim()
-        if (settings?.facebookAppSecret) appSecret = settings.facebookAppSecret.trim()
-      } catch (dbErr) {
-        console.warn('Error reading feedback settings in callback, using env fallback:', dbErr)
-      }
+    try {
+      const settings = restaurantId
+        ? await prisma.feedbackIntegrationSetting.findUnique({ where: { restaurantId } })
+        : await prisma.feedbackIntegrationSetting.findFirst()
+
+      if (settings?.facebookAppId) appId = settings.facebookAppId.trim()
+      if (settings?.facebookAppSecret) appSecret = settings.facebookAppSecret.trim()
+    } catch (dbErr) {
+      console.warn('Error reading feedback settings in callback, using env fallback:', dbErr)
     }
 
     if (!appId || !appSecret) {

@@ -20,17 +20,16 @@ export async function GET(request: NextRequest) {
     // 1. Fetch Meta/Facebook credentials from database or fall back to environment variables
     let appId = (process.env.META_APP_ID || process.env.FACEBOOK_APP_ID || '').trim()
 
-    if (restaurantId) {
-      try {
-        const settings = await prisma.feedbackIntegrationSetting.findUnique({
-          where: { restaurantId },
-        })
-        if (settings?.facebookAppId) {
-          appId = settings.facebookAppId.trim()
-        }
-      } catch (dbErr) {
-        console.warn('Could not load feedback settings from DB, using env fallback:', dbErr)
+    try {
+      const settings = restaurantId
+        ? await prisma.feedbackIntegrationSetting.findUnique({ where: { restaurantId } })
+        : await prisma.feedbackIntegrationSetting.findFirst()
+
+      if (settings?.facebookAppId) {
+        appId = settings.facebookAppId.trim()
       }
+    } catch (dbErr) {
+      console.warn('Could not load feedback settings from DB, using env fallback:', dbErr)
     }
 
     if (!appId) {

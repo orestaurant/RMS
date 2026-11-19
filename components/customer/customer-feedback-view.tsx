@@ -231,7 +231,8 @@ function FeedbackViewContent() {
           <div className="p-3.5 rounded-xl border border-destructive/40 bg-destructive/10 text-destructive text-xs flex items-center gap-2">
             <AlertCircle className="size-4 shrink-0" />
             <span>
-              {authErrorParam.includes('facebook') ? 'Meta (Facebook)' : 'Google'} authentication failed. Please try again.
+              {authErrorParam.includes('facebook') ? 'Meta (Facebook)' : 'Google'} authentication failed
+              {authErrorParam !== 'true' && authErrorParam !== '1' && !authErrorParam.startsWith('google_oauth_') ? ` (${decodeURIComponent(authErrorParam).replace(/[_-]+/g, ' ')})` : ''}. Please try again.
             </span>
           </div>
         )}

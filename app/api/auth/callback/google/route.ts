@@ -76,21 +76,20 @@ export async function GET(request: NextRequest) {
     let clientSecret = (process.env.GOOGLE_CLIENT_SECRET || '').trim()
     let dbRedirectUri: string | null = null
 
-    if (restaurantId) {
-      try {
-        const settings = await prisma.feedbackIntegrationSetting.findUnique({
-          where: { restaurantId },
-        })
-        if (settings?.googleClientId) clientId = settings.googleClientId.trim()
-        if (settings?.googleClientSecret) clientSecret = settings.googleClientSecret.trim()
-        if (settings?.googleRedirectUri) dbRedirectUri = settings.googleRedirectUri.trim()
-      } catch (dbErr) {
-        console.warn('Error reading feedback settings in callback, using env fallback:', dbErr)
-      }
+    try {
+      const settings = restaurantId
+        ? await prisma.feedbackIntegrationSetting.findUnique({ where: { restaurantId } })
+        : await prisma.feedbackIntegrationSetting.findFirst()
+
+      if (settings?.googleClientId) clientId = settings.googleClientId.trim()
+      if (settings?.googleClientSecret) clientSecret = settings.googleClientSecret.trim()
+      if (settings?.googleRedirectUri) dbRedirectUri = settings.googleRedirectUri.trim()
+    } catch (dbErr) {
+      console.warn('Error reading feedback settings in callback, using env fallback:', dbErr)
     }
 
     if (!clientId || !clientSecret) {
-      console.error('Missing Google OAuth client credentials.')
+      console.error('Missing Google OAuth client credentials. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel.')
       return NextResponse.redirect(buildRedirectUrl({ error: 'unconfigured_google_credentials' }))
     }
 
@@ -121,9 +120,16 @@ export async function GET(request: NextRequest) {
     })
 
     if (!tokenRes.ok) {
-      const errText = await tokenRes.text()
-      console.error('Google token exchange failed:', tokenRes.status, errText, 'redirect_uri used:', redirectUri)
-      return NextResponse.redirect(buildRedirectUrl({ error: 'token_exchange_failed' }))
+      let errDetail = 'token_exchange_failed'
+      try {
+        const errJson = await tokenRes.json()
+        errDetail = errJson.error_description || errJson.error || errDetail
+      } catch {
+        const errText = await tokenRes.text()
+        errDetail = errText.slice(0, 80) || errDetail
+      }
+      console.error('Google token exchange failed:', tokenRes.status, errDetail, 'redirect_uri used:', redirectUri)
+      return NextResponse.redirect(buildRedirectUrl({ error: `token_exchange_failed_${encodeURIComponent(errDetail.slice(0, 60))}` }))
     }
 
     const tokenData = await tokenRes.json()

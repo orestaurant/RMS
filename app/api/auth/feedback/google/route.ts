@@ -21,20 +21,19 @@ export async function GET(request: NextRequest) {
     let clientId = (process.env.GOOGLE_CLIENT_ID || '').trim()
     let dbRedirectUri: string | null = null
 
-    if (restaurantId) {
-      try {
-        const settings = await prisma.feedbackIntegrationSetting.findUnique({
-          where: { restaurantId },
-        })
-        if (settings?.googleClientId) {
-          clientId = settings.googleClientId.trim()
-        }
-        if (settings?.googleRedirectUri) {
-          dbRedirectUri = settings.googleRedirectUri.trim()
-        }
-      } catch (dbErr) {
-        console.warn('Could not load feedback settings from DB, using env fallback:', dbErr)
+    try {
+      const settings = restaurantId
+        ? await prisma.feedbackIntegrationSetting.findUnique({ where: { restaurantId } })
+        : await prisma.feedbackIntegrationSetting.findFirst()
+
+      if (settings?.googleClientId) {
+        clientId = settings.googleClientId.trim()
       }
+      if (settings?.googleRedirectUri) {
+        dbRedirectUri = settings.googleRedirectUri.trim()
+      }
+    } catch (dbErr) {
+      console.warn('Could not load feedback settings from DB, using env fallback:', dbErr)
     }
 
     if (!clientId) {
