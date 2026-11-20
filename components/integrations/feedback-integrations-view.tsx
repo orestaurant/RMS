@@ -19,6 +19,8 @@ import {
   Check,
   Building2,
   Lock,
+  Trash2,
+  Loader2,
 } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -51,12 +53,11 @@ export function FeedbackIntegrationsView() {
   const [copiedFacebookRedirect, setCopiedFacebookRedirect] = useState(false)
   const [isFacebookEnabled, setIsFacebookEnabled] = useState(false)
 
-  // Instagram State
-  const [instagramProfileUrl, setInstagramProfileUrl] = useState('')
-  const [instagramAppId, setInstagramAppId] = useState('')
-  const [instagramAppSecret, setInstagramAppSecret] = useState('')
-  const [showInstagramSecret, setShowInstagramSecret] = useState(false)
-  const [isInstagramEnabled, setIsInstagramEnabled] = useState(false)
+  // Fast Review Deletion State
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [isDeletingAll, setIsDeletingAll] = useState(false)
+  const [showConfirmDeleteAll, setShowConfirmDeleteAll] = useState(false)
 
   // Discount & Incentive Settings
   const [reviewDiscountPercent, setReviewDiscountPercent] = useState('10')
@@ -100,12 +101,6 @@ export function FeedbackIntegrationsView() {
           setFacebookAppSecret(metaData.metaAppSecretMasked || metaData.appSecretMasked || '')
           setIsFacebookEnabled(Boolean(metaData.metaReviewsEnabled ?? metaData.isEnabled))
         }
-        if (d.instagram) {
-          setInstagramProfileUrl(d.instagram.profileUrl || '')
-          setInstagramAppId(d.instagram.appId || '')
-          setInstagramAppSecret(d.instagram.appSecretMasked || '')
-          setIsInstagramEnabled(d.instagram.isEnabled)
-        }
         if (d.discount) {
           setReviewDiscountPercent(String(d.discount.percentage || 10))
           setReviewDiscountEnabled(d.discount.isEnabled)
@@ -140,6 +135,77 @@ export function FeedbackIntegrationsView() {
     setTimeout(() => setCopiedFacebookRedirect(false), 2000)
   }
 
+  // Fast single review deletion with instant optimistic UI update
+  const handleDeleteReview = async (id: string) => {
+    const prevStats = { ...stats }
+    const reviewToDelete = stats.recentReviews.find((r) => r.id === id)
+
+    setDeletingId(id)
+    setConfirmDeleteId(null)
+
+    // Instant optimistic removal (0ms UI lag)
+    setStats((prev) => ({
+      ...prev,
+      totalReviews: Math.max(0, prev.totalReviews - 1),
+      verifiedGoogleReviews: reviewToDelete?.isGoogleVerified
+        ? Math.max(0, prev.verifiedGoogleReviews - 1)
+        : prev.verifiedGoogleReviews,
+      recentReviews: prev.recentReviews.filter((r) => r.id !== id),
+    }))
+
+    try {
+      const res = await fetch(`/api/integrations/feedback?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to delete review')
+      }
+      setSaveSuccess('Review deleted successfully.')
+      setTimeout(() => setSaveSuccess(null), 3000)
+    } catch (err: any) {
+      // Revert optimistic state on failure
+      setStats(prevStats)
+      setError(err?.message || 'Failed to delete review.')
+      setTimeout(() => setError(null), 4000)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  // Fast bulk review clear with instant optimistic UI update
+  const handleDeleteAllReviews = async () => {
+    const prevStats = { ...stats }
+    setIsDeletingAll(true)
+    setShowConfirmDeleteAll(false)
+
+    // Instant optimistic clear (0ms UI lag)
+    setStats((prev) => ({
+      ...prev,
+      totalReviews: 0,
+      verifiedGoogleReviews: 0,
+      recentReviews: [],
+    }))
+
+    try {
+      const res = await fetch('/api/integrations/feedback?all=true', {
+        method: 'DELETE',
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to clear all reviews')
+      }
+      setSaveSuccess('All reviews cleared successfully.')
+      setTimeout(() => setSaveSuccess(null), 3000)
+    } catch (err: any) {
+      setStats(prevStats)
+      setError(err?.message || 'Failed to clear reviews.')
+      setTimeout(() => setError(null), 4000)
+    } finally {
+      setIsDeletingAll(false)
+    }
+  }
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaving(true)
@@ -163,11 +229,6 @@ export function FeedbackIntegrationsView() {
         facebookAppSecret: facebookAppSecret.trim(),
         metaReviewsEnabled: isFacebookEnabled,
         isFacebookEnabled,
-
-        instagramProfileUrl,
-        instagramAppId,
-        instagramAppSecret,
-        isInstagramEnabled,
 
         reviewDiscountPercent: Number(reviewDiscountPercent) || 10,
         reviewDiscountEnabled,
@@ -650,72 +711,6 @@ export function FeedbackIntegrationsView() {
           </CardContent>
         </Card>
 
-        {/* 3. Instagram Direct Tagging (Placeholder Card) */}
-        <Card className="border-border/80 shadow-xs overflow-hidden">
-          <div className="bg-muted/40 p-5 border-b border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              {/* Instagram Gradient Icon */}
-              <div className="size-10 rounded-xl bg-gradient-to-tr from-[#f09433] via-[#dc2743] to-[#bc1888] text-white flex items-center justify-center shrink-0 font-bold text-sm shadow-xs">
-                📸
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-base font-bold text-foreground">Instagram Direct Profile & Tagging</h3>
-                  <Badge variant="outline" className="text-pink-600 border-pink-500/30 text-xs">
-                    Optional / Direct URL
-                  </Badge>
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Link your Instagram handle so diners can tag your dishes in stories and posts
-                </p>
-              </div>
-            </div>
-
-            {/* Enable/Disable Toggle */}
-            <div className="flex items-center gap-3 shrink-0">
-              <span className="text-xs font-semibold text-foreground">
-                {isInstagramEnabled ? 'Enabled' : 'Disabled'}
-              </span>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isInstagramEnabled}
-                  onChange={(e) => setIsInstagramEnabled(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-muted peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-pink-600"></div>
-              </label>
-            </div>
-          </div>
-
-          <CardContent className="p-6 space-y-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="instagram-profile-url" className="text-xs font-semibold">
-                  Instagram Profile URL or Handle
-                </Label>
-                {instagramProfileUrl && (
-                  <a
-                    href={instagramProfileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[11px] text-pink-600 hover:underline inline-flex items-center gap-1 font-medium"
-                  >
-                    Visit Instagram <ExternalLink className="size-3" />
-                  </a>
-                )}
-              </div>
-              <Input
-                id="instagram-profile-url"
-                value={instagramProfileUrl}
-                onChange={(e) => setInstagramProfileUrl(e.target.value)}
-                placeholder="e.g. https://www.instagram.com/restosphere"
-                className="text-xs font-mono"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Save Bar */}
         <div className="flex items-center justify-end gap-3 pt-4 border-t border-border">
           <Button
@@ -750,16 +745,56 @@ export function FeedbackIntegrationsView() {
       {/* Recent Reviews Audit */}
       {stats.recentReviews && stats.recentReviews.length > 0 && (
         <Card className="p-6 border-border/80">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
               <h3 className="text-base font-bold text-foreground">Recent Verified Customer Feedback</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Live feedback submitted by verified guests dining at RestoSphere
               </p>
             </div>
-            <Badge variant="outline" className="text-xs font-medium">
-              {stats.totalReviews} Total Reviews
-            </Badge>
+            <div className="flex items-center gap-2.5 shrink-0">
+              <Badge variant="outline" className="text-xs font-medium">
+                {stats.totalReviews} Total Reviews
+              </Badge>
+              {stats.recentReviews.length > 0 && (
+                showConfirmDeleteAll ? (
+                  <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
+                    <span className="text-[11px] text-destructive font-semibold">Clear all reviews?</span>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      disabled={isDeletingAll}
+                      onClick={handleDeleteAllReviews}
+                      className="h-7 px-2.5 text-xs font-bold gap-1 cursor-pointer"
+                    >
+                      {isDeletingAll ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
+                      <span>Yes, Clear</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowConfirmDeleteAll(false)}
+                      className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowConfirmDeleteAll(true)}
+                    className="h-7 px-2.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30 gap-1.5 cursor-pointer font-semibold transition-colors"
+                  >
+                    <Trash2 className="size-3" />
+                    <span>Clear All</span>
+                  </Button>
+                )
+              )}
+            </div>
           </div>
 
           <div className="divide-y divide-border/60">
@@ -792,6 +827,47 @@ export function FeedbackIntegrationsView() {
                   <span className="text-[11px] text-muted-foreground">
                     {new Date(rev.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                   </span>
+
+                  {/* Fast Delete Button */}
+                  {confirmDeleteId === rev.id ? (
+                    <div className="flex items-center gap-1 animate-in fade-in duration-150">
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={deletingId === rev.id}
+                        onClick={() => handleDeleteReview(rev.id)}
+                        className="h-6 px-2 text-[10px] font-bold cursor-pointer"
+                      >
+                        {deletingId === rev.id ? <Loader2 className="size-3 animate-spin" /> : 'Confirm'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setConfirmDeleteId(null)}
+                        className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-foreground cursor-pointer"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setConfirmDeleteId(rev.id)}
+                      disabled={deletingId === rev.id}
+                      className="size-7 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors cursor-pointer shrink-0"
+                      title="Delete review"
+                    >
+                      {deletingId === rev.id ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="size-3.5" />
+                      )}
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}

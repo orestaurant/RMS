@@ -6,13 +6,14 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { getCustomerSession } from '@/lib/customer-auth'
+import { getCustomerSession, getReviewVerifierSession, REVIEW_SESSION_COOKIE } from '@/lib/customer-auth'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
   try {
     const session = await getCustomerSession(request)
+    const reviewSession = await getReviewVerifierSession(request)
     const tableNumber = request.nextUrl.searchParams.get('table') || ''
     const orderId = request.nextUrl.searchParams.get('orderId') || ''
     const restaurantId = request.nextUrl.searchParams.get('restaurantId') || ''
@@ -44,12 +45,10 @@ export async function GET(request: NextRequest) {
     const isFacebookEnabled = settings?.isFacebookEnabled !== undefined
       ? (settings.facebookAppId ? settings.isFacebookEnabled : (settings.isFacebookEnabled || hasMetaConfigured))
       : hasMetaConfigured
-    const instagramProfileUrl = settings?.instagramProfileUrl || ''
-    const isInstagramEnabled = settings?.isInstagramEnabled ?? false
 
     // 2. Fetch customer verification details if session is active
     let customerInfo = null
-    let isGoogleVerified = false
+    let isGoogleVerified = Boolean(reviewSession)
     let previousFeedback = null
 
     if (session?.customerId) {
@@ -67,7 +66,7 @@ export async function GET(request: NextRequest) {
         })
 
         if (customer) {
-          isGoogleVerified = customer.isGoogleVerified || Boolean(customer.googleSubId)
+          isGoogleVerified = isGoogleVerified || customer.isGoogleVerified || Boolean(customer.googleSubId)
           customerInfo = {
             id: customer.id,
             name: customer.name,
@@ -94,6 +93,16 @@ export async function GET(request: NextRequest) {
       success: true,
       data: {
         isGoogleVerified,
+        reviewPlatform: reviewSession?.platform || (isGoogleVerified ? 'google' : null),
+        reviewer: reviewSession
+          ? {
+              name: reviewSession.name,
+              email: reviewSession.email,
+              photo: reviewSession.picture,
+              sub: reviewSession.sub,
+              platform: reviewSession.platform,
+            }
+          : null,
         customer: customerInfo,
         previousFeedback,
         settings: {
@@ -105,8 +114,6 @@ export async function GET(request: NextRequest) {
           facebookPageUrl,
           metaReviewsEnabled: isFacebookEnabled,
           metaReviewUrl: facebookPageUrl,
-          isInstagramEnabled,
-          instagramProfileUrl,
         },
       },
     })
@@ -122,6 +129,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await getCustomerSession(request)
+    const reviewSession = await getReviewVerifierSession(request)
     const body = await request.json()
 
     const {
@@ -156,12 +164,15 @@ export async function POST(request: NextRequest) {
     const organizationId = restaurant?.organizationId || '5e57f7cf-7d9f-4790-b909-1aa7c3a5d66f'
 
     // 2. Resolve customer identity
+    // CRITICAL: Review verification identity (Google/Meta) is preserved for the review record,
+    // while customerId remains associated with active customer session (if any), without hijacking customer login.
     let customerId = session?.customerId || null
-    let resolvedName = clientName || session?.name || 'Valued Guest'
-    let resolvedEmail = clientEmail || session?.email || null
-    let resolvedPhoto = clientPhoto || null
-    let verified = Boolean(clientVerified)
-    let subId = clientSubId || null
+    let resolvedName = clientName || reviewSession?.name || session?.name || 'Valued Guest'
+    let resolvedEmail = clientEmail || reviewSession?.email || session?.email || null
+    let resolvedPhoto = clientPhoto || reviewSession?.picture || null
+    let verified = Boolean(clientVerified || reviewSession?.sub)
+    let subId = clientSubId || reviewSession?.sub || null
+    let resolvedPlatform = reviewPlatform || reviewSession?.platform || 'google'
 
     if (session?.customerId) {
       try {
@@ -169,9 +180,9 @@ export async function POST(request: NextRequest) {
           where: { id: session.customerId },
         })
         if (customer) {
-          resolvedName = customer.name || resolvedName
-          resolvedEmail = customer.email || resolvedEmail
-          resolvedPhoto = customer.profilePictureUrl || resolvedPhoto
+          if (!resolvedName || resolvedName === 'Valued Guest') resolvedName = customer.name || resolvedName
+          if (!resolvedEmail) resolvedEmail = customer.email || resolvedEmail
+          if (!resolvedPhoto) resolvedPhoto = customer.profilePictureUrl || resolvedPhoto
           verified = verified || customer.isGoogleVerified || Boolean(customer.googleSubId)
           subId = subId || customer.googleSubId
         }
@@ -251,7 +262,7 @@ export async function POST(request: NextRequest) {
       // ignore
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       message: 'Thank you for your valuable feedback! Your 10% Review Discount is ready.',
       feedback: feedbackRecord,
@@ -263,6 +274,20 @@ export async function POST(request: NextRequest) {
       isFacebookEnabled: metaReviewsEnabled,
       metaReviewsEnabled,
     })
+
+    // Clean up temporary review verification session cookie upon submission
+    response.cookies.set({
+      name: REVIEW_SESSION_COOKIE,
+      value: '',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 0,
+      expires: new Date(0),
+    })
+
+    return response
   } catch (error: any) {
     console.error('Error submitting feedback:', error)
     return NextResponse.json(

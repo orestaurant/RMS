@@ -99,13 +99,64 @@ function FeedbackViewContent() {
             setMetaReviewsEnabled(resolvedMetaEnabled)
           }
 
-          if (d.isGoogleVerified || isVerifiedParam) {
+          // Prioritize reviewer details from dedicated review verification
+          if (d.reviewer) {
+            setIsGoogleVerified(true)
+            if (d.reviewer.platform) setReviewPlatform(d.reviewer.platform)
+            if (d.reviewer.name) setCustomerName(d.reviewer.name)
+            if (d.reviewer.email) setCustomerEmail(d.reviewer.email)
+            if (d.reviewer.photo) setCustomerPhoto(d.reviewer.photo)
+            if (d.reviewer.sub) setGoogleSubId(d.reviewer.sub)
+            try {
+              sessionStorage.setItem('resto_review_verifier', JSON.stringify({
+                isGoogleVerified: true,
+                reviewPlatform: d.reviewer.platform,
+                customerName: d.reviewer.name,
+                customerEmail: d.reviewer.email,
+                customerPhoto: d.reviewer.photo,
+                googleSubId: d.reviewer.sub,
+              }))
+            } catch (e) {}
+          } else if (isVerifiedParam) {
+            setIsGoogleVerified(true)
+            if (reviewPlatformParam) setReviewPlatform(reviewPlatformParam)
+            if (reviewerNameParam) setCustomerName(reviewerNameParam)
+            if (reviewerEmailParam) setCustomerEmail(reviewerEmailParam)
+            if (reviewerPhotoParam) setCustomerPhoto(reviewerPhotoParam)
+            if (reviewerSubParam) setGoogleSubId(reviewerSubParam)
+            try {
+              sessionStorage.setItem('resto_review_verifier', JSON.stringify({
+                isGoogleVerified: true,
+                reviewPlatform: reviewPlatformParam,
+                customerName: reviewerNameParam,
+                customerEmail: reviewerEmailParam,
+                customerPhoto: reviewerPhotoParam,
+                googleSubId: reviewerSubParam,
+              }))
+            } catch (e) {}
+          } else if (d.isGoogleVerified) {
             setIsGoogleVerified(true)
             if (d.customer) {
               if (!customerName) setCustomerName(d.customer.name || '')
               if (!customerEmail) setCustomerEmail(d.customer.email || '')
               if (!customerPhoto) setCustomerPhoto(d.customer.profilePictureUrl || '')
             }
+          } else {
+            // Restore from sessionStorage fallback if available
+            try {
+              const cached = sessionStorage.getItem('resto_review_verifier')
+              if (cached) {
+                const parsed = JSON.parse(cached)
+                if (parsed && parsed.isGoogleVerified) {
+                  setIsGoogleVerified(true)
+                  if (parsed.reviewPlatform) setReviewPlatform(parsed.reviewPlatform)
+                  if (parsed.customerName && !customerName) setCustomerName(parsed.customerName)
+                  if (parsed.customerEmail && !customerEmail) setCustomerEmail(parsed.customerEmail)
+                  if (parsed.customerPhoto && !customerPhoto) setCustomerPhoto(parsed.customerPhoto)
+                  if (parsed.googleSubId && !googleSubId) setGoogleSubId(parsed.googleSubId)
+                }
+              }
+            } catch (e) {}
           }
         }
       } catch (e) {
@@ -176,6 +227,7 @@ function FeedbackViewContent() {
       setDiscountCode(finalDiscountCode)
       try {
         localStorage.setItem('resto_saved_coupon', finalDiscountCode)
+        sessionStorage.removeItem('resto_review_verifier')
       } catch (e) {}
       if (data.googlePlaceReviewUrl) {
         setGooglePlaceReviewUrl(data.googlePlaceReviewUrl)

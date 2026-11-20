@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { signCustomerToken, CUSTOMER_SESSION_COOKIE } from '@/lib/customer-auth'
+import { signReviewVerifierToken, REVIEW_SESSION_COOKIE } from '@/lib/customer-auth'
 import { getCanonicalOrigin, resolveOAuthRedirectUri } from '@/lib/oauth-utils'
 
 export const dynamic = 'force-dynamic'
@@ -218,18 +218,22 @@ export async function GET(request: NextRequest) {
       console.error('Error upserting customer during Google OAuth verification:', dbError)
     }
 
-    // 7. Sign session token for customer
-    const customerId = customer?.id || `google_${googleUser.sub}`
-    const token = await signCustomerToken({
-      customerId,
+    // 7. Sign dedicated review verification token ONLY
+    // NOTE: Strictly for review verification. We DO NOT sign a customer session token or set CUSTOMER_SESSION_COOKIE,
+    // ensuring the customer's dashboard login session remains 100% untouched!
+    const reviewToken = await signReviewVerifierToken({
+      sub: googleUser.sub,
       email: googleUser.email,
-      role: 'CUSTOMER',
       name: googleUser.name || 'Google User',
+      picture: googleUser.picture || '',
+      platform: 'google',
+      verifiedAt: Date.now(),
     })
 
-    // 8. Build successful redirect response with verified customer session cookie
+    // 8. Build successful redirect response with verified reviewer parameters
     const targetUrl = buildRedirectUrl({
       google_verified: '1',
+      review_platform: 'google',
       reviewer_name: googleUser.name || 'Google User',
       reviewer_email: googleUser.email,
       reviewer_photo: googleUser.picture || '',
@@ -240,15 +244,16 @@ export async function GET(request: NextRequest) {
 
     const isSecure = canonicalOrigin.startsWith('https:')
 
-    // Set secure customer session cookie (7 days expiry)
+    // Set dedicated review verification cookie ONLY.
+    // NEVER touch CUSTOMER_SESSION_COOKIE so customer dashboard login is completely preserved!
     response.cookies.set({
-      name: CUSTOMER_SESSION_COOKIE,
-      value: token,
+      name: REVIEW_SESSION_COOKIE,
+      value: reviewToken,
       httpOnly: true,
       secure: isSecure,
       sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 60 * 24 * 7,
+      maxAge: 60 * 60 * 24, // 24 hours
     })
 
     return response

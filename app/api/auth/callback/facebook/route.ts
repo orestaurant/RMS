@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { signCustomerToken, CUSTOMER_SESSION_COOKIE } from '@/lib/customer-auth'
+import { signReviewVerifierToken, REVIEW_SESSION_COOKIE } from '@/lib/customer-auth'
 import { getCanonicalOrigin, resolveOAuthRedirectUri } from '@/lib/oauth-utils'
 
 export const dynamic = 'force-dynamic'
@@ -203,16 +203,19 @@ export async function GET(request: NextRequest) {
       console.error('Error upserting customer during Facebook OAuth verification:', dbError)
     }
 
-    // 7. Sign session token for customer
-    const customerId = customer?.id || `fb_${fbUser.id}`
-    const token = await signCustomerToken({
-      customerId,
+    // 7. Sign dedicated review verification token ONLY
+    // NOTE: Strictly for review verification. We DO NOT sign a customer session token or set CUSTOMER_SESSION_COOKIE,
+    // ensuring the customer's dashboard login session remains 100% untouched!
+    const reviewToken = await signReviewVerifierToken({
+      sub: fbUser.id,
       email: userEmail,
-      role: 'CUSTOMER',
       name: fbUser.name || 'Facebook User',
+      picture: photoUrl || '',
+      platform: 'facebook',
+      verifiedAt: Date.now(),
     })
 
-    // 8. Build successful redirect response with verified customer session cookie
+    // 8. Build successful redirect response with verified reviewer parameters
     const targetUrl = buildRedirectUrl({
       google_verified: '1',
       review_platform: 'facebook',
@@ -226,15 +229,16 @@ export async function GET(request: NextRequest) {
 
     const isSecure = canonicalOrigin.startsWith('https:')
 
-    // Set secure customer session cookie (7 days expiry)
+    // Set dedicated review verification cookie ONLY.
+    // NEVER touch CUSTOMER_SESSION_COOKIE so customer dashboard login is completely preserved!
     response.cookies.set({
-      name: CUSTOMER_SESSION_COOKIE,
-      value: token,
+      name: REVIEW_SESSION_COOKIE,
+      value: reviewToken,
       httpOnly: true,
       secure: isSecure,
       sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 60 * 24 * 7,
+      maxAge: 60 * 60 * 24, // 24 hours
     })
 
     return response
