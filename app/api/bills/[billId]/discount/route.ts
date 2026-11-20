@@ -54,7 +54,7 @@ export async function POST(
       return NextResponse.json(errorResponse('Bill not found', 'NOT_FOUND'), { status: 404 })
     }
 
-    if (bill.status === 'PAID' || bill.paymentStatus === 'paid') {
+    if (bill.status === 'PAID' || (bill.paymentStatus as any) === 'completed') {
       return NextResponse.json(errorResponse('Cannot apply discount to a settled bill', 'BILL_PAID'), { status: 400 })
     }
 

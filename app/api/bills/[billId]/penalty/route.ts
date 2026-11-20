@@ -48,7 +48,7 @@ export async function POST(
       return NextResponse.json(errorResponse('Bill not found', 'NOT_FOUND'), { status: 404 })
     }
 
-    if (bill.status === 'PAID' || bill.paymentStatus === 'paid') {
+    if (bill.status === 'PAID' || (bill.paymentStatus as any) === 'completed') {
       return NextResponse.json(errorResponse('Cannot apply penalty to an already paid bill', 'BILL_PAID'), {
         status: 400,
       })
@@ -120,7 +120,7 @@ export async function POST(
           action: 'APPLY_NON_PAYMENT_PENALTY',
           entityType: 'BILL',
           entityId: bill.id,
-          newData: {
+          newValues: {
             billNumber: bill.billNumber,
             tableNumber: bill.table?.tableNumber,
             previousGrandTotal: Number(bill.grandTotal),

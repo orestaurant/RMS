@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -8,9 +8,6 @@ import {
   ShoppingBag,
   Plus,
   Clock,
-  User,
-  Mail,
-  Phone,
   LogOut,
   RefreshCw,
   CheckCircle2,
@@ -19,6 +16,8 @@ import {
   Sparkles,
   ArrowRight,
   ChevronRight,
+  ChevronLeft,
+  Trash2,
   ShieldCheck,
   Music,
   Flame,
@@ -28,6 +27,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 import { SongRequestModal } from '@/components/customer/song-request-modal'
@@ -95,6 +102,14 @@ export default function CustomerOrdersPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'queue' | 'live' | 'completed'>('all')
   const [showSongModal, setShowSongModal] = useState<boolean>(false)
 
+  // Delete & Cancellation State
+  const [orderToDelete, setOrderToDelete] = useState<CustomerOrder | null>(null)
+  const [isDeleting, setIsDeleting] = useState<boolean>(false)
+
+  // High-performance Pagination State
+  const [currentPage, setCurrentPage] = useState<number>(1)
+  const [ordersPerPage] = useState<number>(5)
+
   const isInitialMountRef = useRef(true)
   const ordersCacheRef = useRef<string>('')
 
@@ -109,16 +124,79 @@ export default function CustomerOrdersPage() {
     return () => clearInterval(t)
   }, [])
 
+  // Reset pagination to Page 1 whenever status filter tab changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [statusFilter])
+
   const queueCount = orders.filter((o) => ['pending', 'confirmed', 'accepted'].includes(o.status.toLowerCase())).length
   const liveCount = orders.filter((o) => ['preparing', 'cooking', 'ready'].includes(o.status.toLowerCase())).length
 
-  const filteredOrders = orders.filter((o) => {
-    const st = o.status.toLowerCase()
-    if (statusFilter === 'queue') return ['pending', 'confirmed', 'accepted'].includes(st)
-    if (statusFilter === 'live') return ['preparing', 'cooking', 'ready'].includes(st)
-    if (statusFilter === 'completed') return ['served', 'completed', 'cancelled'].includes(st)
-    return true
-  })
+  const filteredOrders = useMemo(() => {
+    return orders.filter((o) => {
+      const st = o.status.toLowerCase()
+      if (statusFilter === 'queue') return ['pending', 'confirmed', 'accepted'].includes(st)
+      if (statusFilter === 'live') return ['preparing', 'cooking', 'ready'].includes(st)
+      if (statusFilter === 'completed') return ['served', 'completed', 'cancelled'].includes(st)
+      return true
+    })
+  }, [orders, statusFilter])
+
+  // Total pages and paginated slice of orders
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / ordersPerPage))
+  const paginatedOrders = useMemo(() => {
+    const startIndex = (currentPage - 1) * ordersPerPage
+    return filteredOrders.slice(startIndex, startIndex + ordersPerPage)
+  }, [filteredOrders, currentPage, ordersPerPage])
+
+  // Delete order handler (Instant optimistic update + backend dispatch)
+  const handleDeleteOrder = async () => {
+    if (!orderToDelete) return
+    setIsDeleting(true)
+    const targetId = orderToDelete.id || orderToDelete.orderNumber
+    const targetNumber = orderToDelete.orderNumber
+
+    // Instant optimistic update
+    setOrders((prev) => prev.filter((o) => o.id !== orderToDelete.id && o.orderNumber !== orderToDelete.orderNumber))
+    setOrderToDelete(null)
+
+    try {
+      const res = await fetch(`/api/orders/${targetId}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json().catch(() => ({}))
+
+      if (res.ok && (data.success || data.data?.deleted)) {
+        setFeedback({
+          type: 'success',
+          message: `Order #${targetNumber} has been deleted successfully.`,
+        })
+      } else {
+        // Fallback to customer orders delete endpoint
+        const fallbackRes = await fetch(`/api/customer/orders?id=${targetId}`, {
+          method: 'DELETE',
+        })
+        const fallbackData = await fallbackRes.json().catch(() => ({}))
+        if (fallbackRes.ok && fallbackData.success) {
+          setFeedback({
+            type: 'success',
+            message: `Order #${targetNumber} has been deleted successfully.`,
+          })
+        } else {
+          throw new Error(data.message || fallbackData.message || 'Failed to delete order')
+        }
+      }
+    } catch (err: any) {
+      console.error('Delete order error:', err)
+      setFeedback({
+        type: 'error',
+        message: err?.message || `Failed to delete order #${targetNumber}. Refreshing records...`,
+      })
+      loadData(false)
+    } finally {
+      setIsDeleting(false)
+    }
+  }
 
   // Fetch customer profile & orders with non-blocking background synchronization
   const loadData = useCallback(async (isSilent = false) => {
@@ -309,62 +387,6 @@ export default function CustomerOrdersPage() {
           onOrderPlaced={loadData}
         />
 
-        {/* ── Customer Profile Card ─────────────────────────── */}
-        <Card className="border-border/60 bg-card/90 shadow-sm overflow-hidden">
-          <CardContent className="p-6">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-              <div className="flex items-start gap-4">
-                <div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary border border-primary/20 text-lg font-bold">
-                  {profile?.name ? profile.name.slice(0, 2).toUpperCase() : <User className="size-6" />}
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-bold tracking-tight text-foreground">
-                      {profile?.name || 'Customer'}
-                    </h2>
-                    <Badge variant="secondary" className="text-[10px] font-semibold">
-                      Verified Guest
-                    </Badge>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1.5">
-                      <Mail className="size-3.5 text-primary" />
-                      {profile?.email || 'Loading...'}
-                    </span>
-                    {profile?.mobile && (
-                      <span className="flex items-center gap-1.5">
-                        <Phone className="size-3.5 text-chart-1" />
-                        {profile.mobile}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Stats & Actions */}
-              <div className="flex items-center gap-4 border-t md:border-t-0 md:border-l border-border/60 pt-4 md:pt-0 md:pl-6">
-                <div>
-                  <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">
-                    Orders Placed
-                  </p>
-                  <p className="text-2xl font-bold text-foreground">
-                    {profile?.totalOrders ?? orders.length}
-                  </p>
-                </div>
-                <div className="w-px h-10 bg-border/60" />
-                <div>
-                  <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">
-                    Total Spent
-                  </p>
-                  <p className="text-2xl font-bold text-primary">
-                    ₹{Number(profile?.totalSpent ?? 0).toLocaleString('en-IN')}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* ── Order Section Header & Place Test Order Button ── */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -474,8 +496,8 @@ export default function CustomerOrdersPage() {
                 {statusFilter === 'queue'
                   ? 'No orders in queue right now'
                   : statusFilter === 'live'
-                  ? 'No live orders cooking currently'
-                  : 'No orders found'}
+                    ? 'No live orders cooking currently'
+                    : 'No orders found'}
               </h4>
               <p className="text-xs text-muted-foreground max-w-sm mt-1 mb-5">
                 {statusFilter === 'all'
@@ -492,7 +514,7 @@ export default function CustomerOrdersPage() {
           </Card>
         ) : (
           <div className="flex flex-col gap-4">
-            {filteredOrders.map((order) => {
+            {paginatedOrders.map((order: CustomerOrder) => {
               const badgeCfg = statusBadgeStyles[order.status] || {
                 label: order.status,
                 className: 'bg-muted text-muted-foreground border-border',
@@ -557,6 +579,18 @@ export default function CustomerOrdersPage() {
                         <span className="text-base font-bold text-foreground">
                           ₹{Number(order.total || order.totalAmount || 0).toLocaleString('en-IN')}
                         </span>
+
+                        {/* Delete / Cancel Order Button */}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setOrderToDelete(order)}
+                          className="h-7 px-2.5 text-xs font-semibold text-muted-foreground hover:text-destructive hover:border-destructive/40 hover:bg-destructive/10 cursor-pointer gap-1 transition-colors"
+                          title="Delete / Cancel Order"
+                        >
+                          <Trash2 className="size-3 text-destructive" />
+                          <span className="hidden sm:inline">Delete</span>
+                        </Button>
                       </div>
                     </div>
                   </CardHeader>
@@ -567,7 +601,7 @@ export default function CustomerOrdersPage() {
                         Order Items
                       </span>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {order.items.map((item) => {
+                        {order.items.map((item: OrderItem) => {
                           const dishPrepMinutes = 15
                           const orderStartTime = order.createdAt ? new Date(order.createdAt).getTime() : Date.now()
                           const elapsedMins = Math.max(0, Math.floor((liveNow - orderStartTime) / 60000))
@@ -654,9 +688,127 @@ export default function CustomerOrdersPage() {
                 </Card>
               )
             })}
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-border/60">
+                <p className="text-xs text-muted-foreground">
+                  Showing <strong className="text-foreground font-mono">{(currentPage - 1) * ordersPerPage + 1}</strong> to{' '}
+                  <strong className="text-foreground font-mono">{Math.min(currentPage * ordersPerPage, filteredOrders.length)}</strong> of{' '}
+                  <strong className="text-foreground font-mono">{filteredOrders.length}</strong> orders
+                </p>
+
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    className="h-8 px-3 text-xs gap-1 cursor-pointer"
+                  >
+                    <ChevronLeft className="size-3.5" />
+                    <span>Previous</span>
+                  </Button>
+
+                  {/* Page Numbers */}
+                  {Array.from({ length: totalPages }).map((_, idx) => {
+                    const pageNum = idx + 1
+                    if (totalPages > 6 && Math.abs(pageNum - currentPage) > 1 && pageNum !== 1 && pageNum !== totalPages) {
+                      if (pageNum === 2 || pageNum === totalPages - 1) {
+                        return <span key={pageNum} className="text-xs text-muted-foreground px-1 select-none">...</span>
+                      }
+                      return null
+                    }
+                    return (
+                      <Button
+                        key={pageNum}
+                        variant={currentPage === pageNum ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => setCurrentPage(pageNum)}
+                        className={cn(
+                          'size-8 p-0 text-xs font-bold cursor-pointer',
+                          currentPage === pageNum ? 'shadow-xs' : ''
+                        )}
+                      >
+                        {pageNum}
+                      </Button>
+                    )
+                  })}
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    className="h-8 px-3 text-xs gap-1 cursor-pointer"
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="size-3.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
+
+      {/* Delete / Cancel Order Confirmation Dialog */}
+      <Dialog open={orderToDelete !== null} onOpenChange={(open) => !open && setOrderToDelete(null)}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="size-5" />
+              <span>Delete Order #{orderToDelete?.orderNumber}?</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground pt-1.5">
+              Are you sure you want to cancel and delete this order? It will be removed from your active queue and kitchen display.
+            </DialogDescription>
+          </DialogHeader>
+
+          {orderToDelete && (
+            <div className="p-3 rounded-xl bg-muted/40 border border-border/60 text-xs space-y-1">
+              <div className="flex justify-between font-bold">
+                <span>{orderToDelete.items.length} items</span>
+                <span>₹{Number(orderToDelete.total || orderToDelete.totalAmount || 0).toLocaleString('en-IN')}</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground line-clamp-2">
+                {orderToDelete.items.map((i) => `${i.quantity}x ${i.name}`).join(', ')}
+              </p>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isDeleting}
+              onClick={() => setOrderToDelete(null)}
+              className="rounded-xl text-xs font-bold cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={isDeleting}
+              onClick={handleDeleteOrder}
+              className="rounded-xl text-xs font-bold gap-1.5 cursor-pointer shadow-sm"
+            >
+              {isDeleting ? (
+                <>
+                  <RefreshCw className="size-3.5 animate-spin" />
+                  <span>Deleting...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="size-3.5" />
+                  <span>Yes, Delete Order</span>
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Song Playing Request (DJ Sync) Modal */}
       <SongRequestModal

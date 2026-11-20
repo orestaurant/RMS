@@ -603,10 +603,37 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // 5% GST tax calculation
+    // Coupon and Discount handling (e.g. 10% Review Coupon with min ₹500 order)
+    const rawCouponCode = body.couponCode || body.coupon || null
+    const couponCode = rawCouponCode ? String(rawCouponCode).trim().toUpperCase() : null
+    let discountAmount = 0
+    let discountPercentage = 0
+    let discountReason: string | null = null
+
+    if (couponCode) {
+      if (couponCode.startsWith('REVIEW10') || couponCode.includes('REVIEW')) {
+        // Enforce min order rule of ₹500 for Review Discount
+        if (calculatedSubtotal >= 500) {
+          discountPercentage = 10
+          discountAmount = Math.round(calculatedSubtotal * 0.10 * 100) / 100
+          discountReason = `Review Discount (10% off) - ${couponCode}`
+        }
+      } else if (body.discountAmount && Number(body.discountAmount) > 0) {
+        discountAmount = Math.min(calculatedSubtotal, Number(body.discountAmount))
+        discountPercentage = Number(body.discountPercentage) || 0
+        discountReason = couponCode || 'Promotional Discount'
+      }
+    } else if (body.discountAmount && Number(body.discountAmount) > 0) {
+      discountAmount = Math.min(calculatedSubtotal, Number(body.discountAmount))
+      discountPercentage = Number(body.discountPercentage) || 0
+      discountReason = body.discountReason || 'Manual Discount'
+    }
+
+    // 5% GST tax calculation on discounted subtotal
     const taxRate = 0.05
-    const taxAmount = Math.round(calculatedSubtotal * taxRate * 100) / 100
-    const finalTotal = Math.round((calculatedSubtotal + taxAmount) * 100) / 100
+    const taxableSubtotal = Math.max(0, calculatedSubtotal - discountAmount)
+    const taxAmount = Math.round(taxableSubtotal * taxRate * 100) / 100
+    const finalTotal = Math.round((taxableSubtotal + taxAmount) * 100) / 100
 
     // 7. Generate Unique Order Number
     const now = new Date()
@@ -630,6 +657,9 @@ export async function POST(request: NextRequest) {
         tableId,
         customerId: resolvedCustomerId,
         subtotal: new Prisma.Decimal(calculatedSubtotal),
+        discountAmount: new Prisma.Decimal(discountAmount),
+        discountPercentage: new Prisma.Decimal(discountPercentage),
+        discountReason: discountReason,
         taxAmount: new Prisma.Decimal(taxAmount),
         totalAmount: new Prisma.Decimal(finalTotal),
         total: new Prisma.Decimal(finalTotal),
@@ -647,6 +677,10 @@ export async function POST(request: NextRequest) {
           customerName: body.customerName || (parsedVehicle ? `Car Guest (${parsedVehicle})` : 'Table Guest'),
           placedVia: body.source === 'POS' ? 'POS_TERMINAL' : 'QR_SELF_ORDER',
           subtotal: calculatedSubtotal,
+          discountAmount,
+          discountPercentage,
+          discountReason,
+          couponCode,
           taxAmount,
           isLocationLocked: parsedLocked,
           vehicleNumber: parsedVehicle,
@@ -665,6 +699,7 @@ export async function POST(request: NextRequest) {
         orderNumber: true,
         status: true,
         totalAmount: true,
+        discountAmount: true,
         createdAt: true,
         isLocationLocked: true,
         vehicleNumber: true,
@@ -675,6 +710,16 @@ export async function POST(request: NextRequest) {
         locationCapturedAt: true,
       },
     })
+
+    // If review coupon code was used, mark it claimed in customerFeedback
+    if (couponCode) {
+      prisma.customerFeedback.updateMany({
+        where: { discountCode: { equals: couponCode, mode: 'insensitive' } },
+        data: { discountClaimed: true },
+      }).catch((e) => {
+        console.warn('Could not mark review discount claimed:', e)
+      })
+    }
 
     // Invalidate dashboard stats cache, KDS cache, and live orders cache immediately
     invalidateDashboardStatsCache(branchId)

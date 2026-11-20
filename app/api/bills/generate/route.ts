@@ -198,7 +198,7 @@ export async function POST(request: NextRequest) {
         }))
 
         const calculatedSubtotal = billItems.reduce((acc: number, curr: any) => acc + curr.total, 0)
-        const discountAmount = Math.max(0, Number(discount || 0))
+        const discountAmount = Math.max(0, Number(discount || targetOrder.discountAmount || 0))
         const taxableAmount = Math.max(0, calculatedSubtotal - discountAmount)
         const totalTax = Math.round(taxableAmount * (taxPercentage / 100) * 100) / 100
         const grandTotal = Math.round((taxableAmount + totalTax) * 100) / 100
@@ -419,6 +419,7 @@ export async function POST(request: NextRequest) {
         },
         select: {
           id: true,
+          discountAmount: true,
           servedById: true,
           createdById: true,
           items: {
@@ -459,6 +460,7 @@ export async function POST(request: NextRequest) {
     if (orders.length === 0 && targetOrder && targetOrder.items && targetOrder.items.length > 0) {
       orders.push({
         id: targetOrder.id,
+        discountAmount: targetOrder.discountAmount,
         servedById: targetOrder.servedById,
         createdById: targetOrder.createdById,
         items: targetOrder.items.map((it: any) => ({
@@ -565,7 +567,8 @@ export async function POST(request: NextRequest) {
     }
 
     const calculatedSubtotal = aggregatedItems.reduce((acc, curr) => acc + curr.total, 0)
-    const discountAmount = Math.max(0, Number(discount || existingBill?.discountAmount || 0))
+    const ordersDiscount = orders.reduce((sum, o) => sum + Number(o.discountAmount || 0), 0)
+    const discountAmount = Math.max(0, Number(discount || existingBill?.discountAmount || ordersDiscount || 0))
     const taxableAmount = Math.max(0, calculatedSubtotal - discountAmount)
     const totalTax = Math.round(taxableAmount * (taxPercentage / 100) * 100) / 100
     const currentTip = Number(existingBill?.tipAmount || 0)

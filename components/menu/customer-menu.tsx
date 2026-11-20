@@ -40,6 +40,8 @@ import {
   Headphones,
   Crown,
   BellRing,
+  Gift,
+  Tag,
 } from 'lucide-react'
 import {
   Dialog,
@@ -244,7 +246,7 @@ export function CustomerMenu() {
   // 4. Filters & Pagination State
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
-  const [vegOnly, setVegOnly] = useState<boolean>(false)
+  const [dietaryFilter, setDietaryFilter] = useState<'all' | 'veg' | 'non-veg'>('all')
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [itemsPerPage, setItemsPerPage] = useState<number>(8)
 
@@ -254,6 +256,26 @@ export function CustomerMenu() {
   const [orderNotes, setOrderNotes] = useState<string>('')
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [orderError, setOrderError] = useState<string | null>(null)
+
+  // Coupon & Review Discount State
+  const [couponInput, setCouponInput] = useState<string>('')
+  const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null)
+  const [appliedCouponPercent, setAppliedCouponPercent] = useState<number>(0)
+  const [couponMessage, setCouponMessage] = useState<string | null>(null)
+  const [couponError, setCouponError] = useState<string | null>(null)
+  const [validatingCoupon, setValidatingCoupon] = useState<boolean>(false)
+  const [savedReviewCoupon, setSavedReviewCoupon] = useState<string | null>(null)
+
+  // Auto-detect saved review discount coupon from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('resto_saved_coupon')
+      if (saved) {
+        setSavedReviewCoupon(saved)
+        setCouponInput(saved)
+      }
+    } catch (e) {}
+  }, [])
 
   // 5b. Customization Modal State
   const [customizingItem, setCustomizingItem] = useState<CustomerMenuItem | null>(null)
@@ -672,8 +694,72 @@ export function CustomerMenu() {
       ),
     [cartItemList]
   )
-  const cartTax = Math.round(cartSubtotal * 0.05 * 100) / 100
-  const cartGrandTotal = Math.round((cartSubtotal + cartTax) * 100) / 100
+  // Review Discount (10% off for orders of ₹500 and above)
+  const isCouponMinOrderMet = cartSubtotal >= 500
+  const discountAmount = useMemo(() => {
+    if (!appliedCoupon) return 0
+    if (!isCouponMinOrderMet) return 0
+    const percent = appliedCouponPercent > 0 ? appliedCouponPercent : 10
+    return Math.round(cartSubtotal * (percent / 100) * 100) / 100
+  }, [appliedCoupon, isCouponMinOrderMet, appliedCouponPercent, cartSubtotal])
+
+  const taxableSubtotal = Math.max(0, cartSubtotal - discountAmount)
+  const cartTax = Math.round(taxableSubtotal * 0.05 * 100) / 100
+  const cartGrandTotal = Math.round((taxableSubtotal + cartTax) * 100) / 100
+
+  // Coupon validation & application handlers
+  const handleApplyCoupon = async (codeToApply?: string) => {
+    const code = (codeToApply || couponInput).trim().toUpperCase()
+    if (!code) {
+      setCouponError('Please enter a coupon code')
+      return
+    }
+
+    setValidatingCoupon(true)
+    setCouponError(null)
+    setCouponMessage(null)
+
+    try {
+      const res = await fetch('/api/customer/coupon/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ couponCode: code, subtotal: cartSubtotal }),
+      })
+      const data = await res.json()
+
+      if (!res.ok || !data.success) {
+        setCouponError(data.message || 'Invalid coupon code')
+        return
+      }
+
+      setAppliedCoupon(code)
+      setAppliedCouponPercent(data.discountPercent || 10)
+      setCouponMessage(data.message)
+      setCouponError(null)
+    } catch (e) {
+      // Offline / fallback verification for REVIEW10-* codes
+      if (code.startsWith('REVIEW10') || code.includes('REVIEW')) {
+        setAppliedCoupon(code)
+        setAppliedCouponPercent(10)
+        setCouponMessage(
+          cartSubtotal >= 500
+            ? '10% Review Discount Applied!'
+            : `Add ₹${(500 - cartSubtotal).toFixed(2)} more to unlock 10% discount.`
+        )
+      } else {
+        setCouponError('Could not validate coupon code. Please try again.')
+      }
+    } finally {
+      setValidatingCoupon(false)
+    }
+  }
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null)
+    setAppliedCouponPercent(0)
+    setCouponMessage(null)
+    setCouponError(null)
+  }
 
   // Derived Table Orders for Live Queue and Preparation
   const queueOrders = useMemo(
@@ -731,8 +817,9 @@ export function CustomerMenu() {
         if (!matchesCat) return false
       }
 
-      // Veg only match
-      if (vegOnly && !item.isVeg) return false
+      // Dietary match (Veg / Non-Veg)
+      if (dietaryFilter === 'veg' && !item.isVeg) return false
+      if (dietaryFilter === 'non-veg' && item.isVeg) return false
 
       // Search match
       if (searchQuery.trim()) {
@@ -745,12 +832,12 @@ export function CustomerMenu() {
 
       return true
     })
-  }, [menuItems, selectedCategory, vegOnly, searchQuery])
+  }, [menuItems, selectedCategory, dietaryFilter, searchQuery])
 
   // Reset pagination to page 1 on filter/search change
   useEffect(() => {
     setCurrentPage(1)
-  }, [selectedCategory, searchQuery, vegOnly, itemsPerPage])
+  }, [selectedCategory, searchQuery, dietaryFilter, itemsPerPage])
 
   // Pagination Calculations
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / itemsPerPage))
@@ -859,6 +946,9 @@ export function CustomerMenu() {
         status: 'pending',
         notes: orderNotes.trim() || undefined,
         totalAmount: cartGrandTotal,
+        couponCode: appliedCoupon && isCouponMinOrderMet ? appliedCoupon : undefined,
+        discountAmount: appliedCoupon && isCouponMinOrderMet ? discountAmount : 0,
+        discountPercentage: appliedCoupon && isCouponMinOrderMet ? (appliedCouponPercent || 10) : 0,
         vehicleNumber: orderMode === 'drive_in' ? (locationData.vehicleNumber?.trim().toUpperCase() || undefined) : undefined,
         landmarkNote: orderMode === 'drive_in' ? (locationData.landmarkNote?.trim() || undefined) : undefined,
         customerLat: orderMode === 'drive_in' ? locationData.customerLat : undefined,
@@ -901,6 +991,14 @@ export function CustomerMenu() {
       setCart({})
       setIsCartOpen(false)
       setOrderNotes('')
+      // Clear applied and saved coupon upon order completion
+      try {
+        localStorage.removeItem('resto_saved_coupon')
+      } catch (e) {}
+      setAppliedCoupon(null)
+      setSavedReviewCoupon(null)
+      setCouponMessage(null)
+      setCouponError(null)
       // Instantly open live order tracker
       setShowOrdersModal(true)
       // Background non-blocking table orders refresh
@@ -2124,25 +2222,54 @@ export function CustomerMenu() {
             )}
           </div>
 
-          {/* Pure Veg Toggle */}
-          <button
-            type="button"
-            onClick={() => setVegOnly(!vegOnly)}
-            className={cn(
-              'flex items-center gap-2 h-11 px-4 rounded-2xl border text-xs font-extrabold transition-all shadow-xs cursor-pointer select-none shrink-0',
-              vegOnly
-                ? 'bg-emerald-500/15 border-emerald-500 text-emerald-600 dark:text-emerald-400 shadow-emerald-500/10'
-                : 'bg-card border-border/80 text-muted-foreground hover:text-foreground hover:border-border'
-            )}
-          >
-            <span
+          {/* Dietary Filter (Veg & Non-Veg) */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Veg Toggle */}
+            <button
+              type="button"
+              onClick={() => setDietaryFilter((prev) => (prev === 'veg' ? 'all' : 'veg'))}
+              aria-pressed={dietaryFilter === 'veg'}
               className={cn(
-                'size-2.5 rounded-full transition-all',
-                vegOnly ? 'bg-emerald-500 ring-4 ring-emerald-500/20' : 'bg-muted-foreground/40'
+                'flex items-center gap-2 h-11 px-3.5 sm:px-4 rounded-2xl border text-xs font-extrabold transition-all shadow-xs cursor-pointer select-none shrink-0',
+                dietaryFilter === 'veg'
+                  ? 'bg-emerald-500/15 border-emerald-500 text-emerald-600 dark:text-emerald-400 shadow-emerald-500/10'
+                  : 'bg-card border-border/80 text-muted-foreground hover:text-foreground hover:border-border'
               )}
-            />
-            <span>Veg Only</span>
-          </button>
+            >
+              <span
+                className={cn(
+                  'size-2.5 rounded-full transition-all shrink-0',
+                  dietaryFilter === 'veg'
+                    ? 'bg-emerald-500 ring-4 ring-emerald-500/20'
+                    : 'bg-emerald-600/60'
+                )}
+              />
+              <span>Veg</span>
+            </button>
+
+            {/* Non-Veg Toggle */}
+            <button
+              type="button"
+              onClick={() => setDietaryFilter((prev) => (prev === 'non-veg' ? 'all' : 'non-veg'))}
+              aria-pressed={dietaryFilter === 'non-veg'}
+              className={cn(
+                'flex items-center gap-2 h-11 px-3.5 sm:px-4 rounded-2xl border text-xs font-extrabold transition-all shadow-xs cursor-pointer select-none shrink-0',
+                dietaryFilter === 'non-veg'
+                  ? 'bg-rose-500/15 border-rose-500 text-rose-600 dark:text-rose-400 shadow-rose-500/10'
+                  : 'bg-card border-border/80 text-muted-foreground hover:text-foreground hover:border-border'
+              )}
+            >
+              <span
+                className={cn(
+                  'size-2.5 rounded-full transition-all shrink-0',
+                  dietaryFilter === 'non-veg'
+                    ? 'bg-rose-500 ring-4 ring-rose-500/20'
+                    : 'bg-rose-600/60'
+                )}
+              />
+              <span>Non-Veg</span>
+            </button>
+          </div>
         </div>
 
         {/* Category Pills (Horizontal Sticky Bar) */}
@@ -2219,7 +2346,7 @@ export function CustomerMenu() {
               onClick={() => {
                 setSearchQuery('')
                 setSelectedCategory('all')
-                setVegOnly(false)
+                setDietaryFilter('all')
               }}
               className="rounded-xl text-xs"
             >
@@ -2822,6 +2949,129 @@ export function CustomerMenu() {
                   />
                 </div>
               )}
+
+              {/* Coupon / Promo Code Section */}
+              {cartItemList.length > 0 && (
+                <div className="pt-3 border-t border-border/60 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-extrabold flex items-center gap-1.5 text-foreground">
+                      <Gift className="size-3.5 text-orange-500" />
+                      <span>Have a Coupon Code?</span>
+                    </label>
+                    {appliedCoupon && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveCoupon}
+                        className="text-[11px] font-bold text-destructive hover:underline cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+
+                  {/* 1-Click Saved Review Coupon Badge */}
+                  {savedReviewCoupon && !appliedCoupon && (
+                    <div className="p-2.5 rounded-xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center gap-1 truncate">
+                          <span>🎁</span>
+                          <span className="font-mono">{savedReviewCoupon}</span>
+                          <span className="font-semibold text-[11px]">(10% Review Discount)</span>
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          Valid on orders of ₹500 and above
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => {
+                          setCouponInput(savedReviewCoupon)
+                          handleApplyCoupon(savedReviewCoupon)
+                        }}
+                        disabled={validatingCoupon}
+                        className="h-7 px-2.5 text-[11px] font-extrabold rounded-lg bg-orange-600 hover:bg-orange-700 text-white shrink-0 cursor-pointer"
+                      >
+                        {validatingCoupon ? <RefreshCw className="size-3 animate-spin" /> : 'Apply'}
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Coupon Input Box */}
+                  {!appliedCoupon ? (
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Tag className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                        <Input
+                          placeholder="Enter coupon (e.g. REVIEW10-...)"
+                          value={couponInput}
+                          onChange={(e) => {
+                            setCouponInput(e.target.value.toUpperCase())
+                            setCouponError(null)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              handleApplyCoupon()
+                            }
+                          }}
+                          className="h-9 pl-8 text-xs uppercase font-mono font-bold rounded-xl"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => handleApplyCoupon()}
+                        disabled={validatingCoupon || !couponInput.trim()}
+                        className="h-9 px-3.5 text-xs font-bold rounded-xl cursor-pointer"
+                      >
+                        {validatingCoupon ? <RefreshCw className="size-3 animate-spin" /> : 'Apply'}
+                      </Button>
+                    </div>
+                  ) : (
+                    /* Active Coupon Status */
+                    <div
+                      className={cn(
+                        'p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2',
+                        isCouponMinOrderMet
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                          : 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400'
+                      )}
+                    >
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          {isCouponMinOrderMet ? <Check className="size-3.5" /> : <AlertCircle className="size-3.5" />}
+                          <span className="font-mono">{appliedCoupon}</span>
+                          <span>{isCouponMinOrderMet ? '• 10% Discount Active' : '• Condition not met'}</span>
+                        </div>
+                        {isCouponMinOrderMet ? (
+                          <p className="text-[11px] opacity-90">
+                            🎉 10% discount applied! You save ₹{discountAmount.toFixed(2)}.
+                          </p>
+                        ) : (
+                          <p className="text-[11px] font-semibold opacity-90">
+                            ⚠️ Add ₹{(500 - cartSubtotal).toFixed(2)} more items to unlock 10% discount (Min. order ₹500)!
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRemoveCoupon}
+                        className="text-[11px] font-bold underline hover:opacity-80 shrink-0 cursor-pointer"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  )}
+
+                  {couponError && (
+                    <p className="text-[11px] text-destructive font-medium flex items-center gap-1">
+                      <AlertCircle className="size-3 shrink-0" />
+                      <span>{couponError}</span>
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Bill Summary & Place Order Footer */}
@@ -2832,6 +3082,15 @@ export function CustomerMenu() {
                     <span>Subtotal</span>
                     <span>₹{cartSubtotal.toFixed(2)}</span>
                   </div>
+                  {discountAmount > 0 && (
+                    <div className="flex justify-between font-bold text-emerald-600 dark:text-emerald-400">
+                      <span className="flex items-center gap-1">
+                        <Gift className="size-3" />
+                        <span>Review Discount ({appliedCouponPercent || 10}%)</span>
+                      </span>
+                      <span>-₹{discountAmount.toFixed(2)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-muted-foreground">
                     <span>GST (5%)</span>
                     <span>₹{cartTax.toFixed(2)}</span>

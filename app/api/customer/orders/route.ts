@@ -367,3 +367,66 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+/**
+ * DELETE /api/customer/orders
+ * Allows cancelling and soft-deleting an order by ID or orderNumber
+ */
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const body = await request.json().catch(() => ({}))
+    const orderId = searchParams.get('id') || searchParams.get('orderId') || body.orderId || body.id
+
+    if (!orderId) {
+      return NextResponse.json(
+        { success: false, message: 'Order ID is required' },
+        { status: 400 }
+      )
+    }
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const isUuid = uuidRegex.test(orderId)
+    const whereClause = isUuid ? { OR: [{ id: orderId }, { orderNumber: orderId }] } : { orderNumber: orderId }
+
+    const order = await prisma.order.findFirst({
+      where: whereClause,
+      select: { id: true, orderNumber: true, status: true, branchId: true },
+    })
+
+    if (!order) {
+      return NextResponse.json(
+        { success: false, message: 'Order not found' },
+        { status: 404 }
+      )
+    }
+
+    // Soft delete & set cancelled status
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        deletedAt: new Date(),
+        status: 'cancelled',
+      },
+    })
+
+    // Invalidate caches
+    invalidateKDSCache()
+    invalidateLiveOrdersCache()
+    if (order.branchId) {
+      invalidateDashboardStatsCache(order.branchId)
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `Order #${order.orderNumber} deleted successfully.`,
+      orderId: order.id,
+    })
+  } catch (error: any) {
+    console.error('Error deleting customer order:', error)
+    return NextResponse.json(
+      { success: false, message: error?.message || 'Failed to delete order' },
+      { status: 500 }
+    )
+  }
+}

@@ -172,7 +172,11 @@ function FeedbackViewContent() {
         throw new Error(data.message || 'Failed to submit review')
       }
 
-      setDiscountCode(data.discountCode || 'REVIEW10-CLAIMED')
+      const finalDiscountCode = data.discountCode || 'REVIEW10-CLAIMED'
+      setDiscountCode(finalDiscountCode)
+      try {
+        localStorage.setItem('resto_saved_coupon', finalDiscountCode)
+      } catch (e) {}
       if (data.googlePlaceReviewUrl) {
         setGooglePlaceReviewUrl(data.googlePlaceReviewUrl)
       }
@@ -195,6 +199,9 @@ function FeedbackViewContent() {
   const handleCopyCode = () => {
     if (discountCode) {
       navigator.clipboard.writeText(discountCode)
+      try {
+        localStorage.setItem('resto_saved_coupon', discountCode)
+      } catch (e) {}
       setCopiedCode(true)
       setTimeout(() => setCopiedCode(false), 2000)
     }
@@ -279,9 +286,26 @@ function FeedbackViewContent() {
                   <span>{copiedCode ? 'Copied' : 'Copy'}</span>
                 </Button>
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                Table #{tableNumber} · Valid for today's dining bill
-              </p>
+              <div className="space-y-1 text-center">
+                <p className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  ✓ Valid on your next order above ₹500
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  Table #{tableNumber} · Code saved automatically for your next order
+                </p>
+              </div>
+
+              {/* Direct Next Order CTA */}
+              <div className="pt-1">
+                <a
+                  href={`/menu?table=${tableNumber || '1'}`}
+                  className="w-full h-10 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-sm"
+                >
+                  <UtensilsCrossed className="size-4" />
+                  <span>Order from Menu with 10% Discount</span>
+                  <ArrowRight className="size-4" />
+                </a>
+              </div>
             </div>
 
             {/* External Review Actions (Google Maps & Meta / Facebook) */}
