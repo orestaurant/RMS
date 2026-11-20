@@ -123,9 +123,89 @@ export async function GET(request: NextRequest) {
       }
 
       if (isCustomer) {
-        // Customer isolation: ONLY fetch orders placed by this specific customer account
-        whereClause.customerId = customerId
-        whereClause.NOT = [{ customerId: null }]
+        const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
+
+        // Lean query: Find active table(s) associated with this customer's dining session
+        const activeCustomerOrders = await prisma.order.findMany({
+          where: {
+            customerId: customerId,
+            deletedAt: null,
+            createdAt: { gte: sessionCutoff },
+            isBilled: false,
+            status: {
+              notIn: ['cancelled', 'CANCELLED', 'refunded'],
+            },
+          },
+          select: {
+            tableId: true,
+            metadata: true,
+            table: { select: { tableNumber: true } },
+          },
+          take: 10,
+        })
+
+        const activeTableIds = Array.from(
+          new Set(
+            activeCustomerOrders
+              .map((o) => o.tableId)
+              .filter((id): id is string => Boolean(id))
+          )
+        )
+
+        const activeTableNumbers = Array.from(
+          new Set(
+            activeCustomerOrders
+              .flatMap((o) => {
+                const meta = o.metadata as any
+                const tblNum = o.table?.tableNumber || meta?.tableNumber
+                return tblNum ? [String(tblNum).trim(), String(tblNum).trim().replace(/^table\s+/i, '')] : []
+              })
+              .filter(Boolean)
+          )
+        )
+
+        // Customer sees:
+        // 1. All their own orders (customerId: customerId)
+        // 2. Plus any orders placed for their active booked table by staff/waiter during dining session
+        const orConditions: any[] = [{ customerId: customerId }]
+
+        if (activeTableIds.length > 0 || activeTableNumbers.length > 0) {
+          orConditions.push({
+            AND: [
+              { createdAt: { gte: sessionCutoff } },
+              { isBilled: false },
+              { status: { notIn: ['cancelled', 'CANCELLED', 'refunded'] } },
+              {
+                OR: [
+                  ...(activeTableIds.length > 0 ? [{ tableId: { in: activeTableIds } }] : []),
+                  ...(activeTableNumbers.length > 0
+                    ? [
+                        { table: { tableNumber: { in: activeTableNumbers } } },
+                        ...activeTableNumbers.map((tn) => ({
+                          metadata: { path: ['tableNumber'], equals: tn },
+                        })),
+                      ]
+                    : []),
+                ],
+              },
+            ],
+          })
+
+          // Background auto-link: backfill customerId on any waiter-placed orders on this table
+          if (activeTableIds.length > 0) {
+            prisma.order.updateMany({
+              where: {
+                tableId: { in: activeTableIds },
+                customerId: null,
+                createdAt: { gte: sessionCutoff },
+                deletedAt: null,
+              },
+              data: { customerId: customerId },
+            }).catch(() => {})
+          }
+        }
+
+        whereClause.OR = orConditions
         if (statusFilter !== 'all') {
           whereClause.status = statusFilter
         }
@@ -213,7 +293,7 @@ export async function GET(request: NextRequest) {
           return {
             id: order.orderNumber || order.id.slice(0, 8),
             fullId: order.id,
-            customerId: order.customerId,
+            customerId: order.customerId || (isCustomer ? customerId : null),
             tableId: order.table?.id,
             tableNumber: order.table?.tableNumber || 'Takeaway',
             waiter: order.createdBy?.name || order.createdBy?.firstName || 'Staff',

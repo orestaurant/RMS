@@ -972,14 +972,42 @@ export function LiveOrdersView() {
       if (json.success && json.data) {
         let fetchedOrders: LiveOrder[] = json.data.orders || []
 
-        // Strict Account-Based Isolation for Customer:
+        // Account & Table-Based Isolation for Customer:
+        // Customer sees orders placed by their account, PLUS any orders placed for their active booked table by staff/waiter!
         if (isCustomer) {
           const currentCustId = auth?.id
+          const customerTableKeys = new Set<string>()
+
+          fetchedOrders.forEach((o) => {
+            if (o && o.customerId && currentCustId && o.customerId === currentCustId) {
+              if (o.tableNumber) {
+                const rawTbl = String(o.tableNumber).trim().toLowerCase()
+                const cleanTbl = rawTbl.replace(/^table\s+/i, '')
+                customerTableKeys.add(rawTbl)
+                customerTableKeys.add(cleanTbl)
+              }
+              if (o.tableId) {
+                customerTableKeys.add(String(o.tableId).trim().toLowerCase())
+              }
+            }
+          })
+
           fetchedOrders = fetchedOrders.filter((o) => {
             if (!o) return false
-            if (!o.customerId) return false
-            if (currentCustId && o.customerId !== currentCustId) return false
-            return true
+            // 1. Direct ownership
+            if (currentCustId && o.customerId === currentCustId) return true
+            // 2. Active table ownership (staff/waiter placed order for this customer's table)
+            if (o.tableNumber) {
+              const rawTbl = String(o.tableNumber).trim().toLowerCase()
+              const cleanTbl = rawTbl.replace(/^table\s+/i, '')
+              if (customerTableKeys.has(rawTbl) || customerTableKeys.has(cleanTbl)) {
+                return true
+              }
+            }
+            if (o.tableId && customerTableKeys.has(String(o.tableId).trim().toLowerCase())) {
+              return true
+            }
+            return false
           })
         }
 

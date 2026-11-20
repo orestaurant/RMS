@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
               discountAmount: Number(directBill.discountAmount),
               tipAmount: Number(directBill.tipAmount),
               grandTotal: Number(directBill.grandTotal),
+              partyThrower: (directBill.metadata as any)?.partyThrower || null,
             },
           })
         }
@@ -168,6 +169,7 @@ export async function POST(request: NextRequest) {
               discountAmount: Number(activeOrderBill.discountAmount),
               tipAmount: Number(activeOrderBill.tipAmount),
               grandTotal: Number(activeOrderBill.grandTotal),
+              partyThrower: (activeOrderBill.metadata as any)?.partyThrower || null,
             },
           })
         }
@@ -293,6 +295,7 @@ export async function POST(request: NextRequest) {
               discountAmount: Number(createdBill.discountAmount),
               tipAmount: Number(createdBill.tipAmount),
               grandTotal: Number(createdBill.grandTotal),
+              partyThrower: (createdBill.metadata as any)?.partyThrower || null,
             },
           },
           { status: 201 }
@@ -491,6 +494,7 @@ export async function POST(request: NextRequest) {
           discountAmount: Number(existingBill.discountAmount),
           tipAmount: Number(existingBill.tipAmount),
           grandTotal: Number(existingBill.grandTotal),
+          partyThrower: (existingBill.metadata as any)?.partyThrower || null,
         },
       })
     }
@@ -520,33 +524,35 @@ export async function POST(request: NextRequest) {
     }
 
     const billItems: ExtractedItem[] = []
-    // Include existing items if updating existing bill with newly added round of orders
-    if (existingBill?.items && existingBill.items.length > 0) {
+    // ⚡ Orders array contains ALL active dining orders for this table session.
+    // We strictly extract from orders to prevent duplicating quantities on recurring bill loads.
+    if (orders.length > 0) {
+      for (const ord of orders) {
+        if (Array.isArray(ord.items)) {
+          for (const it of ord.items) {
+            const qty = Number(it.quantity || 1)
+            const price = Number(it.basePrice || 0)
+            const total = Number(it.itemTotal || price * qty)
+            billItems.push({
+              name: it.itemName || 'Dish',
+              quantity: qty,
+              price,
+              total,
+              menuItemId: it.menuItemId || undefined,
+            })
+          }
+        }
+      }
+    } else if (existingBill?.items && existingBill.items.length > 0) {
+      // Fallback only if no active order records returned from table orders query
       for (const it of existingBill.items) {
         billItems.push({
           name: it.itemName || 'Dish',
-          quantity: it.quantity,
+          quantity: Number(it.quantity || 1),
           price: Number(it.basePrice || 0),
           total: Number(it.itemTotal || 0),
           menuItemId: it.menuItemId || undefined,
         })
-      }
-    }
-
-    for (const ord of orders) {
-      if (Array.isArray(ord.items)) {
-        for (const it of ord.items) {
-          const qty = it.quantity || 1
-          const price = Number(it.basePrice || 0)
-          const total = Number(it.itemTotal || price * qty)
-          billItems.push({
-            name: it.itemName || 'Dish',
-            quantity: qty,
-            price,
-            total,
-            menuItemId: it.menuItemId || undefined,
-          })
-        }
       }
     }
 
@@ -751,6 +757,7 @@ export async function POST(request: NextRequest) {
           discountAmount: Number(finalBill.discountAmount),
           tipAmount: Number(finalBill.tipAmount),
           grandTotal: Number(finalBill.grandTotal),
+          partyThrower: (finalBill.metadata as any)?.partyThrower || null,
         },
       },
       { status: 201 }

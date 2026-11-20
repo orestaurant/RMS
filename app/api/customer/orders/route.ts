@@ -108,6 +108,40 @@ export async function GET(request: NextRequest) {
       })
     }
 
+    const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
+
+    // Find active table(s) the customer is seated at
+    const activeCustomerOrders = await prisma.order.findMany({
+      where: {
+        OR: orConditions,
+        deletedAt: null,
+        createdAt: { gte: sessionCutoff },
+        isBilled: false,
+        status: { notIn: ['cancelled', 'CANCELLED', 'refunded'] },
+      },
+      select: {
+        tableId: true,
+      },
+      take: 10,
+    })
+
+    const activeTableIds = Array.from(
+      new Set(
+        activeCustomerOrders
+          .map((o) => o.tableId)
+          .filter((id): id is string => Boolean(id))
+      )
+    )
+
+    if (activeTableIds.length > 0) {
+      orConditions.push({
+        tableId: { in: activeTableIds },
+        createdAt: { gte: sessionCutoff },
+        isBilled: false,
+        status: { notIn: ['cancelled', 'CANCELLED', 'refunded'] },
+      })
+    }
+
     const orders = await prisma.order.findMany({
       where: {
         OR: orConditions,

@@ -644,6 +644,51 @@ export async function POST(request: NextRequest) {
     // 8. Newly placed orders must start as 'pending' so they appear in KDS 'Incoming' queue
     const finalStatus = 'pending'
 
+    // 8.5 Auto-link waiter/staff placed orders to active customer at this table
+    let effectiveCustomerId = resolvedCustomerId
+    if (!effectiveCustomerId && isDineIn && (tableId || finalTableNumber)) {
+      try {
+        const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
+        const cleanTableNum = String(finalTableNumber).trim()
+        const activeTableOrder = await prisma.order.findFirst({
+          where: {
+            branchId,
+            deletedAt: null,
+            createdAt: { gte: sessionCutoff },
+            customerId: { not: null },
+            isBilled: false,
+            status: {
+              in: [
+                'pending',
+                'PENDING',
+                'confirmed',
+                'preparing',
+                'PREPARING',
+                'ready',
+                'READY',
+                'served',
+                'SERVED',
+                'ACCEPTED',
+              ] as any[],
+            },
+            OR: [
+              ...(tableId ? [{ tableId }] : []),
+              { table: { tableNumber: cleanTableNum } },
+              { metadata: { path: ['tableNumber'], equals: cleanTableNum } },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { customerId: true },
+        })
+
+        if (activeTableOrder?.customerId) {
+          effectiveCustomerId = activeTableOrder.customerId
+        }
+      } catch (err) {
+        console.warn('Could not auto-link active customer for table order:', err)
+      }
+    }
+
     // 9. Persist Order in database
     const order = await prisma.order.create({
       data: {
@@ -655,7 +700,7 @@ export async function POST(request: NextRequest) {
         status: finalStatus as any,
         paymentStatus: 'pending',
         tableId,
-        customerId: resolvedCustomerId,
+        customerId: effectiveCustomerId,
         subtotal: new Prisma.Decimal(calculatedSubtotal),
         discountAmount: new Prisma.Decimal(discountAmount),
         discountPercentage: new Prisma.Decimal(discountPercentage),

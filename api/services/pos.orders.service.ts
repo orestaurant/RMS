@@ -204,6 +204,44 @@ export async function createPOSOrder(
     }
   })
 
+  // Auto-link active table customer if not explicitly passed
+  let resolvedCustomerId = request.customerId || null
+  if (!resolvedCustomerId && tableId) {
+    try {
+      const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
+      const activeTableOrder = await prisma.order.findFirst({
+        where: {
+          tableId,
+          customerId: { not: null },
+          isBilled: false,
+          deletedAt: null,
+          createdAt: { gte: sessionCutoff },
+          status: {
+            in: [
+              'pending',
+              'PENDING',
+              'confirmed',
+              'preparing',
+              'PREPARING',
+              'ready',
+              'READY',
+              'served',
+              'SERVED',
+              'ACCEPTED',
+            ] as any[],
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { customerId: true },
+      })
+      if (activeTableOrder?.customerId) {
+        resolvedCustomerId = activeTableOrder.customerId
+      }
+    } catch (err) {
+      console.warn('POS could not resolve active table customer:', err)
+    }
+  }
+
   // Create the order
   const order = await prisma.order.create({
     data: {
@@ -215,7 +253,7 @@ export async function createPOSOrder(
       status: 'confirmed',
       paymentStatus: 'pending',
       tableId,
-      customerId: request.customerId || null,
+      customerId: resolvedCustomerId,
       createdById: request.userId,
       subtotal: new Prisma.Decimal(calculations.subtotal),
       discountAmount: new Prisma.Decimal(calculations.discount),

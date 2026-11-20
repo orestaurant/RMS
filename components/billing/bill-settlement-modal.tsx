@@ -39,6 +39,7 @@ import {
   DollarSign,
   Plus,
   Minus,
+  Trash2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthContext } from '@/hooks/useAuthContext'
@@ -505,24 +506,46 @@ export function BillSettlementModal({
                     <input
                       type="checkbox"
                       checked={isPartyThrowerEnabled}
-                      onChange={(e) => setIsPartyThrowerEnabled(e.target.checked)}
+                      onChange={(e) => {
+                        setIsPartyThrowerEnabled(e.target.checked)
+                        if (!e.target.checked) {
+                          setPartyThrowerName('')
+                          setPartyThrowerPhone('')
+                        }
+                      }}
                       className="size-4 rounded accent-primary cursor-pointer"
                     />
                   </div>
                   {isPartyThrowerEnabled && (
-                    <div className="grid grid-cols-2 gap-2 pt-1 animate-in fade-in">
-                      <Input
-                        placeholder="Party Thrower Name"
-                        value={partyThrowerName}
-                        onChange={(e) => setPartyThrowerName(e.target.value)}
-                        className="h-8 text-xs bg-card"
-                      />
-                      <Input
-                        placeholder="Party Thrower Phone"
-                        value={partyThrowerPhone}
-                        onChange={(e) => setPartyThrowerPhone(e.target.value)}
-                        className="h-8 text-xs bg-card"
-                      />
+                    <div className="space-y-2 pt-1 animate-in fade-in">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          placeholder="Party Thrower Name"
+                          value={partyThrowerName}
+                          onChange={(e) => setPartyThrowerName(e.target.value)}
+                          className="h-8 text-xs bg-card"
+                        />
+                        <Input
+                          placeholder="Party Thrower Phone"
+                          value={partyThrowerPhone}
+                          onChange={(e) => setPartyThrowerPhone(e.target.value)}
+                          className="h-8 text-xs bg-card"
+                        />
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsPartyThrowerEnabled(false)
+                            setPartyThrowerName('')
+                            setPartyThrowerPhone('')
+                          }}
+                          className="text-[11px] text-destructive hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Trash2 className="size-3" />
+                          Delete Party Thrower
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

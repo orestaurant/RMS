@@ -30,6 +30,7 @@ import {
   Users,
   Crown,
   BellRing,
+  Trash2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CustomerSplitBillModal } from './customer-split-bill-modal'
@@ -150,7 +151,7 @@ export function CustomerBillModal({
     async (asCustomerRequest = false) => {
       if (!tableNumber && !selectedOrderId) return
       try {
-        if (!clientBreakdown.items || clientBreakdown.items.length === 0) {
+        if (!tableOrders || tableOrders.length === 0) {
           setLoading(true)
         }
         setError(null)
@@ -172,9 +173,7 @@ export function CustomerBillModal({
         }
 
         setBill(json.data)
-        if (json.data.partyThrower || json.data.metadata?.partyThrower) {
-          setPartyThrower(json.data.partyThrower || json.data.metadata?.partyThrower)
-        }
+        setPartyThrower(json.data.partyThrower || json.data.metadata?.partyThrower || null)
 
         // If user already tapped a tip optimistically, sync with server immediately
         if (pendingTipRef.current !== null && pendingTipRef.current !== json.data.tipAmount) {
@@ -188,14 +187,14 @@ export function CustomerBillModal({
         }
       } catch (err: any) {
         console.error('Error loading bill:', err)
-        if (!clientBreakdown.items || clientBreakdown.items.length === 0) {
+        if (!tableOrders || tableOrders.length === 0) {
           setError(err.message || 'Unable to retrieve bill for this table.')
         }
       } finally {
         setLoading(false)
       }
     },
-    [tableNumber, selectedOrderId, customerName, customerPhone, clientBreakdown.items, selectedTip]
+    [tableNumber, selectedOrderId, customerName, customerPhone, tableOrders?.length, selectedTip]
   )
 
   useEffect(() => {
@@ -316,6 +315,15 @@ export function CustomerBillModal({
       }
 
       setPartyThrower(hostPayload)
+      setBill((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              partyThrower: hostPayload,
+              metadata: { ...(prev.metadata || {}), partyThrower: hostPayload },
+            }
+          : prev
+      )
       setIsAssigningHost(false)
 
       // Alert waiter about Party Thrower
@@ -339,6 +347,56 @@ export function CustomerBillModal({
     } catch (err: any) {
       console.error('Failed to assign party thrower:', err)
       setError('Failed to assign party thrower.')
+    } finally {
+      setHostAssignLoading(false)
+    }
+  }
+
+  // Handle Removing/Deleting Party Thrower
+  const handleRemovePartyThrower = async () => {
+    try {
+      setHostAssignLoading(true)
+      if (bill?.id) {
+        await fetch(`/api/bills/${bill.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ partyThrower: null }),
+        })
+      }
+
+      setPartyThrower(null)
+      setHostNameInput('')
+      setHostPhoneInput('')
+      setIsAssigningHost(false)
+      setBill((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              partyThrower: null,
+              metadata: { ...(prev.metadata || {}), partyThrower: null },
+            }
+          : prev
+      )
+
+      // Alert waiter about Party Thrower Removal
+      try {
+        await fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'party_thrower_removed',
+            type: 'alert',
+            title: `ℹ️ Party Thrower Removed — ${formattedTableSpot}`,
+            body: `Party thrower designation removed for ${formattedTableSpot}. Billing restored to standard table settlement.`,
+            metadata: {
+              tableNumber: formattedTableSpot,
+            },
+          }),
+        })
+      } catch {}
+    } catch (err: any) {
+      console.error('Failed to remove party thrower:', err)
+      setError('Failed to remove party thrower.')
     } finally {
       setHostAssignLoading(false)
     }
@@ -529,29 +587,63 @@ export function CustomerBillModal({
                     </p>
                   </div>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-[11px] text-muted-foreground hover:text-foreground shrink-0"
-                  onClick={() => setIsAssigningHost(true)}
-                >
-                  Change
-                </Button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      setHostNameInput(partyThrower.name)
+                      setHostPhoneInput(partyThrower.phone || '')
+                      setIsAssigningHost(true)
+                    }}
+                  >
+                    Change
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={hostAssignLoading}
+                    className="h-7 px-2 text-[11px] text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                    onClick={handleRemovePartyThrower}
+                    title="Remove Party Thrower"
+                  >
+                    {hostAssignLoading ? <Loader2 className="size-3 animate-spin mr-1" /> : <Trash2 className="size-3.5 mr-1" />}
+                    <span>Delete</span>
+                  </Button>
+                </div>
               </div>
             ) : isAssigningHost ? (
               <div className="p-4 rounded-2xl bg-muted/40 border border-amber-500/30 space-y-3 animate-in fade-in">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
                     <Crown className="size-3.5 text-amber-500" />
-                    Assign Party Thrower (Host Payer)
+                    {partyThrower ? 'Edit Party Thrower (Host Payer)' : 'Assign Party Thrower (Host Payer)'}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsAssigningHost(false)}
-                    className="text-[11px] text-muted-foreground hover:text-foreground"
-                  >
-                    Cancel
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {partyThrower && (
+                      <button
+                        type="button"
+                        disabled={hostAssignLoading}
+                        onClick={handleRemovePartyThrower}
+                        className="text-[11px] text-destructive hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 className="size-3" />
+                        Remove Host
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAssigningHost(false)
+                        setHostNameInput('')
+                        setHostPhoneInput('')
+                      }}
+                      className="text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
                   Designate one person to cover the entire table bill. Waiter and digital payment collection will route to this host.
@@ -570,15 +662,17 @@ export function CustomerBillModal({
                     className="h-8.5 text-xs bg-background"
                   />
                 </div>
-                <Button
-                  size="sm"
-                  disabled={hostAssignLoading || !hostNameInput.trim()}
-                  onClick={handleAssignPartyThrower}
-                  className="w-full h-8.5 text-xs font-bold bg-amber-500 hover:bg-amber-600 text-black cursor-pointer"
-                >
-                  {hostAssignLoading ? <Loader2 className="size-3 animate-spin mr-1.5" /> : null}
-                  Confirm Party Thrower
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={hostAssignLoading || !hostNameInput.trim()}
+                    onClick={handleAssignPartyThrower}
+                    className="flex-1 h-8.5 text-xs font-bold bg-amber-500 hover:bg-amber-600 text-black cursor-pointer"
+                  >
+                    {hostAssignLoading ? <Loader2 className="size-3 animate-spin mr-1.5" /> : null}
+                    Confirm Party Thrower
+                  </Button>
+                </div>
               </div>
             ) : (
               <div className="flex items-center justify-between p-2.5 rounded-2xl bg-muted/20 border border-border/60 text-xs">
@@ -588,8 +682,12 @@ export function CustomerBillModal({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsAssigningHost(true)}
-                  className="text-[11px] font-bold text-primary hover:underline"
+                  onClick={() => {
+                    setHostNameInput('')
+                    setHostPhoneInput('')
+                    setIsAssigningHost(true)
+                  }}
+                  className="text-[11px] font-bold text-primary hover:underline cursor-pointer"
                 >
                   + Assign Party Thrower
                 </button>

@@ -366,28 +366,30 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
   return (
     <div
       className={cn(
-        'flex flex-col rounded-2xl border bg-card p-4 gap-3 ring-1 ring-inset shadow-sm transition-all',
+        'flex flex-col rounded-2xl border bg-card p-4 sm:p-5 gap-3.5 ring-1 ring-inset shadow-sm hover:shadow-md transition-all relative overflow-hidden min-w-[280px]',
         pConfig.ring
       )}
     >
       {/* Header */}
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex items-start justify-between gap-2.5">
         <div className="flex flex-col gap-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             {ticket.priority === 'urgent' && (
               <span className="flex size-2 shrink-0 rounded-full bg-destructive animate-ping" />
             )}
-            <span className="text-base font-bold font-mono tracking-tight">{ticket.id}</span>
+            <span className="text-base font-extrabold font-mono tracking-tight text-foreground whitespace-nowrap">
+              {ticket.id}
+            </span>
             {ticket.source && (
-              <Badge variant="outline" className="text-[10px] uppercase font-semibold h-4 px-1.5 py-0">
+              <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md border bg-muted/50">
                 {ticket.source === 'qr_order' ? 'QR Order' : ticket.source === 'dine_in' ? 'Dine In' : ticket.source}
               </Badge>
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground truncate">
             <Users className="size-3.5 shrink-0 text-muted-foreground/70" />
-            <span className="font-semibold text-foreground">
+            <span className="font-bold text-foreground">
               {typeof ticket.tableNumber === 'number' || !isNaN(Number(ticket.tableNumber))
                 ? `Table ${ticket.tableNumber}`
                 : ticket.tableNumber}
@@ -402,7 +404,7 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
               {ticketCuisines.map((c) => (
                 <span
                   key={c}
-                  className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20"
+                  className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-primary/10 text-primary border border-primary/20"
                 >
                   {c}
                 </span>
@@ -580,73 +582,73 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
       )}
 
       {/* Action Advance Buttons per Lifecycle State Machine */}
-      <div className="mt-2 pt-2 border-t border-border/40 flex items-center gap-2 shrink-0">
+      <div className="mt-2.5 pt-2.5 border-t border-border/50 flex items-center w-full shrink-0">
         {currentStatus === 'accepted' ? (
-          <>
+          <div className="grid grid-cols-2 gap-2 w-full">
             <Button
               size="sm"
-              className="flex-1 h-10 text-xs font-bold tracking-wide bg-chart-4 hover:bg-chart-4/90 text-white shadow-sm active:scale-[0.98] cursor-pointer"
+              className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white shadow-sm active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
               onClick={() => onAdvance(ticket.id, 'cooking')}
             >
-              <Flame className="size-3.5 mr-1 text-white animate-pulse" />
-              Start Preparing
+              <Flame className="size-4 shrink-0 text-amber-300 animate-pulse" />
+              <span className="truncate">Start Preparing</span>
             </Button>
             <Button
               size="sm"
-              className="flex-1 h-10 text-xs font-bold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-[0.98] cursor-pointer"
+              className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
               onClick={() => onAdvance(ticket.id, 'ready')}
             >
-              <CheckCircle2 className="size-3.5 mr-1" />
-              Mark Ready
+              <CheckCircle2 className="size-4 shrink-0" />
+              <span className="truncate">Mark Ready</span>
             </Button>
-          </>
+          </div>
         ) : currentStatus === 'cooking' ? (
           <Button
             size="sm"
-            className="flex-1 h-10 text-sm font-extrabold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-md active:scale-[0.98] cursor-pointer"
+            className="w-full h-10 text-xs sm:text-sm font-extrabold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-md active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-2 transition-all"
             onClick={() => onAdvance(ticket.id, 'ready')}
           >
-            <CheckCircle2 className="size-4 mr-1.5" />
-            Mark Ready
+            <CheckCircle2 className="size-4.5 mr-1" />
+            <span>Mark Ready</span>
           </Button>
         ) : currentStatus === 'ready' ? (
           <Button
             size="sm"
-            className="flex-1 h-10 text-sm font-extrabold tracking-wide bg-sky-600 hover:bg-sky-700 text-white shadow-md active:scale-[0.98] cursor-pointer"
+            className="w-full h-10 text-xs sm:text-sm font-extrabold tracking-wide bg-sky-600 hover:bg-sky-700 text-white shadow-md active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-2 transition-all"
             onClick={() => onAdvance(ticket.id, 'served')}
           >
-            <Check className="size-4 mr-1.5" />
-            Mark Served
+            <Check className="size-4.5 mr-1" />
+            <span>Mark Served</span>
           </Button>
         ) : currentStatus === 'pending' ? (
-          <div className="flex items-center gap-2 w-full">
+          <div className="grid grid-cols-2 gap-2.5 w-full">
             <Button
               size="sm"
-              className="flex-1 h-10 text-xs font-bold tracking-wide bg-chart-4 hover:bg-chart-4/90 text-white shadow-sm active:scale-[0.98] cursor-pointer"
+              className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white shadow-sm hover:shadow active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
               onClick={() => onAdvance(ticket.id, 'cooking')}
             >
-              <Flame className="size-3.5 mr-1 text-white animate-pulse" />
-              Start Preparing
+              <Flame className="size-4 shrink-0 text-amber-300 animate-pulse" />
+              <span className="truncate">Start Preparing</span>
             </Button>
             <Button
               size="sm"
               variant="outline"
-              className="flex-1 h-10 text-xs font-bold tracking-wide border-primary text-primary hover:bg-primary/10 active:scale-[0.98] cursor-pointer"
+              className="w-full min-w-0 h-10 px-2.5 text-xs font-extrabold tracking-wide border-2 border-primary/70 bg-primary/5 hover:bg-primary text-primary hover:text-primary-foreground shadow-xs active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
               onClick={() => onAdvance(ticket.id, 'accepted')}
             >
-              Accept Order
-              <ArrowRight className="size-3.5 ml-1" />
+              <span className="truncate">Accept Order</span>
+              <ArrowRight className="size-3.5 shrink-0" />
             </Button>
           </div>
         ) : (
           <Button
             size="sm"
             variant="outline"
-            className="flex-1 h-10 text-sm font-bold border-success/50 text-success hover:bg-success/15 active:scale-[0.98] cursor-pointer"
+            className="w-full h-10 text-sm font-bold border-success/50 text-success hover:bg-success/15 active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-2"
             onClick={() => onAdvance(ticket.id, 'served')}
           >
             <CheckCircle2 className="size-4 mr-1.5" />
-            Mark Served
+            <span>Mark Served</span>
           </Button>
         )}
       </div>
@@ -1648,7 +1650,7 @@ export function KitchenDisplay() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4.5 sm:gap-5">
                   {beingPreparedTickets.map((ticket) => (
                     <KitchenOrderCard
                       key={ticket.id}
@@ -1764,7 +1766,7 @@ export function KitchenDisplay() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4.5 sm:gap-5">
                   {filteredUpcomingTickets.map((ticket) => (
                     <KitchenOrderCard
                       key={ticket.id}
@@ -1826,7 +1828,7 @@ export function KitchenDisplay() {
                 </div>
 
                 {showReadySection && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4.5 sm:gap-5">
                     {readyTickets.map((ticket) => (
                       <KitchenOrderCard
                         key={ticket.id}
