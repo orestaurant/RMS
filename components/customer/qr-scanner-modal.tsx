@@ -13,7 +13,6 @@ import {
   Zap,
   ZapOff,
   Sparkles,
-  UtensilsCrossed,
 } from 'lucide-react'
 import {
   Dialog,
@@ -23,7 +22,6 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
@@ -133,7 +131,6 @@ export function QrScannerModal({
   const [hasTorch, setHasTorch] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [scannedResult, setScannedResult] = useState<{ table: string; targetUrl: string } | null>(null)
-  const [manualTable, setManualTable] = useState('')
 
   // Stop camera tracks cleanly
   const stopCamera = useCallback(() => {
@@ -271,7 +268,7 @@ export function QrScannerModal({
       const message =
         err instanceof Error
           ? err.name === 'NotAllowedError'
-            ? 'Camera permission was denied. Please allow camera permissions in your browser or select your table below.'
+            ? 'Camera permission was denied. Please allow camera permissions in your browser.'
             : err.message
           : 'Could not access device camera.'
       setErrorMsg(message)
@@ -314,12 +311,6 @@ export function QrScannerModal({
   // Switch between front and back camera
   const toggleCameraFacing = () => {
     setCameraFacing((prev) => (prev === 'environment' ? 'user' : 'environment'))
-  }
-
-  // Manual fallback table click
-  const handleManualSelect = (table: string) => {
-    const parsed = parseScannedQrToMenuUrl(table)
-    handleSuccessRedirect(parsed)
   }
 
   return (
@@ -441,51 +432,6 @@ export function QrScannerModal({
                 </Button>
               </div>
             )}
-          </div>
-
-          {/* ── Fallback Table Selector: Always Available ── */}
-          <div className="space-y-2 pt-1 border-t border-border/60">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-foreground">Or pick your dining table directly:</span>
-              <span className="text-[10px] text-muted-foreground">Instant menu access</span>
-            </div>
-
-            <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5">
-              {['1', '2', '3', '4', '5', '6', '7', '8'].map((tbl) => (
-                <button
-                  key={tbl}
-                  type="button"
-                  onClick={() => handleManualSelect(tbl)}
-                  className="h-8 rounded-lg text-xs font-bold border border-border bg-muted/40 hover:bg-primary hover:text-primary-foreground hover:border-primary transition-all flex items-center justify-center cursor-pointer shadow-2xs"
-                >
-                  T-{tbl}
-                </button>
-              ))}
-            </div>
-
-            {/* Manual input */}
-            <div className="flex items-center gap-2 pt-1">
-              <Input
-                placeholder="Custom table (e.g. VIP-1, T-9)"
-                value={manualTable}
-                onChange={(e) => setManualTable(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && manualTable.trim()) {
-                    handleManualSelect(manualTable.trim())
-                  }
-                }}
-                className="h-8.5 text-xs rounded-xl"
-              />
-              <Button
-                size="sm"
-                disabled={!manualTable.trim()}
-                onClick={() => handleManualSelect(manualTable.trim())}
-                className="h-8.5 text-xs font-bold px-3.5 rounded-xl bg-primary text-primary-foreground shrink-0 cursor-pointer"
-              >
-                <UtensilsCrossed className="size-3.5 mr-1" />
-                <span>Open Menu</span>
-              </Button>
-            </div>
           </div>
         </div>
       </DialogContent>
