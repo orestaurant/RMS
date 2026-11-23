@@ -104,10 +104,15 @@ export async function authenticateAdmin(
       }
     }
 
+    const rawName = user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim()
+    const sanitizedName = isSuperAdmin && (!rawName || rawName.toLowerCase() === 'rajesh')
+      ? 'Super Admin'
+      : (rawName || (isSuperAdmin ? 'Super Admin' : 'Admin'))
+
     const authContext: AdminAuthContext = {
       userId: user.id,
       email: user.email,
-      name: user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || (isSuperAdmin ? 'Super Admin' : 'Admin'),
+      name: sanitizedName,
       role: user.role,
       isSuperAdmin,
       organizationId: user.organizationId,

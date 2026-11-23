@@ -26,6 +26,8 @@ export interface DashboardStats {
     operatingHours: string
     closingTime: string
   }
+  topDishes?: TopDish[]
+  inventoryAlerts?: InventoryAlert[]
 }
 
 export interface DashboardSummary {

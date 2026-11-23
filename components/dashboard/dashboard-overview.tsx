@@ -83,18 +83,77 @@ export function DashboardOverview() {
 let clientTopDishesCache: TopDish[] = []
 let clientAlertsCache: InventoryAlert[] = []
 
+function getInitialDishes(): TopDish[] {
+  if (clientTopDishesCache.length > 0) return clientTopDishesCache
+  if (typeof window !== 'undefined') {
+    try {
+      const s = sessionStorage.getItem('rms_top_dishes')
+      if (s) {
+        const p = JSON.parse(s)
+        clientTopDishesCache = p
+        return p
+      }
+    } catch {}
+  }
+  return []
+}
+
+function getInitialAlerts(): InventoryAlert[] {
+  if (clientAlertsCache.length > 0) return clientAlertsCache
+  if (typeof window !== 'undefined') {
+    try {
+      const s = sessionStorage.getItem('rms_inv_alerts')
+      if (s) {
+        const p = JSON.parse(s)
+        clientAlertsCache = p
+        return p
+      }
+    } catch {}
+  }
+  return []
+}
+
 function AdminDashboardOverview({ auth }: { auth: any }) {
   const activeBranchId = auth?.branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
 
-  // Dynamic dashboard stats from PostgreSQL via Prisma
+  // Dynamic dashboard stats from PostgreSQL via Prisma (includes topDishes & inventoryAlerts)
   const { data: stats, loading: statsLoading } = useDashboardStats(activeBranchId)
 
-  const [topDishes, setTopDishes] = useState<TopDish[]>(clientTopDishesCache)
-  const [inventoryAlerts, setInventoryAlerts] = useState<InventoryAlert[]>(clientAlertsCache)
-  const [alertsLoading, setAlertsLoading] = useState(clientTopDishesCache.length === 0 && clientAlertsCache.length === 0)
+  const initialDishes = getInitialDishes()
+  const initialAlerts = getInitialAlerts()
+
+  const [topDishes, setTopDishes] = useState<TopDish[]>(initialDishes)
+  const [inventoryAlerts, setInventoryAlerts] = useState<InventoryAlert[]>(initialAlerts)
+  const [alertsLoading, setAlertsLoading] = useState(initialDishes.length === 0 && initialAlerts.length === 0 && !stats)
+
+  // Fast-sync from unified stats response
+  useEffect(() => {
+    if (stats?.topDishes && stats.topDishes.length > 0) {
+      clientTopDishesCache = stats.topDishes
+      setTopDishes(stats.topDishes)
+      if (typeof window !== 'undefined') {
+        try { sessionStorage.setItem('rms_top_dishes', JSON.stringify(stats.topDishes)) } catch {}
+      }
+      setAlertsLoading(false)
+    }
+    if (stats?.inventoryAlerts) {
+      clientAlertsCache = stats.inventoryAlerts
+      setInventoryAlerts(stats.inventoryAlerts)
+      if (typeof window !== 'undefined') {
+        try { sessionStorage.setItem('rms_inv_alerts', JSON.stringify(stats.inventoryAlerts)) } catch {}
+      }
+      setAlertsLoading(false)
+    }
+  }, [stats])
 
   useEffect(() => {
     let isMounted = true
+
+    // Only fallback to separate fetch if unified stats didn't supply them
+    if (stats?.topDishes && stats?.inventoryAlerts) {
+      return
+    }
+
     const fetchData = async () => {
       try {
         if (clientTopDishesCache.length === 0 && clientAlertsCache.length === 0) {
@@ -109,6 +168,12 @@ function AdminDashboardOverview({ auth }: { auth: any }) {
           clientAlertsCache = alerts
           setTopDishes(dishes)
           setInventoryAlerts(alerts)
+          if (typeof window !== 'undefined') {
+            try {
+              sessionStorage.setItem('rms_top_dishes', JSON.stringify(dishes))
+              sessionStorage.setItem('rms_inv_alerts', JSON.stringify(alerts))
+            } catch {}
+          }
         }
       } catch (err) {
         console.error('Failed to load dashboard widgets data:', err)
@@ -123,7 +188,7 @@ function AdminDashboardOverview({ auth }: { auth: any }) {
     return () => {
       isMounted = false
     }
-  }, [activeBranchId])
+  }, [activeBranchId, stats?.topDishes, stats?.inventoryAlerts])
 
   // Dynamic User Greeting from Authenticated Session
   const userName = auth?.name || 'Admin'

@@ -97,15 +97,21 @@ export async function POST(request: NextRequest) {
     invalidateAdminAuthCache()
     invalidateAuthMeCache(user.id)
 
+    const roleUpper = String(user.role || '').toUpperCase()
+    const isSuper = roleUpper === 'SUPER_ADMIN' || roleUpper === 'SUPERADMIN'
+    const rawName = user.name || `${user.firstName || 'Admin'} ${user.lastName || ''}`.trim()
+    const finalUserName = isSuper && (!rawName || rawName.toLowerCase() === 'rajesh')
+      ? 'Super Admin'
+      : (rawName || 'Admin')
+
     // Sign JWT token
     const token = await signJWT({
       userId: user.id,
       email: user.email,
-      name: user.name || `${user.firstName || 'Admin'} ${user.lastName || ''}`.trim() || 'Admin',
+      name: finalUserName,
       role: user.role,
     })
 
-    const roleUpper = String(user.role || '').toUpperCase()
     const isDJ = roleUpper === 'DJ'
     const isWaiter = roleUpper === 'WAITER'
     const isChef = roleUpper === 'CHEF'
@@ -117,7 +123,7 @@ export async function POST(request: NextRequest) {
         redirect: redirectUrl,
         user: {
           id: user.id,
-          name: user.name || 'Admin',
+          name: finalUserName,
           email: user.email,
           role: user.role,
         },

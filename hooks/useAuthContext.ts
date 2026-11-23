@@ -31,14 +31,14 @@ function getInitialAuth(): AuthContext | null {
   if (memoryAuthCache) return memoryAuthCache
   if (typeof window !== 'undefined') {
     try {
-      const stored = sessionStorage.getItem('rms_auth_context')
+      const stored = sessionStorage.getItem('rms_auth_context') || localStorage.getItem('rms_auth_context')
       if (stored) {
         const parsed = JSON.parse(stored)
         memoryAuthCache = parsed
         return parsed
       }
     } catch {
-      // Ignore sessionStorage errors
+      // Ignore storage errors
     }
   }
   return null
@@ -60,6 +60,7 @@ export function seedAuthCache(auth: Partial<AuthContext> & { id: string; email: 
   if (typeof window !== 'undefined') {
     try {
       sessionStorage.setItem('rms_auth_context', JSON.stringify(fullAuth))
+      localStorage.setItem('rms_auth_context', JSON.stringify(fullAuth))
     } catch {
       // Ignore
     }
@@ -71,6 +72,7 @@ export function clearAuthCache() {
   if (typeof window !== 'undefined') {
     try {
       sessionStorage.removeItem('rms_auth_context')
+      localStorage.removeItem('rms_auth_context')
     } catch {
       // Ignore
     }
@@ -104,6 +106,7 @@ export function useAuthContext(): UseAuthContextReturn {
         if (typeof window !== 'undefined') {
           try {
             sessionStorage.setItem('rms_auth_context', JSON.stringify(data.data))
+            localStorage.setItem('rms_auth_context', JSON.stringify(data.data))
           } catch {
             // Ignore
           }

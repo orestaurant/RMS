@@ -14,18 +14,36 @@ interface UseDashboardStatsReturn {
 // Client-side in-memory cache for 0ms instant initial render (SWR pattern)
 const clientStatsCache: Record<string, { data: DashboardStats; timestamp: number }> = {}
 
+function getInitialStats(cacheKey: string): DashboardStats | null {
+  if (clientStatsCache[cacheKey]) return clientStatsCache[cacheKey].data
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = sessionStorage.getItem(`rms_stats_${cacheKey}`)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        clientStatsCache[cacheKey] = { data: parsed, timestamp: Date.now() }
+        return parsed
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+  return null
+}
+
 export function useDashboardStats(branchId?: string | null): UseDashboardStatsReturn {
   const cacheKey = branchId || 'default'
-  const cached = clientStatsCache[cacheKey]
+  const initialData = getInitialStats(cacheKey)
 
-  // Initialize with cached data if available for instant paint
-  const [data, setData] = useState<DashboardStats | null>(cached ? cached.data : null)
-  const [loading, setLoading] = useState(!cached)
+  // Initialize with cached data if available for instant 0ms paint
+  const [data, setData] = useState<DashboardStats | null>(initialData)
+  const [loading, setLoading] = useState(!initialData)
   const [error, setError] = useState<Error | null>(null)
 
   const fetchStats = useCallback(async () => {
     try {
-      if (!clientStatsCache[cacheKey]) {
+      // Only show loading if we don't already have data to display
+      if (!clientStatsCache[cacheKey] && !sessionStorage.getItem(`rms_stats_${cacheKey}`)) {
         setLoading(true)
       }
       setError(null)
@@ -45,6 +63,15 @@ export function useDashboardStats(branchId?: string | null): UseDashboardStatsRe
         data: json.data,
         timestamp: Date.now(),
       }
+
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem(`rms_stats_${cacheKey}`, JSON.stringify(json.data))
+        } catch {
+          // Ignore storage quota
+        }
+      }
+
       setData(json.data)
     } catch (err: any) {
       console.error('Error in useDashboardStats:', err)

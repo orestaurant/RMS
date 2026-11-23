@@ -72,10 +72,10 @@ async function main() {
     user = await prisma.user.create({
       data: {
         email: adminEmail,
-        name: 'Rajesh',
+        name: 'Super Admin',
         password: hashedPassword,
         passwordHash: hashedPassword,
-        firstName: 'Rajesh',
+        firstName: 'Super Admin',
         lastName: '',
         role: 'SUPER_ADMIN' as any,
         status: 'active',
@@ -90,7 +90,7 @@ async function main() {
     user = await prisma.user.update({
       where: { email: adminEmail },
       data: {
-        name: 'Rajesh',
+        name: 'Super Admin',
         password: hashedPassword,
         passwordHash: hashedPassword,
         role: 'SUPER_ADMIN' as any,

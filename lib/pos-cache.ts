@@ -13,8 +13,8 @@ const posTablesCache = new Map<string, CacheEntry>()
 
 // 30 seconds default TTL for menu (fast checkout, low DB load)
 const DEFAULT_MENU_TTL = 30_000
-// 10 seconds default TTL for tables (status changes e.g. occupied/available)
-const DEFAULT_TABLES_TTL = 10_000
+// 25 seconds default TTL for tables (status changes e.g. occupied/available)
+const DEFAULT_TABLES_TTL = 25_000
 
 export function getPOSMenuCache<T = any>(key: string = 'default', ttlMs: number = DEFAULT_MENU_TTL): T | null {
   const entry = posMenuCache.get(key)

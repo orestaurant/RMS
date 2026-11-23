@@ -82,10 +82,16 @@ export async function GET(request: NextRequest) {
           const branchName = firstBranch?.name || 'Mumbai Central'
           const orgId = user.organizationId || user.organization?.id || ''
 
+          const isSuper = String(user.role).toUpperCase() === 'SUPER_ADMIN' || String(user.role).toUpperCase() === 'SUPERADMIN'
+          const rawName = user.name || `${user.firstName || 'Admin'} ${user.lastName || ''}`.trim()
+          const sanitizedName = isSuper && (!rawName || rawName.toLowerCase() === 'rajesh')
+            ? 'Super Admin'
+            : (rawName || 'Admin')
+
           const userData = {
             id: user.id,
             email: user.email,
-            name: user.name || `${user.firstName || 'Admin'} ${user.lastName || ''}`.trim() || 'Admin',
+            name: sanitizedName,
             role: user.role,
             organizationId: orgId,
             restaurantId,

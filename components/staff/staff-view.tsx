@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useTransition, useRef } from 'react'
+import { useState, useEffect, useCallback, useTransition, useRef, useMemo } from 'react'
 import {
   Search,
   Plus,
@@ -175,6 +175,28 @@ export function StaffView() {
   const [pageSize, setPageSize] = useState(10)
   const [totalPages, setTotalPages] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
+
+  // Filter out Super Admin accounts when viewed by regular Admin
+  const displayedUsers = useMemo(() => {
+    if (isSuperAdmin) return users
+    return users.filter((u) => {
+      const roleUpper = String(u.role || '').toUpperCase()
+      return roleUpper !== 'SUPER_ADMIN' && roleUpper !== 'SUPERADMIN'
+    })
+  }, [users, isSuperAdmin])
+
+  // Ensure Super Admin is never displayed as 'Rajesh'
+  const getUserDisplayName = (targetUser?: { name?: string | null; role?: string | null } | null) => {
+    if (!targetUser) return 'Staff'
+    const roleUpper = String(targetUser.role || '').toUpperCase()
+    if (
+      (roleUpper === 'SUPER_ADMIN' || roleUpper === 'SUPERADMIN') &&
+      (!targetUser.name || targetUser.name.toLowerCase() === 'rajesh' || targetUser.name.toLowerCase() === 'super admin')
+    ) {
+      return 'Super Admin'
+    }
+    return targetUser.name || 'Staff'
+  }
 
   // In-memory client cache to make pagination and filter switching instantaneous
   const clientCache = useRef<
@@ -670,7 +692,11 @@ export function StaffView() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-muted-foreground">Total Users</p>
-              <p className="text-2xl font-bold mt-1">{stats ? stats.total : totalCount}</p>
+              <p className="text-2xl font-bold mt-1">
+                {stats
+                  ? (isSuperAdmin ? stats.total : Math.max(0, stats.total - (stats.roles?.SUPER_ADMIN ?? 0)))
+                  : (isSuperAdmin ? totalCount : displayedUsers.length)}
+              </p>
             </div>
             <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
               <Users className="size-5" />
@@ -683,7 +709,9 @@ export function StaffView() {
             <div>
               <p className="text-xs font-medium text-muted-foreground">Admins</p>
               <p className="text-2xl font-bold text-rose-400 mt-1">
-                {(stats?.roles?.ADMIN ?? 0) + (stats?.roles?.SUPER_ADMIN ?? 0)}
+                {isSuperAdmin
+                  ? (stats?.roles?.ADMIN ?? 0) + (stats?.roles?.SUPER_ADMIN ?? 0)
+                  : (stats?.roles?.ADMIN ?? 0)}
               </p>
             </div>
             <div className="p-2.5 rounded-lg bg-rose-500/10 text-rose-400">
@@ -816,7 +844,7 @@ export function StaffView() {
               className="h-9 px-3 rounded-md bg-background/80 border border-input/60 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="ALL">All Roles</option>
-              <option value="SUPER_ADMIN">Super Admin</option>
+              {isSuperAdmin && <option value="SUPER_ADMIN">Super Admin</option>}
               <option value="ADMIN">Admin</option>
               <option value="WAITER">Waiter</option>
               <option value="COUNTER_MANAGER">Counter Manager</option>
@@ -859,14 +887,14 @@ export function StaffView() {
       {/* Users Table */}
       <Card className="border-border/60 bg-card/60 backdrop-blur-sm overflow-hidden relative">
         {/* Subtle top progress bar during background revalidation or page transitions */}
-        {(loading || isBackgroundFetching) && users.length > 0 && (
+        {(loading || isBackgroundFetching) && displayedUsers.length > 0 && (
           <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary/20 overflow-hidden z-10">
             <div className="h-full bg-primary animate-pulse w-full" />
           </div>
         )}
 
         <div className="overflow-x-auto">
-          <Table className={cn('transition-opacity duration-150', loading && users.length === 0 && 'opacity-60')}>
+          <Table className={cn('transition-opacity duration-150', loading && displayedUsers.length === 0 && 'opacity-60')}>
             <TableHeader className="bg-muted/40">
               <TableRow className="border-border/60 hover:bg-transparent">
                 <TableHead className="w-[280px]">Staff / User</TableHead>
@@ -878,7 +906,7 @@ export function StaffView() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading && users.length === 0 ? (
+              {loading && displayedUsers.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="h-44 text-center">
                     <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
@@ -887,7 +915,7 @@ export function StaffView() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ) : users.length === 0 ? (
+              ) : displayedUsers.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="h-44 text-center">
                     <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
@@ -900,8 +928,9 @@ export function StaffView() {
                   </TableCell>
                 </TableRow>
               ) : (
-                users.map((user) => {
+                displayedUsers.map((user) => {
                   const isSelf = isCurrentAdmin(user.id)
+                  const displayName = getUserDisplayName(user)
                   return (
                     <TableRow
                       key={user.id}
@@ -915,13 +944,13 @@ export function StaffView() {
                         <div className="flex items-center gap-3">
                           <Avatar className="size-9 border border-border">
                             <AvatarFallback className="bg-primary/15 text-primary text-xs font-bold">
-                              {getInitials(user.name)}
+                              {getInitials(displayName)}
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex flex-col min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="font-semibold text-sm truncate text-foreground">
-                                {user.name}
+                                {displayName}
                               </span>
                               {isSelf && (
                                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary text-primary-foreground">
@@ -1058,9 +1087,9 @@ export function StaffView() {
             <div>
               Showing{' '}
               <span className="font-semibold text-foreground">
-                {totalCount === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalCount)}
+                {displayedUsers.length === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, isSuperAdmin ? totalCount : displayedUsers.length)}
               </span>{' '}
-              of <span className="font-semibold text-foreground">{totalCount}</span> staff members
+              of <span className="font-semibold text-foreground">{isSuperAdmin ? totalCount : displayedUsers.length}</span> staff members
             </div>
 
             <div className="h-4 w-px bg-border/70 hidden sm:block" />
@@ -1185,11 +1214,11 @@ export function StaffView() {
               <div className="p-3 rounded-lg bg-muted/40 border border-border/70 flex items-center gap-3">
                 <Avatar className="size-10 border border-border">
                   <AvatarFallback className="bg-primary/20 text-primary font-bold text-xs">
-                    {getInitials(editUser.name)}
+                    {getInitials(getUserDisplayName(editUser))}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col min-w-0">
-                  <span className="font-semibold text-sm truncate">{editUser.name}</span>
+                  <span className="font-semibold text-sm truncate">{getUserDisplayName(editUser)}</span>
                   <span className="text-xs text-muted-foreground truncate">{editUser.email}</span>
                 </div>
               </div>
@@ -1348,11 +1377,11 @@ export function StaffView() {
               <div className="p-3.5 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-3">
                 <Avatar className="size-10 border border-destructive/30">
                   <AvatarFallback className="bg-destructive/20 text-destructive font-bold text-xs">
-                    {getInitials(deleteConfirmUser.name)}
+                    {getInitials(getUserDisplayName(deleteConfirmUser))}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col min-w-0">
-                  <span className="font-semibold text-sm truncate text-foreground">{deleteConfirmUser.name}</span>
+                  <span className="font-semibold text-sm truncate text-foreground">{getUserDisplayName(deleteConfirmUser)}</span>
                   <span className="text-xs text-muted-foreground truncate">{deleteConfirmUser.email}</span>
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-[11px] text-muted-foreground">

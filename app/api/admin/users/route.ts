@@ -55,9 +55,24 @@ export async function GET(request: NextRequest) {
       ]
     }
 
-    // Role filter
-    if (roleFilter && roleFilter.toUpperCase() !== 'ALL') {
-      where.role = roleFilter as UserRoleEnum
+    // Role filter with Super Admin privacy guard
+    if (!auth.isSuperAdmin) {
+      // Non-superadmin (regular Admin) cannot view Super Admin accounts
+      if (roleFilter && roleFilter.toUpperCase() !== 'ALL') {
+        if (roleFilter.toUpperCase() === 'SUPER_ADMIN' || roleFilter.toUpperCase() === 'SUPERADMIN') {
+          where.role = { in: [] } // Returns 0 users if requested
+        } else {
+          where.role = roleFilter as UserRoleEnum
+        }
+      } else {
+        where.role = {
+          not: 'SUPER_ADMIN' as UserRoleEnum,
+        }
+      }
+    } else {
+      if (roleFilter && roleFilter.toUpperCase() !== 'ALL') {
+        where.role = roleFilter as UserRoleEnum
+      }
     }
 
     // Status filter
@@ -99,8 +114,12 @@ export async function GET(request: NextRequest) {
 
     // Format users for client consumption
     const formattedUsers = users.map((u) => {
-      const displayName =
+      const isSuper = String(u.role).toUpperCase() === 'SUPER_ADMIN' || String(u.role).toUpperCase() === 'SUPERADMIN'
+      let displayName =
         u.name || `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email.split('@')[0]
+      if (isSuper && (!displayName || displayName.toLowerCase() === 'rajesh')) {
+        displayName = 'Super Admin'
+      }
       return {
         id: u.id,
         name: displayName,
@@ -115,6 +134,20 @@ export async function GET(request: NextRequest) {
       }
     })
 
+    // Adjust user statistics for non-superadmin: never expose Super Admin count
+    let userStats = stats
+    if (!auth.isSuperAdmin && userStats) {
+      const superAdminCount = userStats.roles?.SUPER_ADMIN || 0
+      userStats = {
+        ...userStats,
+        total: Math.max(0, userStats.total - superAdminCount),
+        roles: {
+          ...userStats.roles,
+          SUPER_ADMIN: 0,
+        },
+      }
+    }
+
     return NextResponse.json({
       success: true,
       users: formattedUsers,
@@ -124,7 +157,7 @@ export async function GET(request: NextRequest) {
         total,
         totalPages: Math.ceil(total / limit) || 1,
       },
-      stats,
+      stats: userStats,
     })
   } catch (error: any) {
     console.error('GET /api/admin/users error:', error)

@@ -685,17 +685,19 @@ function OrderRow({
               Delete Order
             </Button>
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                className="gap-1.5 text-xs h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer"
-                onClick={() => {
-                  setDetailsOpen(false)
-                  onGenerateBill?.(order)
-                }}
-              >
-                <Receipt className="size-3.5" />
-                Generate Bill
-              </Button>
+              {!isCustomer && (
+                <Button
+                  size="sm"
+                  className="gap-1.5 text-xs h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer"
+                  onClick={() => {
+                    setDetailsOpen(false)
+                    onGenerateBill?.(order)
+                  }}
+                >
+                  <Receipt className="size-3.5" />
+                  Generate Bill
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"

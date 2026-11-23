@@ -97,9 +97,15 @@ export function AppSidebar() {
   }
 
   // Dynamic user data
+  const isSuperAdminRole = String(auth?.role || '').toUpperCase() === 'SUPER_ADMIN' || String(auth?.role || '').toUpperCase() === 'SUPERADMIN'
+  const rawAuthName = auth?.name || ''
+  const resolvedName = isSuperAdminRole && (!rawAuthName || rawAuthName.toLowerCase() === 'rajesh')
+    ? 'Super Admin'
+    : rawAuthName
+
   const userName = loading
     ? 'Loading...'
-    : auth?.name || (isCustomer ? 'Customer' : isDJ ? 'DJ' : isWaiter ? 'Waiter' : isChef ? 'Chef' : isVendor ? 'Vendor' : isInventoryManager ? 'Inventory Manager' : isAdmin ? 'Admin' : 'Staff')
+    : resolvedName || (isSuperAdminRole ? 'Super Admin' : isCustomer ? 'Customer' : isDJ ? 'DJ' : isWaiter ? 'Waiter' : isChef ? 'Chef' : isVendor ? 'Vendor' : isInventoryManager ? 'Inventory Manager' : isAdmin ? 'Admin' : 'Staff')
   const userEmail = loading ? '' : auth?.email || ''
   const initials =
     userName && userName !== 'Loading...'

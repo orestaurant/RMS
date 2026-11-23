@@ -33,7 +33,7 @@ interface TableOccupancyGridProps {
 
 export function TableOccupancyGrid({ branchId }: TableOccupancyGridProps) {
   const { auth } = useAuthContext()
-  const activeBranchId = branchId || auth?.branchId || '829b1e49-87b3-4cc9-a4a9-4e719bf4440c'
+  const activeBranchId = branchId || auth?.branchId || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
   const { data: tablesData, loading } = useTables(activeBranchId)
 
   const tables: Table[] = tablesData || []

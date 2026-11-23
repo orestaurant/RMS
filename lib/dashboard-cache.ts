@@ -5,47 +5,68 @@ interface CachedItem<T> {
   timestamp: number
 }
 
-// In-memory cache for dashboard stats keyed by branchId (10s TTL)
+// In-memory cache for dashboard stats keyed by branchId (30s fresh TTL, 120s stale window)
 const statsCache = new Map<string, CachedItem<DashboardStats>>()
-const STATS_TTL = 10000 // 10 seconds
+const STATS_TTL = 30000 // 30 seconds
+const STATS_STALE_TTL = 120000 // 2 minutes stale window
 
-// In-memory cache for sidebar counts (10s TTL)
+// In-memory cache for sidebar counts (20s TTL)
 const sidebarCountsCache = new Map<string, CachedItem<SidebarCounts>>()
-const SIDEBAR_TTL = 10000 // 10 seconds
+const SIDEBAR_TTL = 20000 // 20 seconds
 
-// In-memory cache for top dishes (15s TTL)
+// In-memory cache for top dishes (45s TTL)
 const topDishesCache = new Map<string, CachedItem<TopDish[]>>()
-const TOP_DISHES_TTL = 15000 // 15 seconds
+const TOP_DISHES_TTL = 45000 // 45 seconds
 
-// In-memory cache for inventory alerts (20s TTL)
+// In-memory cache for inventory alerts (60s TTL)
 const inventoryAlertsCache = new Map<string, CachedItem<InventoryAlert[]>>()
-const INVENTORY_ALERTS_TTL = 20000 // 20 seconds
+const INVENTORY_ALERTS_TTL = 60000 // 60 seconds
 
 // In-memory user auth/session cache for /api/auth/me (60s TTL)
 const authMeCache = new Map<string, CachedItem<any>>()
 const AUTH_ME_TTL = 60000 // 60 seconds
 
-// In-memory branch metadata cache (15 minutes)
-let cachedDefaultBranch: any = null
-let cachedDefaultBranchTime = 0
-const BRANCH_TTL = 15 * 60 * 1000
+// In-memory branch metadata cache (30 minutes)
+const branchMetaCache = new Map<string, CachedItem<any>>()
+const BRANCH_TTL = 30 * 60 * 1000
 
 // ─── Dashboard Stats Cache ─────────────────────────────────────
 export function getCachedStats(branchId: string = 'default'): DashboardStats | null {
   const item = statsCache.get(branchId)
   if (!item) return null
   if (Date.now() - item.timestamp > STATS_TTL) {
-    statsCache.delete(branchId)
-    return null
+    // If within stale window, we can still serve it for SWR if needed, but let's allow caller to check
+    if (Date.now() - item.timestamp > STATS_STALE_TTL) {
+      statsCache.delete(branchId)
+      return null
+    }
   }
   return item.data
 }
 
+export function getCachedStatsWithStale(branchId: string = 'default'): { data: DashboardStats; isStale: boolean } | null {
+  const item = statsCache.get(branchId)
+  if (!item) return null
+  const age = Date.now() - item.timestamp
+  if (age > STATS_STALE_TTL) {
+    statsCache.delete(branchId)
+    return null
+  }
+  return {
+    data: item.data,
+    isStale: age > STATS_TTL,
+  }
+}
+
 export function setCachedStats(branchId: string = 'default', data: DashboardStats) {
-  statsCache.set(branchId, {
+  const entry = {
     data,
     timestamp: Date.now(),
-  })
+  }
+  statsCache.set(branchId, entry)
+  if (branchId !== 'default' && data.outlet?.id === branchId) {
+    statsCache.set('default', entry)
+  }
 }
 
 export function invalidateDashboardStatsCache(branchId?: string | null) {
@@ -148,15 +169,25 @@ export function invalidateAuthMeCache(userId?: string) {
 
 // ─── Branch Metadata Cache ─────────────────────────────────────
 export function getCachedBranchMeta(branchId?: string | null): any | null {
-  if (!branchId && cachedDefaultBranch && Date.now() - cachedDefaultBranchTime < BRANCH_TTL) {
-    return cachedDefaultBranch
+  const key = branchId || 'default'
+  const item = branchMetaCache.get(key)
+  if (!item) return null
+  if (Date.now() - item.timestamp > BRANCH_TTL) {
+    branchMetaCache.delete(key)
+    return null
   }
-  return null
+  return item.data
 }
 
 export function setCachedBranchMeta(branch: any) {
   if (branch) {
-    cachedDefaultBranch = branch
-    cachedDefaultBranchTime = Date.now()
+    const entry = {
+      data: branch,
+      timestamp: Date.now(),
+    }
+    if (branch.id) {
+      branchMetaCache.set(branch.id, entry)
+    }
+    branchMetaCache.set('default', entry)
   }
 }
