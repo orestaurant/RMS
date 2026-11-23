@@ -21,6 +21,10 @@ import {
   AlertOctagon,
   ArrowUpDown,
   Filter,
+  ChevronDown,
+  Truck,
+  Timer,
+  PackageCheck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -64,6 +68,8 @@ export interface RawMaterialItem {
     name: string
     email: string
   } | null
+  latestRestockStatus?: string | null
+  latestRestockMeta?: any
   createdAt?: string
   updatedAt?: string
 }
@@ -677,30 +683,71 @@ export function RawMaterialsView() {
                         </div>
                       </TableCell>
 
-                      {/* Visual Status Badge */}
+                      {/* Visual Status Badge & Restock Lifecycle */}
                       <TableCell>
-                        {isCritical ? (
-                          <Badge variant="destructive" className="text-[11px] gap-1 px-2 py-0.5">
-                            <AlertOctagon className="size-3" />
-                            Critical / Out
-                          </Badge>
-                        ) : isLow ? (
-                          <Badge
-                            variant="outline"
-                            className="text-[11px] gap-1 px-2 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 font-medium"
-                          >
-                            <AlertTriangle className="size-3" />
-                            Low Stock
-                          </Badge>
-                        ) : (
-                          <Badge
-                            variant="outline"
-                            className="text-[11px] gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
-                          >
-                            <CheckCircle2 className="size-3" />
-                            In Stock
-                          </Badge>
-                        )}
+                        <div className="flex flex-col gap-1 items-start">
+                          {isCritical ? (
+                            <Badge variant="destructive" className="text-[11px] gap-1 px-2 py-0.5">
+                              <AlertOctagon className="size-3" />
+                              Critical / Out
+                            </Badge>
+                          ) : isLow ? (
+                            <Badge
+                              variant="outline"
+                              className="text-[11px] gap-1 px-2 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 font-medium"
+                            >
+                              <AlertTriangle className="size-3" />
+                              Low Stock
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="text-[11px] gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
+                            >
+                              <CheckCircle2 className="size-3" />
+                              In Stock
+                            </Badge>
+                          )}
+
+                          {/* Restock Lifecycle indicator if active notification */}
+                          {item.latestRestockStatus === 'RESTOCK_DELIVERED' && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] gap-1 px-1.5 py-0 bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/30 font-semibold"
+                            >
+                              <PackageCheck className="size-2.5" />
+                              Restock Delivered
+                            </Badge>
+                          )}
+                          {item.latestRestockStatus === 'RESTOCK_IN_TRANSIT' && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] gap-1 px-1.5 py-0 bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/30 font-semibold"
+                            >
+                              <Truck className="size-2.5" />
+                              In Transit
+                            </Badge>
+                          )}
+                          {(item.latestRestockStatus === 'RESTOCK_IN_PROGRESS' ||
+                            item.latestRestockStatus === 'RESTOCK_INITIATED') && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] gap-1 px-1.5 py-0 bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30 font-semibold"
+                            >
+                              <Timer className="size-2.5" />
+                              In Progress
+                            </Badge>
+                          )}
+                          {item.latestRestockStatus === 'RESTOCK_COMPLETED' && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] gap-1 px-1.5 py-0 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 font-medium"
+                            >
+                              <CheckCircle2 className="size-2.5" />
+                              Restocked
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
 
                       {/* Quantity */}
@@ -817,13 +864,13 @@ export function RawMaterialsView() {
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
         <DialogContent className="max-w-lg p-6 bg-card">
           <DialogHeader>
-            <div className="flex items-center gap-2">
-              <div className="p-2 rounded-lg bg-orange-500/10 text-orange-600">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-lg bg-orange-500/10 text-orange-600 shrink-0">
                 <Package className="size-5" />
               </div>
               <div>
                 <DialogTitle className="text-lg font-bold">Add Raw Material</DialogTitle>
-                <DialogDescription className="text-xs">
+                <DialogDescription className="text-xs text-muted-foreground mt-0.5">
                   Register new warehouse inventory. QR code and automated vendor alert thresholds are generated automatically.
                 </DialogDescription>
               </div>
@@ -832,50 +879,58 @@ export function RawMaterialsView() {
 
           <form onSubmit={handleCreateMaterial} className="space-y-4 my-2">
             {/* Name */}
-            <div>
-              <Label className="text-xs font-semibold">
-                Material Name <span className="text-rose-500">*</span>
-              </Label>
+            <div className="space-y-1.5">
+              <div className="h-5 flex items-center">
+                <Label className="text-xs font-semibold">
+                  Material Name <span className="text-rose-500">*</span>
+                </Label>
+              </div>
               <Input
                 placeholder="e.g. Refined Cooking Oil, Basmati Rice, Whole Milk"
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
-                className={cn('h-9 text-sm mt-1', formErrors.name && 'border-rose-500')}
+                className={cn('h-9 text-sm', formErrors.name && 'border-rose-500')}
               />
-              {formErrors.name && <p className="text-[11px] text-rose-500 mt-1">{formErrors.name}</p>}
+              {formErrors.name && <p className="text-[11px] text-rose-500">{formErrors.name}</p>}
             </div>
 
             {/* SKU and Location */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-semibold">SKU / Item Code</Label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">SKU / Item Code</Label>
+                </div>
                 <Input
                   placeholder="Auto-generated if blank"
                   value={formSku}
                   onChange={(e) => setFormSku(e.target.value)}
-                  className="h-9 text-sm mt-1 font-mono"
+                  className="h-9 text-sm font-mono"
                 />
               </div>
-              <div>
-                <Label className="text-xs font-semibold">
-                  Location <span className="text-rose-500">*</span>
-                </Label>
+              <div className="space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Location <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
                 <Input
                   placeholder="e.g. Warehouse A - Rack 4 - Bin 2"
                   value={formLocation}
                   onChange={(e) => setFormLocation(e.target.value)}
-                  className={cn('h-9 text-sm mt-1', formErrors.location && 'border-rose-500')}
+                  className={cn('h-9 text-sm', formErrors.location && 'border-rose-500')}
                 />
-                {formErrors.location && <p className="text-[11px] text-rose-500 mt-1">{formErrors.location}</p>}
+                {formErrors.location && <p className="text-[11px] text-rose-500">{formErrors.location}</p>}
               </div>
             </div>
 
             {/* Quantity, Weight and Unit */}
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs font-semibold">
-                  Current Quantity <span className="text-rose-500">*</span>
-                </Label>
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-5 space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Current Quantity <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
                 <Input
                   type="number"
                   min="0"
@@ -883,15 +938,17 @@ export function RawMaterialsView() {
                   placeholder="Count"
                   value={formQuantity}
                   onChange={(e) => setFormQuantity(e.target.value)}
-                  className={cn('h-9 text-sm mt-1', formErrors.quantity && 'border-rose-500')}
+                  className={cn('h-9 text-sm', formErrors.quantity && 'border-rose-500')}
                 />
-                {formErrors.quantity && <p className="text-[11px] text-rose-500 mt-1">{formErrors.quantity}</p>}
+                {formErrors.quantity && <p className="text-[11px] text-rose-500">{formErrors.quantity}</p>}
               </div>
 
-              <div>
-                <Label className="text-xs font-semibold">
-                  Unit Weight <span className="text-rose-500">*</span>
-                </Label>
+              <div className="col-span-4 space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Unit Weight <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
                 <Input
                   type="number"
                   min="0"
@@ -899,34 +956,41 @@ export function RawMaterialsView() {
                   placeholder="Value"
                   value={formWeight}
                   onChange={(e) => setFormWeight(e.target.value)}
-                  className={cn('h-9 text-sm mt-1', formErrors.weight && 'border-rose-500')}
+                  className={cn('h-9 text-sm', formErrors.weight && 'border-rose-500')}
                 />
-                {formErrors.weight && <p className="text-[11px] text-rose-500 mt-1">{formErrors.weight}</p>}
+                {formErrors.weight && <p className="text-[11px] text-rose-500">{formErrors.weight}</p>}
               </div>
 
-              <div>
-                <Label className="text-xs font-semibold">Unit</Label>
-                <select
-                  value={formWeightUnit}
-                  onChange={(e) => setFormWeightUnit(e.target.value)}
-                  aria-label="Unit of measure"
-                  className="h-9 w-full px-2 mt-1 rounded-md border border-input bg-background text-xs font-medium focus:ring-1 focus:ring-ring"
-                >
-                  <option value="kg">kg</option>
-                  <option value="g">g</option>
-                  <option value="L">L</option>
-                  <option value="ml">ml</option>
-                  <option value="pcs">pcs</option>
-                </select>
+              <div className="col-span-3 space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">Unit</Label>
+                </div>
+                <div className="relative">
+                  <select
+                    value={formWeightUnit}
+                    onChange={(e) => setFormWeightUnit(e.target.value)}
+                    aria-label="Unit of measure"
+                    className="h-9 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-7 text-sm font-medium shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="kg">kg</option>
+                    <option value="g">g</option>
+                    <option value="L">L</option>
+                    <option value="ml">ml</option>
+                    <option value="pcs">pcs</option>
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                </div>
               </div>
             </div>
 
             {/* Min Threshold & Vendor Dropdown */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-semibold">
-                  Low-Stock Trigger (Min Threshold) <span className="text-rose-500">*</span>
-                </Label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Low-Stock Threshold <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
                 <Input
                   type="number"
                   min="1"
@@ -934,38 +998,43 @@ export function RawMaterialsView() {
                   placeholder="e.g. 10"
                   value={formMinThreshold}
                   onChange={(e) => setFormMinThreshold(e.target.value)}
-                  className={cn('h-9 text-sm mt-1', formErrors.minThreshold && 'border-rose-500')}
+                  className={cn('h-9 text-sm', formErrors.minThreshold && 'border-rose-500')}
                 />
-                <span className="text-[11px] text-muted-foreground mt-0.5 block">
-                  Alerts Vendor & Manager when stock drops below this
-                </span>
-                {formErrors.minThreshold && <p className="text-[11px] text-rose-500 mt-1">{formErrors.minThreshold}</p>}
+                <p className="text-[11px] text-muted-foreground">
+                  Alerts vendor when stock drops below this
+                </p>
+                {formErrors.minThreshold && <p className="text-[11px] text-rose-500">{formErrors.minThreshold}</p>}
               </div>
 
-              <div>
-                <Label className="text-xs font-semibold">
-                  Assigned Vendor <span className="text-rose-500">*</span>
-                </Label>
-                <select
-                  value={formVendorId}
-                  onChange={(e) => setFormVendorId(e.target.value)}
-                  aria-label="Assigned Vendor"
-                  className={cn(
-                    'h-9 w-full px-2 mt-1 rounded-md border border-input bg-background text-xs font-medium focus:ring-1 focus:ring-ring',
-                    formErrors.vendorId && 'border-rose-500'
-                  )}
-                >
-                  <option value="">Select Vendor...</option>
-                  {vendors.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name} ({v.email})
-                    </option>
-                  ))}
-                </select>
-                <span className="text-[11px] text-muted-foreground mt-0.5 block">
-                  Receives in-app restock request
-                </span>
-                {formErrors.vendorId && <p className="text-[11px] text-rose-500 mt-1">{formErrors.vendorId}</p>}
+              <div className="space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Assigned Vendor <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
+                <div className="relative">
+                  <select
+                    value={formVendorId}
+                    onChange={(e) => setFormVendorId(e.target.value)}
+                    aria-label="Assigned Vendor"
+                    className={cn(
+                      'h-9 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-8 text-sm font-normal shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                      formErrors.vendorId && 'border-rose-500'
+                    )}
+                  >
+                    <option value="">Select Vendor...</option>
+                    {vendors.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} {v.email ? `(${v.email})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Receives in-app restock request alert
+                </p>
+                {formErrors.vendorId && <p className="text-[11px] text-rose-500">{formErrors.vendorId}</p>}
               </div>
             </div>
 
@@ -983,7 +1052,7 @@ export function RawMaterialsView() {
                 type="submit"
                 size="sm"
                 disabled={submitting}
-                className="bg-orange-600 hover:bg-orange-700 text-white font-medium"
+                className="bg-orange-600 hover:bg-orange-700 text-white font-medium shadow-sm"
               >
                 {submitting ? 'Creating & Generating QR...' : 'Add Material'}
               </Button>
@@ -996,104 +1065,149 @@ export function RawMaterialsView() {
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
         <DialogContent className="max-w-lg p-6 bg-card">
           <DialogHeader>
-            <DialogTitle className="text-lg font-bold">Edit Raw Material</DialogTitle>
-            <DialogDescription className="text-xs">
-              Update inventory counts, warehouse rack location, or assigned vendor.
-            </DialogDescription>
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-lg bg-orange-500/10 text-orange-600 shrink-0">
+                <Package className="size-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-bold">Edit Raw Material</DialogTitle>
+                <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                  Update inventory counts, warehouse rack location, or assigned vendor.
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           <form onSubmit={handleUpdateMaterial} className="space-y-4 my-2">
-            <div>
-              <Label className="text-xs font-semibold">Material Name</Label>
+            {/* Name */}
+            <div className="space-y-1.5">
+              <div className="h-5 flex items-center">
+                <Label className="text-xs font-semibold">
+                  Material Name <span className="text-rose-500">*</span>
+                </Label>
+              </div>
               <Input
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
-                className="h-9 text-sm mt-1"
+                className="h-9 text-sm"
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-semibold">SKU</Label>
-                <Input value={formSku} disabled className="h-9 text-sm mt-1 font-mono bg-muted" />
+            {/* SKU and Location */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">SKU</Label>
+                </div>
+                <Input value={formSku} disabled className="h-9 text-sm font-mono bg-muted" />
               </div>
-              <div>
-                <Label className="text-xs font-semibold">Location</Label>
+              <div className="space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Location <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
                 <Input
                   value={formLocation}
                   onChange={(e) => setFormLocation(e.target.value)}
-                  className="h-9 text-sm mt-1"
+                  className="h-9 text-sm"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs font-semibold">Quantity</Label>
+            {/* Quantity, Weight and Unit */}
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-5 space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Quantity <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
                 <Input
                   type="number"
                   min="0"
                   step="any"
                   value={formQuantity}
                   onChange={(e) => setFormQuantity(e.target.value)}
-                  className="h-9 text-sm mt-1"
+                  className="h-9 text-sm"
                 />
               </div>
-              <div>
-                <Label className="text-xs font-semibold">Unit Weight</Label>
+              <div className="col-span-4 space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Unit Weight <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
                 <Input
                   type="number"
                   min="0"
                   step="any"
                   value={formWeight}
                   onChange={(e) => setFormWeight(e.target.value)}
-                  className="h-9 text-sm mt-1"
+                  className="h-9 text-sm"
                 />
               </div>
-              <div>
-                <Label className="text-xs font-semibold">Unit</Label>
-                <select
-                  value={formWeightUnit}
-                  onChange={(e) => setFormWeightUnit(e.target.value)}
-                  aria-label="Unit of measure"
-                  className="h-9 w-full px-2 mt-1 rounded-md border border-input bg-background text-xs font-medium"
-                >
-                  <option value="kg">kg</option>
-                  <option value="g">g</option>
-                  <option value="L">L</option>
-                  <option value="ml">ml</option>
-                  <option value="pcs">pcs</option>
-                </select>
+              <div className="col-span-3 space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">Unit</Label>
+                </div>
+                <div className="relative">
+                  <select
+                    value={formWeightUnit}
+                    onChange={(e) => setFormWeightUnit(e.target.value)}
+                    aria-label="Unit of measure"
+                    className="h-9 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-7 text-sm font-medium shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="kg">kg</option>
+                    <option value="g">g</option>
+                    <option value="L">L</option>
+                    <option value="ml">ml</option>
+                    <option value="pcs">pcs</option>
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-semibold">Min Threshold</Label>
+            {/* Min Threshold & Vendor */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Low-Stock Threshold <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
                 <Input
                   type="number"
                   min="1"
                   step="any"
                   value={formMinThreshold}
                   onChange={(e) => setFormMinThreshold(e.target.value)}
-                  className="h-9 text-sm mt-1"
+                  className="h-9 text-sm"
                 />
               </div>
-              <div>
-                <Label className="text-xs font-semibold">Assigned Vendor</Label>
-                <select
-                  value={formVendorId}
-                  onChange={(e) => setFormVendorId(e.target.value)}
-                  aria-label="Assigned Vendor"
-                  className="h-9 w-full px-2 mt-1 rounded-md border border-input bg-background text-xs font-medium"
-                >
-                  <option value="">Select Vendor...</option>
-                  {vendors.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="space-y-1.5">
+                <div className="h-5 flex items-center">
+                  <Label className="text-xs font-semibold">
+                    Assigned Vendor <span className="text-rose-500">*</span>
+                  </Label>
+                </div>
+                <div className="relative">
+                  <select
+                    value={formVendorId}
+                    onChange={(e) => setFormVendorId(e.target.value)}
+                    aria-label="Assigned Vendor"
+                    className="h-9 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-8 text-sm font-normal shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="">Select Vendor...</option>
+                    {vendors.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} {v.email ? `(${v.email})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                </div>
               </div>
             </div>
 
@@ -1111,7 +1225,7 @@ export function RawMaterialsView() {
                 type="submit"
                 size="sm"
                 disabled={submitting}
-                className="bg-orange-600 hover:bg-orange-700 text-white font-medium"
+                className="bg-orange-600 hover:bg-orange-700 text-white font-medium shadow-sm"
               >
                 {submitting ? 'Saving...' : 'Save Changes'}
               </Button>

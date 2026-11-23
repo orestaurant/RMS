@@ -422,7 +422,7 @@ function TableCard({
           </button>
         )}
 
-        {table.occupiedSince && (
+        {normStatus === 'occupied' && table.occupiedSince && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1.5">
             <Clock className="size-3" />
             <span>Since {table.occupiedSince}</span>
@@ -438,7 +438,7 @@ function TableCard({
         )}
 
         {/* Order indicator */}
-        {table.order && (
+        {normStatus === 'occupied' && table.order && (
           <>
             <Separator className="my-2.5" />
             <div className="flex items-center gap-1.5 min-w-0">
@@ -496,8 +496,8 @@ function TableCard({
           </Button>
         )}
 
-        {/* Occupied / Active / Bill Requested CTA */}
-        {(normStatus === 'occupied' || table.order || table.billRequested) && (
+        {/* Occupied CTA - Bill / Settle */}
+        {normStatus === 'occupied' && (
           <Button
             variant="default"
             size="sm"
@@ -725,7 +725,7 @@ export function TablesView() {
       const rawTables = json.data || []
       const mappedTables: TableData[] = rawTables.map((t: any) => {
         const cleanNum = String(t.tableNumber || t.number || '').toLowerCase().trim().replace(/[^0-9]/g, '')
-        const isReq = requestedTableNumbers.has(cleanNum)
+        const isReq = (t.status === 'occupied') && requestedTableNumbers.has(cleanNum)
         return {
           ...t,
           billRequested: isReq,
@@ -796,7 +796,18 @@ export function TablesView() {
   const handleUpdateStatus = async (tableId: string, newStatus: TableStatus) => {
     try {
       setTables((prev) =>
-        prev.map((t) => (t.id === tableId ? { ...t, status: newStatus } : t))
+        prev.map((t) =>
+          t.id === tableId
+            ? {
+                ...t,
+                status: newStatus,
+                order: newStatus === 'available' ? undefined : t.order,
+                occupiedSince: newStatus === 'available' ? undefined : t.occupiedSince,
+                guestCount: newStatus === 'available' ? undefined : t.guestCount,
+                billRequested: newStatus === 'available' ? false : t.billRequested,
+              }
+            : t
+        )
       )
 
       const res = await fetch('/api/tables', {

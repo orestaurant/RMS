@@ -21,6 +21,13 @@ export async function GET(request: NextRequest) {
             phone: true,
           },
         },
+        dashboardNotifications: {
+          where: {
+            type: 'LOW_STOCK_ALERT',
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
       },
       orderBy: { updatedAt: 'desc' },
     })
@@ -45,10 +52,14 @@ export async function GET(request: NextRequest) {
         inStockCount++
       }
 
+      const latestNotif = item.dashboardNotifications?.[0] || null
+
       return {
         ...item,
         status,
         vendorName: item.vendor?.name || 'Unassigned',
+        latestRestockStatus: latestNotif?.status || null,
+        latestRestockMeta: latestNotif?.metadata || null,
       }
     })
 

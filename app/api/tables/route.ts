@@ -60,6 +60,7 @@ export async function GET(request: NextRequest) {
                 'SERVED',
               ],
             },
+            createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
           },
           orderBy: { createdAt: 'desc' },
           take: 1,
@@ -98,6 +99,7 @@ export async function GET(request: NextRequest) {
 
       // Determine display status (customStatus e.g. cleaning or out_of_service, else DB enum)
       const displayStatus = meta.customStatus || t.status
+      const isOccupied = displayStatus === 'occupied'
 
       return {
         id: t.id,
@@ -109,11 +111,13 @@ export async function GET(request: NextRequest) {
         status: displayStatus,
         waiter: meta.waiter || undefined,
         waiterId: meta.waiterId || undefined,
-        occupiedSince: activeOrder?.createdAt
-          ? new Date(activeOrder.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-          : meta.occupiedSince || undefined,
-        guestCount: meta.guestCount || undefined,
-        order: activeOrder ? { id: activeOrder.orderNumber, status: activeOrder.status } : undefined,
+        occupiedSince: isOccupied
+          ? (activeOrder?.createdAt
+              ? new Date(activeOrder.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+              : meta.occupiedSince || undefined)
+          : undefined,
+        guestCount: isOccupied ? (meta.guestCount || undefined) : undefined,
+        order: (isOccupied && activeOrder) ? { id: activeOrder.orderNumber, status: activeOrder.status } : undefined,
         activeReservation: activeRes
           ? {
               guestName: activeRes.guestName,
@@ -254,6 +258,37 @@ export async function PATCH(request: NextRequest) {
       ...(status === 'occupied' && !existingMeta.occupiedSince
         ? { occupiedSince: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) }
         : {}),
+    }
+
+    if (status === 'available') {
+      delete updatedMeta.customStatus
+      delete updatedMeta.occupiedSince
+      delete updatedMeta.guestCount
+
+      // Close any active orders associated with this table
+      await prisma.order.updateMany({
+        where: {
+          tableId: id,
+          status: {
+            in: [
+              'pending',
+              'PENDING',
+              'accepted',
+              'ACCEPTED',
+              'confirmed',
+              'preparing',
+              'PREPARING',
+              'ready',
+              'READY',
+              'served',
+              'SERVED',
+            ],
+          },
+        },
+        data: {
+          status: 'completed',
+        },
+      }).catch((err) => console.error('Error completing orders when freeing table:', err))
     }
 
     const updated = await prisma.restaurantTable.update({

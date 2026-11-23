@@ -60,7 +60,8 @@ export const getTablesByBranch = async (
     })
 
     return tables.map((table) => {
-      const activeOrder = table.orders[0]
+      const isOccupied = table.status === 'occupied'
+      const activeOrder = isOccupied ? table.orders[0] : null
 
       return {
         id: table.id,
@@ -68,8 +69,8 @@ export const getTablesByBranch = async (
         capacity: table.capacity,
         section: table.section,
         status: table.status,
-        occupiedSince: activeOrder?.createdAt ?? null,
-        guestCount: activeOrder ? 4 : null, // Default guest count
+        occupiedSince: isOccupied ? (activeOrder?.createdAt ?? null) : null,
+        guestCount: isOccupied ? (activeOrder ? 4 : null) : null,
         waiterName: activeOrder?.createdBy?.firstName ?? null,
         x: table.xPosition ? Number(table.xPosition) : null,
         y: table.yPosition ? Number(table.yPosition) : null,
