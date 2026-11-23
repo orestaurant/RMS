@@ -38,6 +38,7 @@
   "exclude": [
     "node_modules",
     "lib/ai-receptionist-prd",
-    "SEED_DATA.ts"
+    "SEED_DATA.ts",
+    ".next"
   ]
 }

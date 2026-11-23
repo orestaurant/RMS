@@ -30,6 +30,7 @@ import { useAuthContext } from '@/hooks/useAuthContext'
 import { cn } from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 import { SongRequestModal } from '@/components/customer/song-request-modal'
+import { CustomerTopQrSearch } from '@/components/customer/customer-top-qr-search'
 
 interface CustomerProfile {
   id: string
@@ -214,6 +215,9 @@ export function CustomerDashboardView() {
         </div>
       </div>
 
+      {/* ── Top QR Code & Dishes Search Section ───────────────── */}
+      <CustomerTopQrSearch initialTable="1" />
+
       {/* ── 20-Second Live Chef Preparation Add-on Banner ───────── */}
       <LiveBatchAddonBanner
         currentTableNumber="Table 1"
@@ -221,88 +225,8 @@ export function CustomerDashboardView() {
         onOrderPlaced={fetchCustomerData}
       />
 
-      {/* ── Google Review & 10% Discount Banner ──────────────── */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/5 border border-amber-500/30 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3.5">
-          <div className="size-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">
-            <Star className="size-5 fill-white" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-foreground">
-                Get 10% Off Your Bill with Google Review
-              </h2>
-              <Badge className="bg-amber-500 text-white text-[10px] py-0">
-                10% OFF
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Verify dining with 1-click Google login, share quick feedback, and show your instant discount voucher.
-            </p>
-          </div>
-        </div>
-        <Link href="/customer/feedback" className="shrink-0">
-          <Button
-            size="sm"
-            className="w-full sm:w-auto font-bold text-xs gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-xs cursor-pointer"
-          >
-            <span>Review & Claim 10% Off</span>
-            <ArrowRight className="size-3.5" />
-          </Button>
-        </Link>
-      </div>
-
-      {/* ── Live DJ Booth Song Request Banner ──────────────── */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-pink-500/15 via-rose-500/10 to-purple-500/15 border border-pink-500/30 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3.5">
-          <div className="size-10 rounded-xl bg-gradient-to-tr from-pink-500 to-rose-500 text-white flex items-center justify-center shrink-0 shadow-sm shadow-pink-500/25">
-            <Music className="size-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-foreground">
-                Request a Song to Live DJ Booth 🎵
-              </h2>
-              <Badge className="bg-pink-500 text-white text-[10px] py-0 font-bold">
-                Live DJ
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Choose your favorite track, add a dedication for your table, and watch the status in real-time as the DJ plays it.
-            </p>
-          </div>
-        </div>
-        <Button
-          size="sm"
-          onClick={() => setShowSongModal(true)}
-          className="shrink-0 w-full sm:w-auto font-bold text-xs gap-1.5 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white shadow-xs cursor-pointer"
-        >
-          <Headphones className="size-3.5" />
-          <span>Send DJ Request</span>
-          <ArrowRight className="size-3.5" />
-        </Button>
-      </div>
-
-      {/* ── Customer Metric Cards (Zero Admin/Revenue Numbers) ── */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {/* Active Live Orders */}
-        <StatCard
-          title="Active Live Orders"
-          value={activeOrders.length}
-          icon={Flame}
-          iconColor="text-orange-500"
-          loading={loading}
-        />
-
-        {/* Total Orders Placed */}
-        <StatCard
-          title="Orders Placed"
-          value={totalOrdersCount}
-          icon={ShoppingBag}
-          iconColor="text-primary"
-          loading={loading}
-        />
-
+      {/* ── Customer Metric Cards ── */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {/* Total Completed */}
         <StatCard
           title="Past Orders"

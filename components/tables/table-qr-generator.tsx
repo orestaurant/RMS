@@ -382,7 +382,7 @@ export function TableQRGenerator({
   )
 }
 
-interface StickerCardProps {
+export interface StickerCardProps {
   tableNumber: string | number
   badge: string
   targetUrl: string
@@ -392,7 +392,7 @@ interface StickerCardProps {
   onPrint?: () => void
 }
 
-function StickerCard({
+export function StickerCard({
   tableNumber,
   badge,
   targetUrl,

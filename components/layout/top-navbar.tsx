@@ -4,11 +4,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTheme } from '@/hooks/useTheme'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import {
-  Search,
   Bell,
   Moon,
   Sun,
-  Command,
   Flame,
   Receipt,
   AlertTriangle,
@@ -147,19 +145,6 @@ export function TopNavbar({ title, subtitle }: TopNavbarProps) {
         )}
 
         <div className="flex-1" />
-
-        {/* Search Bar with ⌘K */}
-        <button
-          className="hidden md:flex items-center gap-2 text-muted-foreground h-8 px-3 w-44 lg:w-52 justify-start rounded-lg border border-border bg-background text-sm hover:bg-muted/50 transition-colors"
-          onClick={() => setCommandOpen(true)}
-          aria-label="Search dashboard"
-        >
-          <Search className="size-3.5" />
-          <span className="text-xs flex-1 text-left">Search...</span>
-          <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-0.5 rounded border border-border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
-            <Command className="size-2.5" />K
-          </kbd>
-        </button>
 
         {/* Live Notifications Bell */}
         <DropdownMenu>
