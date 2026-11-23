@@ -204,9 +204,9 @@ export function AppSidebar() {
               icon: LayoutDashboard,
             },
             {
-              label: 'Live Orders',
-              href: '/orders',
-              icon: Zap,
+              label: 'All Orders',
+              href: '/customer-orders',
+              icon: Receipt,
               badge: counts?.liveOrders ? String(counts.liveOrders) : undefined,
             },
             {

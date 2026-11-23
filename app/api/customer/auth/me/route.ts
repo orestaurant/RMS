@@ -33,6 +33,33 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Check review submission and discount claim status
+    let feedback = null
+    try {
+      feedback = await prisma.customerFeedback.findFirst({
+        where: {
+          OR: [
+            { customerId: customer.id },
+            ...(customer.email ? [{ customerEmail: customer.email }] : []),
+          ],
+          deletedAt: null,
+        },
+        select: {
+          id: true,
+          discountCode: true,
+          discountClaimed: true,
+          rating: true,
+          comment: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      })
+    } catch (e) {
+      console.warn('Could not read customer feedback in /me:', e)
+    }
+
+    const isFirstOrder = Number(customer.totalOrders || 0) === 0
+
     return NextResponse.json({
       success: true,
       customer: {
@@ -43,6 +70,11 @@ export async function GET(request: NextRequest) {
         totalOrders: customer.totalOrders,
         totalSpent: Number(customer.totalSpent || 0),
         createdAt: customer.createdAt,
+        isFirstOrder,
+        hasSubmittedReview: Boolean(feedback),
+        reviewDiscountCode: feedback?.discountCode || null,
+        reviewDiscountClaimed: feedback?.discountClaimed ?? false,
+        reviewRating: feedback?.rating || null,
       },
     })
   } catch (error: any) {

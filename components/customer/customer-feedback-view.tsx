@@ -88,6 +88,20 @@ function FeedbackViewContent() {
 
         if (json.success && json.data) {
           const d = json.data
+
+          // Check if customer has already submitted their 1-time review
+          if (d.alreadyReviewed && d.previousFeedback) {
+            setSubmitted(true)
+            if (d.previousFeedback.discountCode) {
+              setDiscountCode(d.previousFeedback.discountCode)
+              try {
+                localStorage.setItem('resto_saved_coupon', d.previousFeedback.discountCode)
+              } catch (e) {}
+            }
+            if (d.previousFeedback.rating) setRating(d.previousFeedback.rating)
+            if (d.previousFeedback.comment) setComment(d.previousFeedback.comment)
+          }
+
           if (d.settings) {
             setGooglePlaceReviewUrl(d.settings.googlePlaceReviewUrl || '')
             setIsGoogleEnabled(d.settings.isGoogleEnabled ?? true)
@@ -220,6 +234,13 @@ function FeedbackViewContent() {
 
       const data = await res.json()
       if (!res.ok || !data.success) {
+        if (data.alreadyReviewed && data.discountCode) {
+          setDiscountCode(data.discountCode)
+          setSubmitted(true)
+          try {
+            localStorage.setItem('resto_saved_coupon', data.discountCode)
+          } catch (e) {}
+        }
         throw new Error(data.message || 'Failed to submit review')
       }
 

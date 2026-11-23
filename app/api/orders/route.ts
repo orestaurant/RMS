@@ -603,48 +603,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Coupon and Discount handling (e.g. 10% Review Coupon with min ₹500 order)
-    const rawCouponCode = body.couponCode || body.coupon || null
-    const couponCode = rawCouponCode ? String(rawCouponCode).trim().toUpperCase() : null
-    let discountAmount = 0
-    let discountPercentage = 0
-    let discountReason: string | null = null
-
-    if (couponCode) {
-      if (couponCode.startsWith('REVIEW10') || couponCode.includes('REVIEW')) {
-        // Enforce min order rule of ₹500 for Review Discount
-        if (calculatedSubtotal >= 500) {
-          discountPercentage = 10
-          discountAmount = Math.round(calculatedSubtotal * 0.10 * 100) / 100
-          discountReason = `Review Discount (10% off) - ${couponCode}`
-        }
-      } else if (body.discountAmount && Number(body.discountAmount) > 0) {
-        discountAmount = Math.min(calculatedSubtotal, Number(body.discountAmount))
-        discountPercentage = Number(body.discountPercentage) || 0
-        discountReason = couponCode || 'Promotional Discount'
-      }
-    } else if (body.discountAmount && Number(body.discountAmount) > 0) {
-      discountAmount = Math.min(calculatedSubtotal, Number(body.discountAmount))
-      discountPercentage = Number(body.discountPercentage) || 0
-      discountReason = body.discountReason || 'Manual Discount'
-    }
-
-    // 5% GST tax calculation on discounted subtotal
-    const taxRate = 0.05
-    const taxableSubtotal = Math.max(0, calculatedSubtotal - discountAmount)
-    const taxAmount = Math.round(taxableSubtotal * taxRate * 100) / 100
-    const finalTotal = Math.round((taxableSubtotal + taxAmount) * 100) / 100
-
-    // 7. Generate Unique Order Number
-    const now = new Date()
-    const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '')
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000)
-    const orderNumber = `ORD-${dateStr}-${randomSuffix}`
-
-    // 8. Newly placed orders must start as 'pending' so they appear in KDS 'Incoming' queue
-    const finalStatus = 'pending'
-
-    // 8.5 Auto-link waiter/staff placed orders to active customer at this table
+    // 6.5 Auto-link waiter/staff placed orders to active customer at this table
     let effectiveCustomerId = resolvedCustomerId
     if (!effectiveCustomerId && isDineIn && (tableId || finalTableNumber)) {
       try {
@@ -688,6 +647,90 @@ export async function POST(request: NextRequest) {
         console.warn('Could not auto-link active customer for table order:', err)
       }
     }
+
+    // Coupon and Discount handling (First-Time: 15% off, Existing: 10% off, Review: 1-time 10% off)
+    const rawCouponCode = body.couponCode || body.coupon || null
+    const couponCode = rawCouponCode ? String(rawCouponCode).trim().toUpperCase() : null
+    let discountAmount = 0
+    let discountPercentage = 0
+    let discountReason: string | null = null
+
+    if (couponCode) {
+      if (couponCode === 'FIRST15') {
+        let isFirstTime = true
+        if (effectiveCustomerId) {
+          try {
+            const cust = await prisma.customer.findUnique({
+              where: { id: effectiveCustomerId },
+              select: { totalOrders: true },
+            })
+            if (cust && Number(cust.totalOrders || 0) > 0) {
+              isFirstTime = false
+            }
+          } catch (err) {}
+        }
+
+        if (isFirstTime) {
+          discountPercentage = 15
+          discountAmount = Math.round(calculatedSubtotal * 0.15 * 100) / 100
+          discountReason = 'First-Time Customer Special (15% off) - FIRST15'
+        } else {
+          discountPercentage = 10
+          discountAmount = Math.round(calculatedSubtotal * 0.10 * 100) / 100
+          discountReason = 'Existing Customer Discount (10% off)'
+        }
+      } else if (couponCode.startsWith('REVIEW10') || couponCode.includes('REVIEW')) {
+        // Enforce 1 review discount per customer (check if already claimed)
+        let reviewAlreadyClaimed = false
+        try {
+          const feedback = await prisma.customerFeedback.findFirst({
+            where: {
+              OR: [
+                { discountCode: { equals: couponCode, mode: 'insensitive' } },
+                ...(effectiveCustomerId ? [{ customerId: effectiveCustomerId }] : []),
+              ],
+              discountClaimed: true,
+            },
+          })
+          if (feedback) {
+            reviewAlreadyClaimed = true
+          }
+        } catch (err) {}
+
+        if (!reviewAlreadyClaimed && calculatedSubtotal >= 300) {
+          discountPercentage = 10
+          discountAmount = Math.round(calculatedSubtotal * 0.10 * 100) / 100
+          discountReason = `Review Discount (10% off) - ${couponCode}`
+        }
+      } else if (couponCode === 'EXISTING10' || couponCode === 'WELCOME10') {
+        discountPercentage = 10
+        discountAmount = Math.round(calculatedSubtotal * 0.10 * 100) / 100
+        discountReason = `${couponCode} (10% off)`
+      } else if (body.discountAmount && Number(body.discountAmount) > 0) {
+        discountAmount = Math.min(calculatedSubtotal, Number(body.discountAmount))
+        discountPercentage = Number(body.discountPercentage) || 0
+        discountReason = couponCode || 'Promotional Discount'
+      }
+    } else if (body.discountAmount && Number(body.discountAmount) > 0) {
+      discountAmount = Math.min(calculatedSubtotal, Number(body.discountAmount))
+      discountPercentage = Number(body.discountPercentage) || 0
+      discountReason = body.discountReason || 'Manual Discount'
+    }
+
+    // 5% GST tax calculation on discounted subtotal
+    const taxRate = 0.05
+    const taxableSubtotal = Math.max(0, calculatedSubtotal - discountAmount)
+    const taxAmount = Math.round(taxableSubtotal * taxRate * 100) / 100
+    const finalTotal = Math.round((taxableSubtotal + taxAmount) * 100) / 100
+
+    // 7. Generate Unique Order Number
+    const now = new Date()
+    const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '')
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000)
+    const orderNumber = `ORD-${dateStr}-${randomSuffix}`
+
+    // 8. Newly placed orders must start as 'pending' so they appear in KDS 'Incoming' queue
+    const finalStatus = 'pending'
 
     // 9. Persist Order in database
     const order = await prisma.order.create({
@@ -755,6 +798,19 @@ export async function POST(request: NextRequest) {
         locationCapturedAt: true,
       },
     })
+
+    // Update customer totalOrders and totalSpent
+    if (effectiveCustomerId) {
+      prisma.customer.update({
+        where: { id: effectiveCustomerId },
+        data: {
+          totalOrders: { increment: 1 },
+          totalSpent: { increment: finalTotal },
+        },
+      }).catch((e) => {
+        console.warn('Could not increment customer order stats:', e)
+      })
+    }
 
     // If review coupon code was used, mark it claimed in customerFeedback
     if (couponCode) {

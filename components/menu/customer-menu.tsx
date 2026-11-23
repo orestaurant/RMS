@@ -261,12 +261,22 @@ export function CustomerMenu() {
   const [couponInput, setCouponInput] = useState<string>('')
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null)
   const [appliedCouponPercent, setAppliedCouponPercent] = useState<number>(0)
+  const [appliedCouponMinOrder, setAppliedCouponMinOrder] = useState<number>(0)
   const [couponMessage, setCouponMessage] = useState<string | null>(null)
   const [couponError, setCouponError] = useState<string | null>(null)
   const [validatingCoupon, setValidatingCoupon] = useState<boolean>(false)
   const [savedReviewCoupon, setSavedReviewCoupon] = useState<string | null>(null)
+  const [customerAuth, setCustomerAuth] = useState<{
+    id: string
+    name: string
+    isFirstOrder: boolean
+    totalOrders: number
+    hasSubmittedReview: boolean
+    reviewDiscountCode: string | null
+    reviewDiscountClaimed: boolean
+  } | null>(null)
 
-  // Auto-detect saved review discount coupon from localStorage
+  // Auto-detect customer profile & saved review discount coupon from localStorage/session
   useEffect(() => {
     try {
       const saved = localStorage.getItem('resto_saved_coupon')
@@ -275,6 +285,22 @@ export function CustomerMenu() {
         setCouponInput(saved)
       }
     } catch (e) {}
+
+    fetch('/api/customer/auth/me', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.customer) {
+          setCustomerAuth(data.customer)
+          // If customer has never ordered before (first-time customer), suggest FIRST15
+          if (data.customer.isFirstOrder) {
+            setCouponInput('FIRST15')
+          } else if (data.customer.reviewDiscountCode && !data.customer.reviewDiscountClaimed) {
+            setSavedReviewCoupon(data.customer.reviewDiscountCode)
+            setCouponInput(data.customer.reviewDiscountCode)
+          }
+        }
+      })
+      .catch(() => {})
   }, [])
 
   // 5b. Customization Modal State
@@ -694,12 +720,12 @@ export function CustomerMenu() {
       ),
     [cartItemList]
   )
-  // Review Discount (10% off for orders of ₹500 and above)
-  const isCouponMinOrderMet = cartSubtotal >= 500
+  // Dynamic Discount Calculation (First-Time 15%, Existing Customer / Review 10%)
+  const isCouponMinOrderMet = cartSubtotal >= appliedCouponMinOrder
   const discountAmount = useMemo(() => {
     if (!appliedCoupon) return 0
     if (!isCouponMinOrderMet) return 0
-    const percent = appliedCouponPercent > 0 ? appliedCouponPercent : 10
+    const percent = appliedCouponPercent > 0 ? appliedCouponPercent : (appliedCoupon === 'FIRST15' ? 15 : 10)
     return Math.round(cartSubtotal * (percent / 100) * 100) / 100
   }, [appliedCoupon, isCouponMinOrderMet, appliedCouponPercent, cartSubtotal])
 
@@ -733,18 +759,25 @@ export function CustomerMenu() {
       }
 
       setAppliedCoupon(code)
-      setAppliedCouponPercent(data.discountPercent || 10)
+      setAppliedCouponPercent(data.discountPercent || (code === 'FIRST15' ? 15 : 10))
+      setAppliedCouponMinOrder(data.minOrder ?? (code === 'FIRST15' ? 0 : 300))
       setCouponMessage(data.message)
       setCouponError(null)
     } catch (e) {
-      // Offline / fallback verification for REVIEW10-* codes
-      if (code.startsWith('REVIEW10') || code.includes('REVIEW')) {
+      // Offline / fallback verification
+      if (code === 'FIRST15') {
+        setAppliedCoupon(code)
+        setAppliedCouponPercent(15)
+        setAppliedCouponMinOrder(0)
+        setCouponMessage('15% First-Time Customer Discount Applied!')
+      } else if (code.startsWith('REVIEW10') || code.includes('REVIEW') || code === 'EXISTING10') {
         setAppliedCoupon(code)
         setAppliedCouponPercent(10)
+        setAppliedCouponMinOrder(300)
         setCouponMessage(
-          cartSubtotal >= 500
-            ? '10% Review Discount Applied!'
-            : `Add ₹${(500 - cartSubtotal).toFixed(2)} more to unlock 10% discount.`
+          cartSubtotal >= 300
+            ? '10% Discount Applied!'
+            : `Add ₹${(300 - cartSubtotal).toFixed(2)} more to unlock 10% discount.`
         )
       } else {
         setCouponError('Could not validate coupon code. Please try again.')
@@ -2969,32 +3002,86 @@ export function CustomerMenu() {
                     )}
                   </div>
 
-                  {/* 1-Click Saved Review Coupon Badge */}
-                  {savedReviewCoupon && !appliedCoupon && (
-                    <div className="p-2.5 rounded-xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center gap-1 truncate">
-                          <span>🎁</span>
-                          <span className="font-mono">{savedReviewCoupon}</span>
-                          <span className="font-semibold text-[11px]">(10% Review Discount)</span>
-                        </p>
-                        <p className="text-[10px] text-muted-foreground">
-                          Valid on orders of ₹500 and above
-                        </p>
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => {
-                          setCouponInput(savedReviewCoupon)
-                          handleApplyCoupon(savedReviewCoupon)
-                        }}
-                        disabled={validatingCoupon}
-                        className="h-7 px-2.5 text-[11px] font-extrabold rounded-lg bg-orange-600 hover:bg-orange-700 text-white shrink-0 cursor-pointer"
-                      >
-                        {validatingCoupon ? <RefreshCw className="size-3 animate-spin" /> : 'Apply'}
-                      </Button>
-                    </div>
+                  {/* 1-Click First Order (15%) or Review/Existing Customer (10%) Coupon Badge */}
+                  {!appliedCoupon && (
+                    <>
+                      {customerAuth?.isFirstOrder ? (
+                        <div className="p-2.5 rounded-xl bg-gradient-to-r from-orange-500/15 to-amber-500/15 border border-orange-500/30 flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center gap-1 truncate">
+                              <span>🎉</span>
+                              <span className="font-mono">FIRST15</span>
+                              <span className="font-semibold text-[11px]">• Extra 15% First Order Special</span>
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              Exclusive 15% discount for your very first order!
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => {
+                              setCouponInput('FIRST15')
+                              handleApplyCoupon('FIRST15')
+                            }}
+                            disabled={validatingCoupon}
+                            className="h-7 px-2.5 text-[11px] font-extrabold rounded-lg bg-orange-600 hover:bg-orange-700 text-white shrink-0 cursor-pointer shadow-2xs"
+                          >
+                            {validatingCoupon ? <RefreshCw className="size-3 animate-spin" /> : 'Apply 15%'}
+                          </Button>
+                        </div>
+                      ) : savedReviewCoupon ? (
+                        <div className="p-2.5 rounded-xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center gap-1 truncate">
+                              <span>🎁</span>
+                              <span className="font-mono">{savedReviewCoupon}</span>
+                              <span className="font-semibold text-[11px]">(10% Review Discount)</span>
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              1-time 10% discount from your dining review (Min. ₹300)
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => {
+                              setCouponInput(savedReviewCoupon)
+                              handleApplyCoupon(savedReviewCoupon)
+                            }}
+                            disabled={validatingCoupon}
+                            className="h-7 px-2.5 text-[11px] font-extrabold rounded-lg bg-orange-600 hover:bg-orange-700 text-white shrink-0 cursor-pointer"
+                          >
+                            {validatingCoupon ? <RefreshCw className="size-3 animate-spin" /> : 'Apply 10%'}
+                          </Button>
+                        </div>
+                      ) : customerAuth && !customerAuth.isFirstOrder ? (
+                        <div className="p-2.5 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-foreground flex items-center gap-1 truncate">
+                              <span>✨</span>
+                              <span className="font-mono">EXISTING10</span>
+                              <span className="font-semibold text-[11px]">• 10% Off for Valued Guests</span>
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              Enjoy 10% off on your dining order
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => {
+                              setCouponInput('EXISTING10')
+                              handleApplyCoupon('EXISTING10')
+                            }}
+                            disabled={validatingCoupon}
+                            className="h-7 px-2.5 text-[11px] font-semibold rounded-lg shrink-0 cursor-pointer"
+                          >
+                            {validatingCoupon ? <RefreshCw className="size-3 animate-spin" /> : 'Apply 10%'}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </>
                   )}
 
                   {/* Coupon Input Box */}
@@ -3042,15 +3129,15 @@ export function CustomerMenu() {
                         <div className="flex items-center gap-1.5 font-bold">
                           {isCouponMinOrderMet ? <Check className="size-3.5" /> : <AlertCircle className="size-3.5" />}
                           <span className="font-mono">{appliedCoupon}</span>
-                          <span>{isCouponMinOrderMet ? '• 10% Discount Active' : '• Condition not met'}</span>
+                          <span>{isCouponMinOrderMet ? `• ${appliedCouponPercent}% Discount Active` : '• Condition not met'}</span>
                         </div>
                         {isCouponMinOrderMet ? (
                           <p className="text-[11px] opacity-90">
-                            🎉 10% discount applied! You save ₹{discountAmount.toFixed(2)}.
+                            🎉 {appliedCouponPercent}% discount applied! You save ₹{discountAmount.toFixed(2)}.
                           </p>
                         ) : (
                           <p className="text-[11px] font-semibold opacity-90">
-                            ⚠️ Add ₹{(500 - cartSubtotal).toFixed(2)} more items to unlock 10% discount (Min. order ₹500)!
+                            ⚠️ Add ₹{(appliedCouponMinOrder - cartSubtotal).toFixed(2)} more items to unlock {appliedCouponPercent}% discount (Min. order ₹{appliedCouponMinOrder})!
                           </p>
                         )}
                       </div>
@@ -3086,7 +3173,7 @@ export function CustomerMenu() {
                     <div className="flex justify-between font-bold text-emerald-600 dark:text-emerald-400">
                       <span className="flex items-center gap-1">
                         <Gift className="size-3" />
-                        <span>Review Discount ({appliedCouponPercent || 10}%)</span>
+                        <span>{appliedCoupon === 'FIRST15' ? 'First Order Discount' : 'Discount'} ({appliedCouponPercent || 10}%)</span>
                       </span>
                       <span>-₹{discountAmount.toFixed(2)}</span>
                     </div>

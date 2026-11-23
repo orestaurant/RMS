@@ -6,13 +6,10 @@ import {
   ShoppingBag,
   Clock,
   UtensilsCrossed,
-  IndianRupee,
   Receipt,
   ArrowRight,
   Sparkles,
-  ChefHat,
   Flame,
-  CheckCircle2,
   TableProperties,
   RefreshCw,
   Car,
@@ -25,7 +22,6 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { StatCard } from '@/components/ui/stat-card'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import { cn } from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
@@ -225,55 +221,6 @@ export function CustomerDashboardView() {
         onOrderPlaced={fetchCustomerData}
       />
 
-      {/* ── Customer Metric Cards ── */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {/* Total Completed */}
-        <StatCard
-          title="Past Orders"
-          value={completedOrders.length}
-          icon={CheckCircle2}
-          iconColor="text-emerald-500"
-          loading={loading}
-        />
-
-        {/* Total Spent */}
-        <StatCard
-          title="Total Spent"
-          value={Number(totalSpentAmount).toLocaleString('en-IN')}
-          prefix="₹"
-          icon={IndianRupee}
-          iconColor="text-chart-1"
-          loading={loading}
-        />
-      </div>
-
-      {/* ── Promotional / Menu Callout Banner ─────────────────── */}
-      <div className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-orange-500/10 via-amber-500/10 to-transparent border border-orange-500/20 shadow-sm flex-wrap gap-4">
-        <div className="flex items-center gap-3.5">
-          <div className="size-10 rounded-xl bg-gradient-to-tr from-orange-500 to-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/25">
-            <ChefHat className="size-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-semibold text-foreground">Explore Our Fresh Restaurant Menu</p>
-              <Badge variant="outline" className="text-[10px] border-orange-500/30 text-orange-600 dark:text-orange-400 font-medium">
-                Chef Specials
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Discover chef-crafted starters, mains, and desserts prepared hot to order
-            </p>
-          </div>
-        </div>
-        <Link href="/menu">
-          <Button size="sm" className="h-8.5 gap-1.5 text-xs font-semibold">
-            <UtensilsCrossed className="size-3.5" />
-            <span>Browse Full Menu</span>
-            <ArrowRight className="size-3.5" />
-          </Button>
-        </Link>
-      </div>
-
       {/* ── Main Content Grid ─────────────────────────────────── */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Left Column: Active Order Status & Recent Orders */}
@@ -367,7 +314,7 @@ export function CustomerDashboardView() {
                               <span>Add on Live Order</span>
                             </Button>
                           </Link>
-                          <Link href="/customer/orders">
+                          <Link href="/customer-orders">
                             <Button variant="outline" size="sm" className="h-8 text-xs">
                               <span>View Receipt</span>
                             </Button>
@@ -376,54 +323,6 @@ export function CustomerDashboardView() {
                       </div>
                     )
                   })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Recent Order History */}
-          <Card className="border-border/60 shadow-sm">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base font-semibold">Recent Order History</CardTitle>
-                  <CardDescription className="text-xs">Your completed and past dining orders</CardDescription>
-                </div>
-                <Link
-                  href="/customer/orders"
-                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline font-medium"
-                >
-                  View All Orders <ArrowRight className="size-3" />
-                </Link>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {loading ? (
-                <div className="space-y-2 py-2">
-                  <div className="h-10 w-full rounded shimmer" />
-                  <div className="h-10 w-full rounded shimmer" />
-                </div>
-              ) : orders.length === 0 ? (
-                <p className="text-xs text-muted-foreground py-4 text-center">No order records found yet.</p>
-              ) : (
-                <div className="divide-y divide-border/60">
-                  {orders.slice(0, 4).map((o) => (
-                    <div key={o.id} className="py-2.5 flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
-                        <Receipt className="size-3.5 text-muted-foreground" />
-                        <span className="font-mono font-medium text-foreground">#{o.orderNumber}</span>
-                        <span className="text-muted-foreground">
-                          {new Date(o.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="font-semibold text-foreground">
-                          ₹{Number(o.total || o.totalAmount || 0).toLocaleString('en-IN')}
-                        </span>
-                        <span className="capitalize text-[11px] text-muted-foreground">{o.status}</span>
-                      </div>
-                    </div>
-                  ))}
                 </div>
               )}
             </CardContent>
@@ -497,7 +396,7 @@ export function CustomerDashboardView() {
 
               {/* All Orders */}
               <Link
-                href="/customer/orders"
+                href="/customer-orders"
                 className="flex items-center justify-between p-3 rounded-lg border border-border/70 hover:bg-muted/40 transition-colors group"
               >
                 <div className="flex items-center gap-3">

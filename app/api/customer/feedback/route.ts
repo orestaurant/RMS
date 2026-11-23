@@ -78,7 +78,10 @@ export async function GET(request: NextRequest) {
           // Fetch recent feedback submitted by this customer
           previousFeedback = await prisma.customerFeedback.findFirst({
             where: {
-              customerId: customer.id,
+              OR: [
+                { customerId: customer.id },
+                ...(customer.email ? [{ customerEmail: customer.email.toLowerCase().trim() }] : []),
+              ],
               deletedAt: null,
             },
             orderBy: { createdAt: 'desc' },
@@ -104,6 +107,7 @@ export async function GET(request: NextRequest) {
             }
           : null,
         customer: customerInfo,
+        alreadyReviewed: Boolean(previousFeedback),
         previousFeedback,
         settings: {
           isGoogleEnabled,
@@ -189,6 +193,44 @@ export async function POST(request: NextRequest) {
       } catch (e) {
         console.warn('Could not read session customer in feedback POST:', e)
       }
+    }
+
+    // Strict 1-Review & 1-Discount Limit Check: Exactly 1 review allowed per customer
+    const cleanCustomerEmail = resolvedEmail ? String(resolvedEmail).trim().toLowerCase() : null
+    let existingReview = null
+    try {
+      existingReview = await prisma.customerFeedback.findFirst({
+        where: {
+          OR: [
+            ...(customerId ? [{ customerId }] : []),
+            ...(cleanCustomerEmail ? [{ customerEmail: cleanCustomerEmail }] : []),
+            ...(subId ? [{ googleSubId: subId }] : []),
+          ],
+          deletedAt: null,
+        },
+        select: {
+          id: true,
+          discountCode: true,
+          discountClaimed: true,
+          rating: true,
+          createdAt: true,
+        },
+      })
+    } catch (checkErr) {
+      console.warn('Error checking existing feedback:', checkErr)
+    }
+
+    if (existingReview) {
+      return NextResponse.json(
+        {
+          success: false,
+          alreadyReviewed: true,
+          message: 'You have already submitted a review. Exactly 1 review is allowed per customer.',
+          discountCode: existingReview.discountCode,
+          discountClaimed: existingReview.discountClaimed,
+        },
+        { status: 400 }
+      )
     }
 
     // 3. Generate instant discount voucher code

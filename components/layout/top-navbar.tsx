@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils'
 interface TopNavbarProps {
   title?: string
   subtitle?: string
+  children?: React.ReactNode
 }
 
 interface NotificationItem {
@@ -43,7 +44,7 @@ interface NotificationItem {
   createdAt?: string
 }
 
-export function TopNavbar({ title, subtitle }: TopNavbarProps) {
+export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
   const [commandOpen, setCommandOpen] = useState(false)
   const { theme, toggleTheme } = useTheme()
   const { auth } = useAuthContext()
@@ -126,25 +127,32 @@ export function TopNavbar({ title, subtitle }: TopNavbarProps) {
   return (
     <>
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
-      <header className="sticky top-0 z-40 flex h-14 items-center gap-3 border-b border-border bg-background/80 backdrop-blur-md px-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator orientation="vertical" className="h-5" />
+      <header className="sticky top-0 z-40 flex h-14 items-center gap-2 sm:gap-3 border-b border-border bg-background/80 backdrop-blur-md px-3 sm:px-4">
+        <SidebarTrigger className="-ml-1 shrink-0" />
+        <Separator orientation="vertical" className="h-5 shrink-0" />
 
         {/* Page Title & Subtitle */}
         {title && (
-          <div className="flex flex-col min-w-0">
-            <h1 className="text-sm font-semibold tracking-tight text-foreground truncate">
+          <div className="flex flex-col min-w-0 shrink-0">
+            <h1 className="text-xs sm:text-sm font-semibold tracking-tight text-foreground truncate">
               {title}
             </h1>
             {subtitle && (
-              <p className="text-[11px] text-muted-foreground truncate hidden sm:block">
+              <p className="text-[10px] sm:text-[11px] text-muted-foreground truncate hidden sm:block">
                 {subtitle}
               </p>
             )}
           </div>
         )}
 
-        <div className="flex-1" />
+        {/* Optional Custom Header Slot / Search Bar */}
+        {children ? (
+          <div className="flex-1 flex items-center justify-start min-w-0 ml-1 sm:ml-4">
+            {children}
+          </div>
+        ) : (
+          <div className="flex-1" />
+        )}
 
         {/* Live Notifications Bell */}
         <DropdownMenu>
