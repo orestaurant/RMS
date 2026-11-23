@@ -18,6 +18,10 @@ import {
   Music,
   Headphones,
   Disc3,
+  IndianRupee,
+  CheckCircle2,
+  ArrowUpRight,
+  TrendingUp,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -26,7 +30,6 @@ import { useAuthContext } from '@/hooks/useAuthContext'
 import { cn } from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 import { SongRequestModal } from '@/components/customer/song-request-modal'
-import { CustomerTopQrSearch } from '@/components/customer/customer-top-qr-search'
 
 interface CustomerProfile {
   id: string
@@ -169,15 +172,17 @@ export function CustomerDashboardView() {
   // Strict Account-Based Order Filtering:
   // Dynamically compute all 4 KPI metrics strictly from the authenticated customer's orders
   const activeOrders = orders.filter((o) =>
-    ['pending', 'confirmed', 'preparing', 'ready', 'accepted'].includes(String(o.status).toLowerCase())
+    ['pending', 'confirmed', 'preparing', 'cooking', 'ready', 'accepted'].includes(String(o.status).toLowerCase())
   )
   const completedOrders = orders.filter((o) =>
-    ['served', 'completed', 'cancelled', 'refunded'].includes(String(o.status).toLowerCase())
+    ['served', 'completed'].includes(String(o.status).toLowerCase())
   )
-  const totalOrdersCount = orders.length
-  const totalSpentAmount = orders
-    .filter((o) => !['cancelled', 'refunded'].includes(String(o.status).toLowerCase()))
-    .reduce((sum, o) => sum + (Number(o.total || o.totalAmount) || 0), 0)
+  const totalOrdersCount = orders.length > 0 ? orders.length : (profile?.totalOrders || 0)
+  const totalSpentAmount = orders.length > 0
+    ? orders
+        .filter((o) => !['cancelled', 'refunded'].includes(String(o.status).toLowerCase()))
+        .reduce((sum, o) => sum + (Number(o.total || o.totalAmount) || 0), 0)
+    : (profile?.totalSpent || 0)
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">
@@ -203,7 +208,7 @@ export function CustomerDashboardView() {
             size="sm"
             onClick={fetchCustomerData}
             disabled={loading}
-            className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
           >
             <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
             <span>Refresh</span>
@@ -211,8 +216,115 @@ export function CustomerDashboardView() {
         </div>
       </div>
 
-      {/* ── Top QR Code & Dishes Search Section ───────────────── */}
-      <CustomerTopQrSearch initialTable="1" />
+      {/* ── Customer Dining KPI Overview ──────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {loading ? (
+          Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="rounded-2xl border border-border/60 bg-card p-5 shadow-xs flex flex-col justify-between h-[130px]"
+            >
+              <div className="flex items-center justify-between">
+                <div className="h-3.5 w-24 rounded shimmer" />
+                <div className="size-10 rounded-xl shimmer" />
+              </div>
+              <div className="space-y-2">
+                <div className="h-7 w-20 rounded shimmer" />
+                <div className="h-3 w-32 rounded shimmer" />
+              </div>
+            </div>
+          ))
+        ) : (
+          <>
+            {/* Card 1: All Orders (Total Orders) */}
+            <Link
+              href="/customer-orders"
+              className="group relative flex flex-col justify-between p-5 rounded-2xl border border-border/70 bg-gradient-to-br from-card via-card to-blue-500/[0.04] hover:border-blue-500/40 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground group-hover:text-blue-500 transition-colors">
+                  All Orders
+                </span>
+                <div className="size-10 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0 group-hover:bg-blue-500 group-hover:text-white transition-all duration-200 shadow-xs">
+                  <ShoppingBag className="size-5" />
+                </div>
+              </div>
+              <div className="mt-2 space-y-1">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground font-mono">
+                    {totalOrdersCount}
+                  </span>
+                  <Badge variant="outline" className="border-blue-500/30 text-blue-600 dark:text-blue-400 bg-blue-500/5 text-[10px] font-semibold">
+                    Lifetime
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                  <span>Total dining orders placed</span>
+                  <ArrowUpRight className="size-3.5 text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </div>
+            </Link>
+
+            {/* Card 2: Total Spent */}
+            <Link
+              href="/customer-orders"
+              className="group relative flex flex-col justify-between p-5 rounded-2xl border border-border/70 bg-gradient-to-br from-card via-card to-emerald-500/[0.04] hover:border-emerald-500/40 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground group-hover:text-emerald-500 transition-colors">
+                  Total Spent
+                </span>
+                <div className="size-10 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:bg-emerald-500 group-hover:text-white transition-all duration-200 shadow-xs">
+                  <IndianRupee className="size-5" />
+                </div>
+              </div>
+              <div className="mt-2 space-y-1">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground font-mono">
+                    ₹{totalSpentAmount.toLocaleString('en-IN')}
+                  </span>
+                  <Badge variant="outline" className="border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 text-[10px] font-semibold">
+                    All Time
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                  <span>Dining investment</span>
+                  <ArrowUpRight className="size-3.5 text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </div>
+            </Link>
+
+            {/* Card 3: Completed Orders */}
+            <Link
+              href="/customer-orders"
+              className="group relative flex flex-col justify-between p-5 rounded-2xl border border-border/70 bg-gradient-to-br from-card via-card to-violet-500/[0.04] hover:border-violet-500/40 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground group-hover:text-violet-500 transition-colors">
+                  Completed Orders
+                </span>
+                <div className="size-10 rounded-xl bg-violet-500/10 text-violet-500 flex items-center justify-center shrink-0 group-hover:bg-violet-500 group-hover:text-white transition-all duration-200 shadow-xs">
+                  <CheckCircle2 className="size-5" />
+                </div>
+              </div>
+              <div className="mt-2 space-y-1">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground font-mono">
+                    {completedOrders.length}
+                  </span>
+                  <Badge variant="outline" className="border-violet-500/30 text-violet-600 dark:text-violet-400 bg-violet-500/5 text-[10px] font-semibold">
+                    Served
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                  <span>Delivered & enjoyed</span>
+                  <ArrowUpRight className="size-3.5 text-violet-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </div>
+            </Link>
+          </>
+        )}
+      </div>
 
       {/* ── 20-Second Live Chef Preparation Add-on Banner ───────── */}
       <LiveBatchAddonBanner
