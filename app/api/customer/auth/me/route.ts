@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getCustomerSession } from '@/lib/customer-auth'
+import { syncCustomerOrderStats } from '@/lib/customer-stats'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 export async function GET(request: NextRequest) {
   try {
@@ -58,7 +62,9 @@ export async function GET(request: NextRequest) {
       console.warn('Could not read customer feedback in /me:', e)
     }
 
-    const isFirstOrder = Number(customer.totalOrders || 0) === 0
+    // Sync & compute actual non-deleted orders count and total spent
+    const { totalOrders, totalSpent } = await syncCustomerOrderStats(customer.id)
+    const isFirstOrder = totalOrders === 0
 
     return NextResponse.json({
       success: true,
@@ -67,8 +73,8 @@ export async function GET(request: NextRequest) {
         name: customer.name || 'Customer',
         email: customer.email,
         mobile: customer.mobile || customer.phone || '',
-        totalOrders: customer.totalOrders,
-        totalSpent: Number(customer.totalSpent || 0),
+        totalOrders,
+        totalSpent,
         createdAt: customer.createdAt,
         isFirstOrder,
         hasSubmittedReview: Boolean(feedback),

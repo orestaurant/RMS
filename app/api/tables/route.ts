@@ -9,7 +9,10 @@ import { getMockAuthContext } from '@/api/middleware/auth'
 import { extractTenantContext } from '@/api/middleware/tenant'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { ValidationError } from '@/api/utils/errors'
-import { getPOSTablesCache, setPOSTablesCache, invalidatePOSTablesCache } from '@/lib/pos-cache'
+import { invalidatePOSTablesCache } from '@/lib/pos-cache'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,17 +26,6 @@ export async function GET(request: NextRequest) {
         select: { id: true },
       })
       branchId = defaultBranch?.id || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
-    }
-
-    const cacheKey = `${branchId || 'default'}_tables`
-    const cached = getPOSTablesCache(cacheKey)
-    if (cached) {
-      return NextResponse.json(cached, {
-        headers: {
-          'Cache-Control': 'public, max-age=5, stale-while-revalidate=10',
-          'X-Tables-Cache': 'HIT',
-        },
-      })
     }
 
     const tables = await prisma.restaurantTable.findMany({
@@ -139,12 +131,12 @@ export async function GET(request: NextRequest) {
     })
 
     const responsePayload = successResponse(formatted)
-    setPOSTablesCache(cacheKey, responsePayload)
 
     return NextResponse.json(responsePayload, {
       headers: {
-        'Cache-Control': 'public, max-age=5, stale-while-revalidate=10',
-        'X-Tables-Cache': 'MISS',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
       },
     })
   } catch (error: any) {
@@ -246,24 +238,29 @@ export async function PATCH(request: NextRequest) {
       select: { metadata: true },
     })
 
-    const existingMeta = (currentTable?.metadata as Record<string, any>) || {}
-    const updatedMeta = {
-      ...existingMeta,
-      ...(customStatus !== undefined ? { customStatus } : {}),
-      ...(status === 'available'
-        ? { customStatus: undefined, waiter: undefined, guestCount: undefined, occupiedSince: undefined }
-        : {}),
-      ...(waiter !== undefined ? { waiter } : {}),
-      ...(guestCount !== undefined ? { guestCount } : {}),
-      ...(status === 'occupied' && !existingMeta.occupiedSince
-        ? { occupiedSince: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) }
-        : {}),
+    if (!currentTable) {
+      return NextResponse.json(errorResponse('Table not found', 'NOT_FOUND'), { status: 404 })
     }
 
-    if (status === 'available') {
+    const existingMeta = (currentTable?.metadata as Record<string, any>) || {}
+    const updatedMeta: Record<string, any> = {
+      ...existingMeta,
+      ...(customStatus !== undefined ? { customStatus } : {}),
+      ...(waiter !== undefined ? { waiter } : {}),
+      ...(guestCount !== undefined ? { guestCount } : {}),
+    }
+
+    if (status === 'occupied') {
+      delete updatedMeta.customStatus
+      if (!updatedMeta.occupiedSince) {
+        updatedMeta.occupiedSince = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      }
+    } else if (status === 'available') {
       delete updatedMeta.customStatus
       delete updatedMeta.occupiedSince
       delete updatedMeta.guestCount
+      delete updatedMeta.waiter
+      delete updatedMeta.waiterId
 
       // Close any active orders associated with this table
       await prisma.order.updateMany({
@@ -289,6 +286,8 @@ export async function PATCH(request: NextRequest) {
           status: 'completed',
         },
       }).catch((err) => console.error('Error completing orders when freeing table:', err))
+    } else if (status === 'reserved') {
+      delete updatedMeta.customStatus
     }
 
     const updated = await prisma.restaurantTable.update({
@@ -300,7 +299,11 @@ export async function PATCH(request: NextRequest) {
     })
 
     invalidatePOSTablesCache()
-    return NextResponse.json(successResponse(updated, 'Table updated successfully'))
+    return NextResponse.json(successResponse(updated, 'Table updated successfully'), {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      },
+    })
   } catch (error: any) {
     console.error('Error updating table:', error)
     if (error instanceof ValidationError) {

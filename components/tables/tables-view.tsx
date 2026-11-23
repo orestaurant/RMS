@@ -25,7 +25,6 @@ import {
   ShieldCheck,
   Check,
   CheckCircle2,
-  ShoppingBag,
   SlidersHorizontal,
   UserCheck,
 } from 'lucide-react'
@@ -55,7 +54,6 @@ import {
 import { cn } from '@/lib/utils'
 import { TableQRGenerator } from '@/components/tables/table-qr-generator'
 import { TableDishMenuModal } from '@/components/tables/table-dish-menu-modal'
-import { TakeawayQRScannerModal } from '@/components/tables/takeaway-qr-scanner-modal'
 import { WaiterHistoryModal } from '@/components/tables/waiter-history-modal'
 import { KpiDetailDrawer } from '@/components/tables/kpi-detail-drawer'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
@@ -558,9 +556,6 @@ export function TablesView() {
   // Dish Menu Modal state
   const [menuTableTarget, setMenuTableTarget] = useState<TableData | null>(null)
 
-  // Takeaway QR Scanner Modal state
-  const [takeawayScannerOpen, setTakeawayScannerOpen] = useState(false)
-
   // History Modal state
   const [historyModalOpen, setHistoryModalOpen] = useState(false)
 
@@ -697,7 +692,13 @@ export function TablesView() {
       setLoading(true)
       setError(null)
       const url = branchId ? `/api/tables?branchId=${encodeURIComponent(branchId)}` : '/api/tables'
-      const res = await fetch(url)
+      const res = await fetch(url, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      })
       const json = await res.json()
 
       if (!res.ok || !json.success) {
@@ -707,7 +708,13 @@ export function TablesView() {
       // Check for any active requested bills
       let requestedTableNumbers: Set<string> = new Set()
       try {
-        const billsRes = await fetch('/api/bills?status=REQUESTED')
+        const billsRes = await fetch('/api/bills?status=REQUESTED', {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            Pragma: 'no-cache',
+          },
+        })
         if (billsRes.ok) {
           const billsJson = await billsRes.json()
           if (billsJson.success && Array.isArray(billsJson.data?.bills)) {
@@ -794,6 +801,7 @@ export function TablesView() {
 
   // Update table status in database
   const handleUpdateStatus = async (tableId: string, newStatus: TableStatus) => {
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
     try {
       setTables((prev) =>
         prev.map((t) =>
@@ -802,7 +810,7 @@ export function TablesView() {
                 ...t,
                 status: newStatus,
                 order: newStatus === 'available' ? undefined : t.order,
-                occupiedSince: newStatus === 'available' ? undefined : t.occupiedSince,
+                occupiedSince: newStatus === 'available' ? undefined : (t.occupiedSince || nowTime),
                 guestCount: newStatus === 'available' ? undefined : t.guestCount,
                 billRequested: newStatus === 'available' ? false : t.billRequested,
               }
@@ -812,12 +820,19 @@ export function TablesView() {
 
       const res = await fetch('/api/tables', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache',
+        },
         body: JSON.stringify({ id: tableId, status: newStatus }),
       })
 
-      if (!res.ok) fetchTables()
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to update table status')
+      }
     } catch (err) {
+      console.error('Failed to update table status, reverting:', err)
       fetchTables()
     }
   }
@@ -1079,13 +1094,6 @@ export function TablesView() {
         />
       )}
 
-      {/* Takeaway QR Scanner Modal */}
-      <TakeawayQRScannerModal
-        open={takeawayScannerOpen}
-        onOpenChange={setTakeawayScannerOpen}
-        onOrderLoaded={() => fetchTables()}
-      />
-
       {/* Waiter History Modal */}
       <WaiterHistoryModal
         open={historyModalOpen}
@@ -1262,17 +1270,6 @@ export function TablesView() {
               </>
             )}
           </button>
-
-          {/* Takeaway QR Scanner Action */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setTakeawayScannerOpen(true)}
-            className="h-8 gap-1.5 text-xs font-bold border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
-          >
-            <ShoppingBag className="size-3.5" />
-            <span>Scan Takeaway QR</span>
-          </Button>
 
           {/* History Action */}
           <Button

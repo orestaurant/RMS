@@ -170,19 +170,21 @@ export function CustomerDashboardView() {
   }, [fetchCustomerData])
 
   // Strict Account-Based Order Filtering:
-  // Dynamically compute all 4 KPI metrics strictly from the authenticated customer's orders
-  const activeOrders = orders.filter((o) =>
+  // Dynamically compute all KPI metrics strictly from the authenticated customer's non-deleted, non-cancelled orders
+  const validOrders = orders.filter(
+    (o) => !['cancelled', 'refunded'].includes(String(o.status).toLowerCase())
+  )
+  const activeOrders = validOrders.filter((o) =>
     ['pending', 'confirmed', 'preparing', 'cooking', 'ready', 'accepted'].includes(String(o.status).toLowerCase())
   )
-  const completedOrders = orders.filter((o) =>
+  const completedOrders = validOrders.filter((o) =>
     ['served', 'completed'].includes(String(o.status).toLowerCase())
   )
-  const totalOrdersCount = orders.length > 0 ? orders.length : (profile?.totalOrders || 0)
-  const totalSpentAmount = orders.length > 0
-    ? orders
-        .filter((o) => !['cancelled', 'refunded'].includes(String(o.status).toLowerCase()))
-        .reduce((sum, o) => sum + (Number(o.total || o.totalAmount) || 0), 0)
-    : (profile?.totalSpent || 0)
+  const totalOrdersCount = validOrders.length
+  const totalSpentAmount = validOrders.reduce(
+    (sum, o) => sum + (Number(o.total || o.totalAmount) || 0),
+    0
+  )
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">

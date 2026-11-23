@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { updateFallbackOrder, removeFallbackOrder, invalidateLiveOrdersCache, invalidateKDSCache } from '@/lib/kds-utils'
+import { syncCustomerOrderStats } from '@/lib/customer-stats'
 
 const isUuid = (val: string) =>
   typeof val === 'string' &&
@@ -235,6 +236,10 @@ export async function DELETE(
             status: 'cancelled',
           },
         })
+
+        if (existing.customerId) {
+          await syncCustomerOrderStats(existing.customerId)
+        }
       }
     } catch (dbErr) {
       console.warn('Prisma order delete notice:', dbErr)

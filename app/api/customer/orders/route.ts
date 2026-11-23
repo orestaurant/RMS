@@ -9,6 +9,10 @@ import {
   invalidateLiveOrdersCache,
 } from '@/lib/kds-utils'
 import { invalidateDashboardStatsCache } from '@/lib/dashboard-cache'
+import { syncCustomerOrderStats } from '@/lib/customer-stats'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 /**
  * GET /api/customer/orders
@@ -425,7 +429,7 @@ export async function DELETE(request: NextRequest) {
 
     const order = await prisma.order.findFirst({
       where: whereClause,
-      select: { id: true, orderNumber: true, status: true, branchId: true },
+      select: { id: true, orderNumber: true, status: true, branchId: true, customerId: true },
     })
 
     if (!order) {
@@ -443,6 +447,11 @@ export async function DELETE(request: NextRequest) {
         status: 'cancelled',
       },
     })
+
+    // Recalculate customer's totalOrders and totalSpent if customerId is present
+    if (order.customerId) {
+      await syncCustomerOrderStats(order.customerId)
+    }
 
     // Invalidate caches
     invalidateKDSCache()

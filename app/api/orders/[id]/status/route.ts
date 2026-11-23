@@ -15,6 +15,7 @@ import {
   normalizeKdsStatus,
 } from '@/lib/kds-utils'
 import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
+import { syncCustomerOrderStats } from '@/lib/customer-stats'
 
 // Valid status transitions state machine
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
@@ -183,6 +184,11 @@ export async function PATCH(
       where: { id: existing.id },
       data: updateData,
     })
+
+    // If order was cancelled, re-sync customer order stats
+    if ((normalizedTarget === 'cancelled' || normalizedTarget === 'CANCELLED') && existing.customerId) {
+      syncCustomerOrderStats(existing.customerId).catch(() => {})
+    }
 
     // Update any linked KitchenTickets if present
     if (existing.kitchenTickets && existing.kitchenTickets.length > 0) {
