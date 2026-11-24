@@ -109,10 +109,6 @@ const CURATED_FOOD_PHOTOS = [
     url: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=600&q=80',
   },
   {
-    name: 'Pasta Alfredo',
-    url: 'https://images.unsplash.com/photo-1621996346565-e3d5d6281691?auto=format&fit=crop&w=600&q=80',
-  },
-  {
     name: 'Gulab Jamun',
     url: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=600&q=80',
   },
@@ -148,7 +144,7 @@ export function TableDishMenuModal({
   const [vipDishNotes, setVipDishNotes] = useState('')
   const [vipCustomDishes, setVipCustomDishes] = useState<Array<{ name: string; price: number; notes: string }>>([])
 
-  // Add Dish to Catalog with AI / AIO / GEO / GIO Writer modal
+  // Add Dish to Catalog with AI Assistant modal
   const [addDishOpen, setAddDishOpen] = useState(false)
   const [newDishName, setNewDishName] = useState('')
   const [newDishPrice, setNewDishPrice] = useState('')
@@ -351,7 +347,7 @@ export function TableDishMenuModal({
     setVipModalOpen(false)
   }
 
-  // AI Description Generator (AI, AIO, GEO, GIO optimized)
+  // AI Description Generator
   const handleGenerateAiDescription = () => {
     if (!newDishName.trim()) {
       alert('Please enter a dish name first to generate AI description.')
@@ -361,7 +357,7 @@ export function TableDishMenuModal({
     setGeneratingAi(true)
     setTimeout(() => {
       const vegTag = newDishIsVeg ? 'Vegetarian' : 'Non-Vegetarian'
-      const aiGenerated = `Chef's signature handcrafted ${newDishName.trim()}, prepared with authentic aromatic spices, farm-fresh ingredients, and traditional flame roasting technique. High protein, ${vegTag}, served hot with gourmet seasoning. [AIO: Authentic Recipe] [GEO: Mumbai Top Rated] [GIO: Chef Recommended]`
+      const aiGenerated = `Chef's signature handcrafted ${newDishName.trim()}, prepared with authentic aromatic spices, farm-fresh ingredients, and traditional flame roasting technique. High protein, ${vegTag}, served hot with gourmet seasoning.`
       setNewDishDesc(aiGenerated)
       setGeneratingAi(false)
     }, 400)
@@ -505,7 +501,10 @@ export function TableDishMenuModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[92vh] flex flex-col p-0 overflow-hidden bg-card border-border shadow-2xl rounded-3xl">
+      <DialogContent
+        closeButtonClassName="top-3 sm:top-3.5 right-3 sm:right-4 z-20 text-muted-foreground hover:text-foreground cursor-pointer rounded-full"
+        className="sm:max-w-3xl max-h-[92vh] flex flex-col p-0 overflow-hidden bg-card border-border shadow-2xl rounded-3xl"
+      >
         <DialogHeader className="p-4 sm:p-5 pb-3 border-b border-border shrink-0 bg-muted/20">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -528,13 +527,13 @@ export function TableDishMenuModal({
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 mr-7 sm:mr-8">
               {/* VIP Unique Dish Button */}
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setVipModalOpen(true)}
-                className="h-8 text-xs font-bold gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                className="h-8 text-xs font-bold gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 cursor-pointer"
               >
                 <Crown className="size-3.5" />
                 <span className="hidden sm:inline">+ VIP Dish</span>
@@ -545,7 +544,7 @@ export function TableDishMenuModal({
                 <Button
                   size="sm"
                   onClick={() => setAddDishOpen(true)}
-                  className="h-8 text-xs font-bold gap-1"
+                  className="h-8 text-xs font-bold gap-1 cursor-pointer"
                 >
                   <Plus className="size-3.5" />
                   <span className="hidden sm:inline">Add Dish</span>
@@ -931,16 +930,16 @@ export function TableDishMenuModal({
           </DialogContent>
         </Dialog>
 
-        {/* ── Add Dish to Catalog with Photo Upload & AI/AIO/GEO/GIO Writer ── */}
+        {/* ── Add Dish to Catalog with Photo Upload & AI Description ── */}
         <Dialog open={addDishOpen} onOpenChange={setAddDishOpen}>
           <DialogContent className="sm:max-w-lg max-h-[92vh] overflow-y-auto bg-card border-border shadow-2xl rounded-3xl">
             <DialogHeader>
               <DialogTitle className="text-base font-bold flex items-center gap-2 text-primary">
                 <Sparkles className="size-4" />
-                Add Dish to Catalog (with AI / AIO / GEO / GIO Writer)
+                Add Dish to Catalog (with AI Description)
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground">
-                Add a new dish with instant photo upload / URL preview and AI-generated metadata.
+                Add a new dish with instant photo upload / URL preview and AI-generated description.
               </DialogDescription>
             </DialogHeader>
 
@@ -1137,12 +1136,12 @@ export function TableDishMenuModal({
                 )}
               </div>
 
-              {/* AI / AIO / GEO / GIO Writer */}
+              {/* AI Description */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-foreground flex items-center gap-1">
                     <Sparkles className="size-3.5 text-primary" />
-                    AI / AIO / GEO / GIO Description
+                    AI Description
                   </label>
                   <Button
                     type="button"
@@ -1153,11 +1152,11 @@ export function TableDishMenuModal({
                     className="h-6 px-2 text-[10px] font-bold gap-1 border-primary/40 text-primary hover:bg-primary/10"
                   >
                     <Wand2 className="size-3" />
-                    {generatingAi ? 'Generating...' : 'Auto-Generate AI Metadata'}
+                    {generatingAi ? 'Generating...' : 'Auto-Generate AI Description'}
                   </Button>
                 </div>
                 <Textarea
-                  placeholder="Generates search-engine and AI-agent optimized dish description..."
+                  placeholder="Generates rich culinary dish description..."
                   value={newDishDesc}
                   onChange={(e) => setNewDishDesc(e.target.value)}
                   className="text-xs resize-none h-18"

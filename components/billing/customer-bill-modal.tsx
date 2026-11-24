@@ -695,15 +695,15 @@ export function CustomerBillModal({
             )}
 
             {/* ── 2. Quick Action Bar: Split Bill & Ask for Pending Bill ── */}
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2 shrink-0">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 onClick={() => setShowSplitModal(true)}
-                className="h-9.5 text-xs font-bold gap-1.5 rounded-xl border-border/80 hover:border-primary/40 cursor-pointer"
+                className="h-11 min-h-[44px] text-xs sm:text-sm font-bold gap-2 rounded-xl border-border/80 hover:border-primary/40 cursor-pointer transition-all active:scale-[0.99]"
               >
-                <Users className="size-3.5 text-primary" />
+                <Users className="size-4 text-primary shrink-0" />
                 <span>Split Bill</span>
               </Button>
 
@@ -713,9 +713,9 @@ export function CustomerBillModal({
                 size="sm"
                 disabled={askBillLoading || pendingBillAlertDone}
                 onClick={handleAskPendingBill}
-                className="h-9.5 text-xs font-bold gap-1.5 rounded-xl border-border/80 hover:border-primary/40 cursor-pointer"
+                className="h-11 min-h-[44px] text-xs sm:text-sm font-bold gap-2 rounded-xl border-amber-500/40 bg-amber-50/40 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 hover:bg-amber-100/60 dark:hover:bg-amber-900/40 cursor-pointer transition-all active:scale-[0.99]"
               >
-                <BellRing className={cn('size-3.5 text-amber-500', askBillLoading && 'animate-spin')} />
+                <BellRing className={cn('size-4 text-amber-500 shrink-0', askBillLoading && 'animate-spin')} />
                 <span>{pendingBillAlertDone ? 'Bill Alerted' : 'Ask for Pending Bill'}</span>
               </Button>
             </div>
@@ -915,14 +915,14 @@ export function CustomerBillModal({
         {/* Modal Action Footer */}
         {!paySuccess && (
           <div className="p-4 border-t border-border bg-card shrink-0 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <Button
                 variant="outline"
                 disabled={loading || payLoading || physicalRequested}
                 onClick={handleRequestPhysicalBill}
-                className="h-11 rounded-2xl font-bold text-xs gap-1.5 border-border hover:bg-muted"
+                className="w-full h-12 min-h-[48px] rounded-2xl font-bold text-xs sm:text-sm gap-2 border-border hover:bg-muted cursor-pointer shrink-0"
               >
-                <Banknote className="size-4 text-muted-foreground" />
+                <Banknote className="size-4.5 text-muted-foreground shrink-0" />
                 <span>{physicalRequested ? 'Bill Requested' : 'Pay Cash / Physical Bill'}</span>
               </Button>
 
@@ -936,9 +936,9 @@ export function CustomerBillModal({
                     handlePayOnline('UPI')
                   }
                 }}
-                className="h-11 rounded-2xl font-extrabold text-xs gap-1.5 bg-primary text-primary-foreground shadow-md hover:bg-primary/90"
+                className="w-full h-12 min-h-[48px] rounded-2xl font-extrabold text-xs sm:text-sm gap-2 bg-primary text-primary-foreground shadow-md hover:bg-primary/90 cursor-pointer shrink-0"
               >
-                <QrCode className="size-4" />
+                <QrCode className="size-4.5 shrink-0" />
                 <span>{showUpiQr ? 'Confirm UPI Payment' : 'Pay Online / UPI QR'}</span>
               </Button>
             </div>

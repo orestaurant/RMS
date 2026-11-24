@@ -1241,18 +1241,6 @@ export function CustomerMenu() {
               )}
             </Button>
 
-            {/* Song Playing Request (DJ Sync) Trigger */}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowSongModal(true)}
-              className="h-9 px-2.5 rounded-xl font-bold gap-1.5 border-pink-500/40 text-pink-600 dark:text-pink-400 hover:bg-pink-500/10 shadow-xs cursor-pointer"
-              title="Request a song to the live DJ"
-            >
-              <Music className="size-3.5 text-pink-500" />
-              <span className="hidden sm:inline">DJ Song</span>
-            </Button>
-
             {/* Bring Bill / Pay Button (Visible once customer has placed at least one order) */}
             {tableOrders.length > 0 && (
               <Button
@@ -1545,31 +1533,31 @@ export function CustomerMenu() {
 
       {/* 4. LIVE TABLE ORDERS & REAL-TIME 5-STEP TRACKER MODAL */}
       {showOrdersModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in">
-          <div className="relative w-full max-w-xl bg-card border border-border shadow-2xl rounded-3xl overflow-hidden p-5 sm:p-6 text-left space-y-4 max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-3 sm:p-4 overflow-hidden animate-in fade-in">
+          <div className="relative w-full max-w-xl bg-card border border-border shadow-2xl rounded-3xl overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[88vh] text-left">
             {/* Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-border/70">
+            <div className="px-4 py-3 sm:px-6 sm:py-4 border-b border-border/70 shrink-0 bg-muted/20 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="size-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center font-bold shadow-xs">
-                  <Clock className="size-5" />
+                <div className="size-9 sm:size-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center font-bold shadow-xs shrink-0">
+                  <Clock className="size-4.5 sm:size-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-extrabold text-foreground flex items-center gap-2">
+                  <h2 className="text-sm sm:text-base font-extrabold text-foreground flex items-center gap-2">
                     Live Table Orders
                     {totalActiveOrders > 0 && (
                       <span className="size-2 rounded-full bg-emerald-500 animate-ping" />
                     )}
                   </h2>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-[11px] sm:text-xs text-muted-foreground">
                     Live status tracking for {displayTableBadge} · updates automatically
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1">
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-8 rounded-xl text-muted-foreground hover:text-foreground"
+                  className="size-8 rounded-xl text-muted-foreground hover:text-foreground cursor-pointer"
                   onClick={() => fetchTableOrders()}
                   title="Refresh Orders"
                 >
@@ -1578,6 +1566,7 @@ export function CustomerMenu() {
                 <button
                   onClick={() => setShowOrdersModal(false)}
                   className="p-1.5 rounded-xl hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
+                  aria-label="Close modal"
                 >
                   <X className="size-5" />
                 </button>
@@ -1585,7 +1574,7 @@ export function CustomerMenu() {
             </div>
 
             {/* Orders List with Stepper */}
-            <div className="overflow-y-auto flex-1 space-y-4 pr-1">
+            <div className="overflow-y-auto flex-1 px-3.5 py-3 sm:px-6 sm:py-4 space-y-3 min-h-0 overscroll-contain">
               {tableOrders.length === 0 ? (
                 <div className="py-14 text-center text-muted-foreground space-y-3">
                   <div className="size-12 rounded-2xl bg-muted/50 text-muted-foreground flex items-center justify-center mx-auto">
@@ -1624,19 +1613,19 @@ export function CustomerMenu() {
                   return (
                     <div
                       key={ord.id || ord.orderNumber}
-                      className="p-4 rounded-2xl bg-card border border-border/80 shadow-xs space-y-3.5 hover:border-primary/40 transition-colors"
+                      className="p-3 sm:p-4 rounded-2xl bg-card border border-border/80 shadow-xs space-y-2.5 sm:space-y-3 hover:border-primary/40 transition-colors"
                     >
                       {/* Ticket Header */}
                       <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono font-bold text-xs text-foreground">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                            <span className="font-mono font-bold text-xs sm:text-sm text-foreground truncate">
                               {ord.orderNumber || ord.id}
                             </span>
                             <Badge
                               variant="outline"
                               className={cn(
-                                'text-[10px] font-extrabold capitalize px-2 py-0.5',
+                                'text-[10px] font-extrabold capitalize px-2 py-0.5 shrink-0',
                                 stepInfo.badgeColor
                               )}
                             >
@@ -1647,13 +1636,13 @@ export function CustomerMenu() {
                             Placed {ord.createdAt ? new Date(ord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'recently'}
                           </span>
                         </div>
-                        <div className="flex flex-col items-end gap-1.5 shrink-0">
-                          <div className="text-right">
-                            <span className="text-sm font-extrabold text-primary block">
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          <div className="text-right leading-tight">
+                            <span className="text-sm sm:text-base font-extrabold text-primary block">
                               ₹{Number(ord.totalAmount || ord.total || 0).toFixed(2)}
                             </span>
                             <span className="text-[10px] text-muted-foreground capitalize">
-                              {ord.paymentStatus || 'pay at counter'}
+                              {ord.paymentStatus || 'Pending'}
                             </span>
                           </div>
                           <div className="flex items-center gap-1.5 flex-wrap justify-end">
@@ -1665,7 +1654,7 @@ export function CustomerMenu() {
                                 setShowOrdersModal(false)
                                 setShowBillModal(true)
                               }}
-                              className="h-7 px-2.5 text-[11px] font-extrabold gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer z-20 pointer-events-auto"
+                              className="h-6.5 px-2 text-[10px] sm:text-[11px] font-extrabold gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer z-20 pointer-events-auto"
                               title="Bill only this specific order"
                             >
                               <Receipt className="size-3" />
@@ -1681,7 +1670,7 @@ export function CustomerMenu() {
                                   setShowOrdersModal(false)
                                   setIsCartOpen(false)
                                 }}
-                                className="h-7 px-2 text-[11px] font-extrabold gap-1 rounded-lg bg-orange-500 hover:bg-orange-600 text-white shadow-xs cursor-pointer z-20 pointer-events-auto"
+                                className="h-6.5 px-2 text-[10px] sm:text-[11px] font-extrabold gap-1 rounded-lg bg-orange-500 hover:bg-orange-600 text-white shadow-xs cursor-pointer z-20 pointer-events-auto"
                                 title="Add dishes directly to this live order"
                               >
                                 <Plus className="size-3" />
@@ -1692,11 +1681,11 @@ export function CustomerMenu() {
                         </div>
                       </div>
 
-                      {/* ── Visual Stepper Tracker (Served step hidden until served) ── */}
-                      <div className="py-3 px-3 bg-muted/40 rounded-2xl border border-border/50">
+                      {/* ── Visual Stepper Tracker (Compact & Responsive) ── */}
+                      <div className="py-2.5 px-2.5 sm:px-3 bg-muted/30 rounded-xl sm:rounded-2xl border border-border/50">
                         <div className="flex items-center justify-between relative px-2 sm:px-4">
                           {/* Connector line container with strict bounds and overflow-hidden */}
-                          <div className="absolute top-3.5 left-5 right-5 h-1 z-0 overflow-hidden rounded-full bg-muted-foreground/20">
+                          <div className="absolute top-3 left-4 right-4 h-0.5 sm:h-1 z-0 overflow-hidden rounded-full bg-muted-foreground/20">
                             <div
                               className="h-full bg-gradient-to-r from-warning via-primary to-emerald-500 transition-all duration-500 rounded-full"
                               style={{
@@ -1711,26 +1700,26 @@ export function CustomerMenu() {
                             const StepIcon = st.icon
 
                             return (
-                              <div key={st.step} className="flex flex-col items-center z-10 gap-1.5">
+                              <div key={st.step} className="flex flex-col items-center z-10 gap-1">
                                 <div
                                   className={cn(
-                                    'size-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all duration-300',
+                                    'size-6 sm:size-7 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-300',
                                     isDone && !isCurrent
                                       ? 'bg-emerald-500 text-black shadow-xs font-black'
                                       : isCurrent
-                                      ? 'bg-primary text-primary-foreground ring-4 ring-primary/20 animate-pulse shadow-md font-black scale-110'
+                                      ? 'bg-primary text-primary-foreground ring-2 sm:ring-4 ring-primary/20 animate-pulse shadow-md font-black scale-105 sm:scale-110'
                                       : 'bg-card border border-border text-muted-foreground/60'
                                   )}
                                 >
                                   {isDone && !isCurrent ? (
-                                    <Check className="size-3.5 stroke-[3]" />
+                                    <Check className="size-3 sm:size-3.5 stroke-[3]" />
                                   ) : (
-                                    <StepIcon className="size-3.5" />
+                                    <StepIcon className="size-3 sm:size-3.5" />
                                   )}
                                 </div>
                                 <span
                                   className={cn(
-                                    'text-[10px] tracking-tight text-center leading-tight',
+                                    'text-[9px] sm:text-[10px] tracking-tight text-center leading-tight',
                                     isCurrent
                                       ? 'font-black text-foreground'
                                       : isDone
@@ -1746,11 +1735,11 @@ export function CustomerMenu() {
                         </div>
 
                         {/* Status Description Explainer */}
-                        <div className="mt-3.5 p-2.5 rounded-xl bg-background/90 border border-border/60 text-xs flex items-center gap-2">
-                          <span className="font-bold text-foreground shrink-0 text-[11px] uppercase tracking-wide">
+                        <div className="mt-2 sm:mt-2.5 p-2 rounded-lg sm:rounded-xl bg-background/90 border border-border/60 text-xs flex items-center gap-2">
+                          <span className="font-bold text-foreground shrink-0 text-[10px] sm:text-[11px] uppercase tracking-wide">
                             Live Update:
                           </span>
-                          <span className={cn('text-xs font-semibold leading-snug', stepInfo.badgeColor.split(' ')[2])}>
+                          <span className={cn('text-[11px] sm:text-xs font-semibold leading-snug', stepInfo.badgeColor.split(' ')[2])}>
                             {stepInfo.description}
                           </span>
                         </div>
@@ -1787,7 +1776,11 @@ export function CustomerMenu() {
                       )}
 
                       {/* Ordered Items List with Real-Time Preparation Timing & Status */}
-                      <div className="space-y-2 pt-1 text-xs border-t border-border/50">
+                      <div className="space-y-1.5 pt-1 text-xs border-t border-border/50">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider px-0.5">
+                          <span>Ordered Items ({itemsList.length})</span>
+                          <span className="text-[10px] font-normal lowercase text-muted-foreground/75">live status</span>
+                        </div>
                         {itemsList.map((it: any, i: number) => {
                           const dishPrepMinutes = Number(it.prepTime || it.preparationTimeMinutes || 15)
                           const orderStartTime = ord.createdAt ? new Date(ord.createdAt).getTime() : Date.now()
@@ -1801,41 +1794,45 @@ export function CustomerMenu() {
                           const isDishServed = ordStatus === 'served' || ordStatus === 'completed'
 
                           return (
-                            <div key={i} className="flex flex-col gap-1 p-2.5 rounded-xl bg-muted/20 border border-border/40">
-                              <div className="flex justify-between items-center text-foreground font-medium">
-                                <span className="font-semibold text-xs">
-                                  <span className="text-primary font-bold mr-1.5">{it.quantity}x</span>
-                                  {it.name}
-                                </span>
-                                <span className="text-foreground font-mono font-bold text-xs">
+                            <div key={i} className="p-2 sm:p-2.5 rounded-xl bg-muted/20 border border-border/40 space-y-1">
+                              <div className="flex justify-between items-center text-foreground font-medium gap-2">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="size-5 rounded-md bg-primary/10 text-primary flex items-center justify-center font-bold text-[10px] shrink-0">
+                                    {it.quantity}x
+                                  </span>
+                                  <span className="font-semibold text-xs text-foreground truncate">
+                                    {it.name}
+                                  </span>
+                                </div>
+                                <span className="text-foreground font-mono font-bold text-xs shrink-0">
                                   ₹{Number(it.total || (it.price || 0) * it.quantity).toFixed(2)}
                                 </span>
                               </div>
 
                               {/* Real-time Dish Timing & Status Badge */}
-                              <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5">
+                              <div className="flex items-center justify-between gap-1.5 flex-wrap">
                                 <div className="flex items-center gap-1.5">
                                   {isDishPending && (
-                                    <Badge variant="outline" className="text-[10px] font-bold bg-amber-500/15 text-amber-500 border-amber-500/30 gap-1 px-1.5 py-0 h-4.5">
-                                      <Clock className="size-2.5 animate-spin text-amber-500" />
+                                    <Badge variant="outline" className="text-[9px] font-bold bg-amber-500/15 text-amber-500 border-amber-500/30 gap-1 px-1.5 py-0 h-4">
+                                      <Clock className="size-2 animate-spin text-amber-500" />
                                       <span>Pending Approval</span>
                                     </Badge>
                                   )}
                                   {isDishCooking && (
-                                    <Badge variant="outline" className="text-[10px] font-extrabold bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30 gap-1 px-1.5 py-0 h-4.5">
-                                      <Flame className="size-2.5 text-orange-500 animate-pulse" />
-                                      <span>Preparing ({remainingMins} mins left)</span>
+                                    <Badge variant="outline" className="text-[9px] font-extrabold bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30 gap-1 px-1.5 py-0 h-4">
+                                      <Flame className="size-2 text-orange-500 animate-pulse" />
+                                      <span>Cooking ({remainingMins}m left)</span>
                                     </Badge>
                                   )}
                                   {isDishReady && (
-                                    <Badge variant="outline" className="text-[10px] font-bold bg-emerald-500/15 text-emerald-500 border-emerald-500/30 gap-1 px-1.5 py-0 h-4.5">
-                                      <Sparkles className="size-2.5 text-emerald-500" />
+                                    <Badge variant="outline" className="text-[9px] font-bold bg-emerald-500/15 text-emerald-500 border-emerald-500/30 gap-1 px-1.5 py-0 h-4">
+                                      <Sparkles className="size-2 text-emerald-500" />
                                       <span>Ready to Serve</span>
                                     </Badge>
                                   )}
                                   {isDishServed && (
-                                    <Badge variant="outline" className="text-[10px] font-bold bg-sky-500/15 text-sky-500 border-sky-500/30 gap-1 px-1.5 py-0 h-4.5">
-                                      <UtensilsCrossed className="size-2.5 text-sky-500" />
+                                    <Badge variant="outline" className="text-[9px] font-bold bg-sky-500/15 text-sky-500 border-sky-500/30 gap-1 px-1.5 py-0 h-4">
+                                      <UtensilsCrossed className="size-2 text-sky-500" />
                                       <span>Served</span>
                                     </Badge>
                                   )}
@@ -1846,9 +1843,9 @@ export function CustomerMenu() {
                               </div>
 
                               {(it.notes || it.specialInstructions) && (
-                                <span className="text-[10px] text-amber-500/90 font-medium pl-1">
+                                <p className="text-[10px] text-amber-600 dark:text-amber-400 font-medium pl-1 truncate">
                                   ↳ {it.notes || it.specialInstructions}
-                                </span>
+                                </p>
                               )}
                             </div>
                           )
@@ -1869,13 +1866,14 @@ export function CustomerMenu() {
             </div>
 
             {/* Footer */}
-            <div className="pt-2 border-t border-border flex flex-col gap-2">
-              <div className="flex flex-col sm:flex-row gap-2">
-                {tableOrders.length > 0 && (
-                  <>
+            <div className="px-4 py-2.5 sm:px-6 sm:py-3 border-t border-border/70 bg-card shrink-0 space-y-1.5">
+              {tableOrders.length > 0 ? (
+                <>
+                  <div className="grid grid-cols-2 gap-2 sm:gap-2.5 w-full">
                     <Button
+                      type="button"
                       variant="outline"
-                      className="flex-1 h-11 rounded-xl font-bold text-xs gap-1.5 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 cursor-pointer"
+                      className="w-full h-9 sm:h-9.5 rounded-xl font-semibold text-xs gap-1.5 border border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300 hover:bg-amber-500/15 shadow-2xs cursor-pointer transition-all active:scale-[0.98] px-2.5 truncate"
                       onClick={() => {
                         if (tableOrders.length === 1) {
                           setSelectedOrderIdForBill(tableOrders[0].fullId || tableOrders[0].id || tableOrders[0].orderNumber)
@@ -1886,13 +1884,14 @@ export function CustomerMenu() {
                         setShowBillModal(true)
                       }}
                     >
-                      <Receipt className="size-4 text-amber-500" />
-                      <span>Ask for Pending Bill</span>
+                      <BellRing className="size-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span className="truncate">Ask for Bill</span>
                     </Button>
 
                     <Button
+                      type="button"
                       variant="default"
-                      className="flex-1 h-11 rounded-xl font-extrabold text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-2 shadow-md cursor-pointer"
+                      className="w-full h-9 sm:h-9.5 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 shadow-2xs shadow-emerald-600/20 cursor-pointer transition-all active:scale-[0.98] px-2.5 truncate"
                       onClick={() => {
                         if (tableOrders.length === 1) {
                           setSelectedOrderIdForBill(tableOrders[0].fullId || tableOrders[0].id || tableOrders[0].orderNumber)
@@ -1903,34 +1902,36 @@ export function CustomerMenu() {
                         setShowBillModal(true)
                       }}
                     >
-                      <Receipt className="size-4" />
-                      <span>Settle Bill & Tip</span>
+                      <Receipt className="size-3.5 shrink-0" />
+                      <span className="truncate">Settle Bill & Tip</span>
                     </Button>
-                  </>
-                )}
-                <Button
-                  variant={tableOrders.length > 0 ? 'outline' : 'default'}
-                  className="flex-1 h-11 rounded-xl font-bold cursor-pointer"
-                  onClick={() => setShowOrdersModal(false)}
-                >
-                  Continue Browsing Menu
-                </Button>
-              </div>
+                  </div>
 
-              {/* DJ Song Request Link in Footer */}
-              <div className="flex items-center justify-between pt-1 px-1 text-xs">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowOrdersModal(false)
-                    setShowSongModal(true)
-                  }}
-                  className="inline-flex items-center gap-1.5 font-bold text-pink-500 hover:underline cursor-pointer"
-                >
-                  <Music className="size-3.5" />
-                  <span>Request a Song to DJ Booth 🎵</span>
-                </button>
-              </div>
+                  <div className="flex items-center justify-center pt-0.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="w-auto px-4 h-7.5 rounded-full font-medium text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 border border-border/50 transition-all cursor-pointer shadow-2xs gap-1.5"
+                      onClick={() => setShowOrdersModal(false)}
+                    >
+                      <ArrowLeft className="size-3 text-muted-foreground" />
+                      <span>Continue Browsing Menu</span>
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center justify-center">
+                  <Button
+                    type="button"
+                    variant="default"
+                    className="w-auto px-5 h-8.5 rounded-xl font-bold text-xs cursor-pointer shadow-xs gap-1.5"
+                    onClick={() => setShowOrdersModal(false)}
+                  >
+                    <ArrowLeft className="size-3" />
+                    <span>Browse Menu</span>
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2242,7 +2243,7 @@ export function CustomerMenu() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search dishes, drinks, ingredients..."
-              className="pl-10 h-11 rounded-2xl bg-card border-border/80 text-sm shadow-xs focus-visible:ring-primary/40"
+              className="pl-10 h-11 rounded-2xl bg-card border border-border/70 text-xs sm:text-sm shadow-2xs focus-visible:ring-2 focus-visible:ring-primary/20"
             />
             {searchQuery && (
               <button
@@ -2263,10 +2264,10 @@ export function CustomerMenu() {
               onClick={() => setDietaryFilter((prev) => (prev === 'veg' ? 'all' : 'veg'))}
               aria-pressed={dietaryFilter === 'veg'}
               className={cn(
-                'flex items-center gap-2 h-11 px-3.5 sm:px-4 rounded-2xl border text-xs font-extrabold transition-all shadow-xs cursor-pointer select-none shrink-0',
+                'flex items-center gap-2 h-11 px-3 sm:px-3.5 rounded-2xl border text-xs font-bold transition-all shadow-2xs cursor-pointer select-none shrink-0',
                 dietaryFilter === 'veg'
-                  ? 'bg-emerald-500/15 border-emerald-500 text-emerald-600 dark:text-emerald-400 shadow-emerald-500/10'
-                  : 'bg-card border-border/80 text-muted-foreground hover:text-foreground hover:border-border'
+                  ? 'bg-emerald-500/10 border-emerald-500/60 text-emerald-700 dark:text-emerald-400 font-extrabold shadow-emerald-500/10'
+                  : 'bg-card border-border/70 text-muted-foreground hover:text-foreground hover:border-border'
               )}
             >
               <span
@@ -2286,10 +2287,10 @@ export function CustomerMenu() {
               onClick={() => setDietaryFilter((prev) => (prev === 'non-veg' ? 'all' : 'non-veg'))}
               aria-pressed={dietaryFilter === 'non-veg'}
               className={cn(
-                'flex items-center gap-2 h-11 px-3.5 sm:px-4 rounded-2xl border text-xs font-extrabold transition-all shadow-xs cursor-pointer select-none shrink-0',
+                'flex items-center gap-2 h-11 px-3 sm:px-3.5 rounded-2xl border text-xs font-bold transition-all shadow-2xs cursor-pointer select-none shrink-0',
                 dietaryFilter === 'non-veg'
-                  ? 'bg-rose-500/15 border-rose-500 text-rose-600 dark:text-rose-400 shadow-rose-500/10'
-                  : 'bg-card border-border/80 text-muted-foreground hover:text-foreground hover:border-border'
+                  ? 'bg-rose-500/10 border-rose-500/60 text-rose-700 dark:text-rose-400 font-extrabold shadow-rose-500/10'
+                  : 'bg-card border-border/70 text-muted-foreground hover:text-foreground hover:border-border'
               )}
             >
               <span
@@ -2306,14 +2307,14 @@ export function CustomerMenu() {
         </div>
 
         {/* Category Pills (Horizontal Sticky Bar) */}
-        <div className="sticky top-[61px] z-20 -mx-4 px-4 py-2.5 bg-background/95 backdrop-blur-md border-b border-border/40 flex items-center gap-2 overflow-x-auto no-scrollbar">
+        <div className="sticky top-[64px] z-20 -mx-4 px-4 py-2.5 bg-background/90 backdrop-blur-xl border-b border-border/50 flex items-center gap-2 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setSelectedCategory('all')}
             className={cn(
               'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition-all cursor-pointer select-none',
               selectedCategory === 'all'
-                ? 'bg-primary text-primary-foreground shadow-md shadow-primary/25 scale-[1.02]'
-                : 'bg-card border border-border/80 text-muted-foreground hover:text-foreground hover:border-primary/30'
+                ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
+                : 'bg-card border border-border/70 text-muted-foreground hover:text-foreground hover:border-border'
             )}
           >
             All Items ({menuItems.length})
@@ -2329,8 +2330,8 @@ export function CustomerMenu() {
                 className={cn(
                   'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition-all cursor-pointer select-none',
                   selectedCategory === cat.id
-                    ? 'bg-primary text-primary-foreground shadow-md shadow-primary/25 scale-[1.02]'
-                    : 'bg-card border border-border/80 text-muted-foreground hover:text-foreground hover:border-primary/30'
+                    ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
+                    : 'bg-card border border-border/70 text-muted-foreground hover:text-foreground hover:border-border'
                 )}
               >
                 {cat.name} ({count})
@@ -2391,13 +2392,14 @@ export function CustomerMenu() {
           <div className="space-y-8 pt-2">
             {Array.from(itemsByCategory.entries()).map(([catName, items]) => (
               <section key={catName} className="space-y-3.5">
-                <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between border-b border-border/70 pb-2">
+                  <div className="flex items-center gap-2.5">
+                    <span className="size-2 rounded-full bg-primary ring-4 ring-primary/20" />
                     <h2 className="text-sm font-black uppercase tracking-wider text-foreground">
                       {catName}
                     </h2>
-                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                      {items.length}
+                    <span className="text-[11px] font-extrabold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                      {items.length} {items.length === 1 ? 'dish' : 'dishes'}
                     </span>
                   </div>
                 </div>
@@ -2406,77 +2408,87 @@ export function CustomerMenu() {
                   {items.map((item) => {
                     const inCartQty = getItemQtyInCart(item.id)
                     const desc = getCleanDescription(item.description)
+                    const isNonVeg = !item.isVeg || /chicken|mutton|fish|egg|prawn|meat|lamb|beef|pork|seafood/i.test(item.name || '')
 
                     return (
                       <div
                         key={item.id}
-                        className="group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-border/70 bg-card p-4 shadow-xs hover:border-primary/50 hover:shadow-lg transition-all duration-200"
+                        className="group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-border/70 bg-card hover:bg-card/90 p-4 shadow-2xs hover:shadow-xl hover:border-primary/40 hover:-translate-y-0.5 transition-all duration-300"
                       >
                         <div className="flex gap-4 items-start">
                           {/* Left: Info */}
-                          <div className="flex-1 min-w-0 space-y-1.5">
-                            {/* Dietary badge */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {item.isVeg ? (
-                                <span
-                                  className="size-4 border-2 border-emerald-600 dark:border-emerald-500 rounded-sm flex items-center justify-center p-0.5 shrink-0"
-                                  title="Pure Vegetarian"
-                                >
-                                  <span className="size-2 bg-emerald-600 dark:bg-emerald-500 rounded-full" />
-                                </span>
-                              ) : (
-                                <span
-                                  className="size-4 border-2 border-rose-600 dark:border-rose-500 rounded-sm flex items-center justify-center p-0.5 shrink-0"
-                                  title="Non-Vegetarian"
-                                >
-                                  <span className="size-2 bg-rose-600 dark:border-rose-500 rounded-full" />
-                                </span>
-                              )}
+                          <div className="flex-1 min-w-0 flex flex-col h-full justify-between space-y-1.5">
+                            <div>
+                              {/* Dietary badge & prep time */}
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                {!isNonVeg ? (
+                                  <span
+                                    className="size-4 border-2 border-emerald-600 dark:border-emerald-500 rounded-sm flex items-center justify-center p-0.5 shrink-0 bg-emerald-50 dark:bg-emerald-950/40"
+                                    title="Pure Vegetarian"
+                                  >
+                                    <span className="size-2 bg-emerald-600 dark:bg-emerald-500 rounded-full" />
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="size-4 border-2 border-rose-600 dark:border-rose-500 rounded-sm flex items-center justify-center p-0.5 shrink-0 bg-rose-50 dark:bg-rose-950/40"
+                                    title="Non-Vegetarian"
+                                  >
+                                    <span className="size-2 bg-rose-600 dark:border-rose-500 rounded-full" />
+                                  </span>
+                                )}
 
-                              {item.isSpicy && (
-                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                                  <Flame className="size-3" />
-                                  Spicy
-                                </span>
-                              )}
+                                {item.isSpicy && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                                    <Flame className="size-3" />
+                                    Spicy
+                                  </span>
+                                )}
 
-                              {item.prepTime && (
                                 <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
                                   <Clock className="size-3" />
-                                  {item.prepTime}m
+                                  {item.prepTime || 15}m
                                 </span>
+
+                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-md">
+                                  <Star className="size-2.5 fill-amber-500 text-amber-500" />
+                                  {item.rating ? item.rating.toFixed(1) : '4.8'}
+                                </span>
+                              </div>
+
+                              {/* Dish Name */}
+                              <h3 className="font-extrabold text-base text-foreground group-hover:text-primary transition-colors leading-snug capitalize tracking-tight">
+                                {item.name}
+                              </h3>
+
+                              {/* Clean Description / Tagline */}
+                              {desc ? (
+                                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed mt-1">
+                                  {desc}
+                                </p>
+                              ) : (
+                                <p className="text-[11px] text-muted-foreground/75 italic line-clamp-1 mt-0.5">
+                                  Chef prepared fresh with authentic ingredients
+                                </p>
                               )}
                             </div>
 
-                            {/* Dish Name */}
-                            <h3 className="font-extrabold text-base text-foreground group-hover:text-primary transition-colors leading-snug">
-                              {item.name}
-                            </h3>
-
-                            {/* Clean Description */}
-                            {desc && (
-                              <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                                {desc}
-                              </p>
-                            )}
-
                             {/* Price */}
                             <div className="pt-2">
-                              <span className="text-lg font-black text-foreground tracking-tight">
+                              <span className="text-base sm:text-lg font-black text-foreground font-mono tracking-tight">
                                 ₹{item.price.toFixed(2)}
                               </span>
                             </div>
                           </div>
 
                           {/* Right: Dish Image / Add Button */}
-                          <div className="flex flex-col items-center justify-between shrink-0 w-28 gap-2.5">
+                          <div className="flex flex-col items-center justify-between shrink-0 w-28 gap-2">
                             {/* Image container */}
-                            <div className="relative size-24 rounded-2xl overflow-hidden bg-muted/40 border border-border/80 shadow-xs flex items-center justify-center group-hover:scale-[1.02] transition-transform">
+                            <div className="relative size-24 sm:size-26 rounded-2xl overflow-hidden bg-muted/30 border border-border/80 shadow-xs group-hover:shadow-md transition-all">
                               {item.image ? (
                                 <img
                                   src={item.image}
                                   alt={item.name}
-                                  className="size-full object-cover"
+                                  className="size-full object-cover group-hover:scale-105 transition-transform duration-300"
                                   onError={(e) => {
                                     ;(e.target as HTMLElement).style.display = 'none'
                                   }}
@@ -2497,12 +2509,13 @@ export function CustomerMenu() {
                                 <Button
                                   size="sm"
                                   onClick={() => addToCart(item)}
-                                  className="w-full h-8 text-xs font-extrabold rounded-xl bg-primary/10 hover:bg-primary text-primary hover:text-primary-foreground border border-primary/30 transition-all shadow-xs cursor-pointer active:scale-95"
+                                  className="w-full h-8.5 rounded-xl bg-white dark:bg-card border-2 border-emerald-600 dark:border-emerald-500 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-600 hover:text-white font-black text-xs shadow-xs hover:shadow-md active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1"
                                 >
-                                  + ADD
+                                  <span>ADD</span>
+                                  <Plus className="size-3.5 stroke-[3]" />
                                 </Button>
                               ) : (
-                                <div className="flex items-center justify-between w-full h-8 bg-primary text-primary-foreground rounded-xl px-1.5 shadow-md shadow-primary/20 font-bold">
+                                <div className="flex items-center justify-between w-full h-8.5 bg-emerald-600 text-white rounded-xl px-1.5 shadow-md shadow-emerald-600/25 font-bold">
                                   <button
                                     onClick={() => decrementCart(item.id)}
                                     className="size-6 flex items-center justify-center rounded-lg hover:bg-white/20 active:scale-90 transition-all cursor-pointer"
@@ -2510,7 +2523,7 @@ export function CustomerMenu() {
                                   >
                                     <Minus className="size-3.5" />
                                   </button>
-                                  <span className="font-extrabold text-xs px-1">
+                                  <span className="font-black text-xs px-1 font-mono">
                                     {inCartQty}
                                   </span>
                                   <button
@@ -2526,11 +2539,11 @@ export function CustomerMenu() {
                               <button
                                 type="button"
                                 onClick={() => openCustomizeModal(item)}
-                                className="w-full text-[10px] font-bold text-muted-foreground hover:text-primary flex items-center justify-center gap-1 transition-colors cursor-pointer py-0.5"
+                                className="w-full text-[10px] font-bold text-muted-foreground hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center justify-center gap-1 transition-colors cursor-pointer py-0.5"
                                 title="Customise Spices, Veg/Non-Veg, Sauces & Cheese"
                               >
-                                <SlidersHorizontal className="size-2.5 text-primary" />
-                                <span>Customise</span>
+                                <SlidersHorizontal className="size-2.5 text-emerald-600 dark:text-emerald-400" />
+                                <span>Customisable</span>
                               </button>
                             </div>
                           </div>
@@ -2641,9 +2654,9 @@ export function CustomerMenu() {
         )}
       </main>
 
-      {/* 5. STICKY BOTTOM CART FLOATING BAR (MOBILE & DESKTOP) */}
+      {/* 5. STICKY BOTTOM CART FLOATING BAR (DESKTOP) - Mobile uses the unified bottom action dock */}
       {cartItemCount > 0 && !isCartOpen && (
-        <div className="fixed bottom-5 inset-x-4 max-w-lg mx-auto z-40 animate-in slide-in-from-bottom-5 duration-300">
+        <div className="hidden sm:block fixed bottom-5 inset-x-4 max-w-lg mx-auto z-40 animate-in slide-in-from-bottom-5 duration-300">
           <button
             onClick={() => setIsCartOpen(true)}
             className="w-full flex items-center justify-between px-5 py-3.5 bg-primary text-primary-foreground rounded-2xl shadow-2xl hover:brightness-105 active:scale-[0.99] transition-all cursor-pointer font-bold border border-primary-foreground/20"
@@ -3221,44 +3234,35 @@ export function CustomerMenu() {
         </div>
       )}
       {/* Floating Bottom Bar for Mobile / Table QR Customers */}
-      <div className="fixed bottom-3 inset-x-3 sm:hidden z-40 flex items-center gap-2 max-w-md mx-auto">
+      <div className="fixed bottom-3 inset-x-2.5 sm:hidden z-40 flex items-center gap-1.5 max-w-md mx-auto p-1.5 rounded-2xl bg-card/95 backdrop-blur-xl border border-border/80 shadow-2xl">
         {tableOrders.length > 0 && (
           <Button
             onClick={() => setShowBillModal(true)}
-            className="h-12 px-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-xl flex items-center justify-center gap-1.5 shrink-0"
+            className="h-11 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md flex items-center justify-center gap-1 shrink-0 cursor-pointer"
           >
-            <Receipt className="size-4" />
+            <Receipt className="size-4 shrink-0" />
             <span>Bill & Tip</span>
           </Button>
         )}
 
-        {/* Floating DJ Song Request for mobile */}
-        <Button
-          onClick={() => setShowSongModal(true)}
-          className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 text-white font-extrabold text-xs shadow-xl flex items-center justify-center p-0 shrink-0"
-          title="Request a song"
-        >
-          <Music className="size-5" />
-        </Button>
-
         {/* Floating Review & 10% Discount */}
         <Link href={`/customer/feedback?table=${encodeURIComponent(tableNumber || '1')}`}>
           <Button
-            className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white font-extrabold text-xs shadow-xl flex items-center justify-center p-0 shrink-0 cursor-pointer"
+            className="size-11 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white font-extrabold text-xs shadow-md flex items-center justify-center p-0 shrink-0 cursor-pointer"
             title="Review & Claim 10% Off"
           >
-            <Star className="size-5 fill-white" />
+            <Star className="size-4.5 fill-white" />
           </Button>
         </Link>
 
         <Button
           onClick={() => setShowOrdersModal(true)}
-          className="flex-1 h-12 rounded-2xl bg-card/95 backdrop-blur-md border border-primary/40 text-primary hover:bg-primary/10 font-bold text-xs shadow-xl flex items-center justify-center gap-2"
+          className="flex-1 min-w-0 h-11 px-2 rounded-xl bg-muted/60 hover:bg-muted border border-primary/30 text-primary hover:text-primary font-bold text-xs shadow-xs flex items-center justify-center gap-1.5 cursor-pointer truncate"
         >
-          <Clock className="size-4 text-primary" />
-          <span>Live Orders</span>
+          <Clock className="size-4 text-primary shrink-0" />
+          <span className="truncate">Orders</span>
           {tableOrders.length > 0 && (
-            <Badge className="bg-primary text-primary-foreground text-[10px] px-1.5 h-4 font-black">
+            <Badge className="bg-primary text-primary-foreground text-[10px] px-1.5 h-4 font-black shrink-0">
               {tableOrders.length}
             </Badge>
           )}
@@ -3266,11 +3270,16 @@ export function CustomerMenu() {
 
         <Button
           onClick={() => setIsCartOpen(true)}
-          className="flex-1 h-12 rounded-2xl bg-primary text-primary-foreground font-extrabold text-xs shadow-xl flex items-center justify-center gap-2"
+          className={cn(
+            'flex-1 min-w-0 h-11 px-2 rounded-xl font-extrabold text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer truncate transition-all',
+            cartItemCount > 0
+              ? 'bg-primary text-primary-foreground shadow-primary/30'
+              : 'bg-muted text-muted-foreground hover:text-foreground'
+          )}
         >
-          <ShoppingBag className="size-4" />
-          <span>Cart ({cartItemCount})</span>
-          {cartItemCount > 0 && <span>· ₹{cartGrandTotal.toFixed(0)}</span>}
+          <ShoppingBag className="size-4 shrink-0" />
+          <span className="truncate">Cart ({cartItemCount})</span>
+          {cartItemCount > 0 && <span className="font-mono font-bold shrink-0 hidden xs:inline">· ₹{cartGrandTotal.toFixed(0)}</span>}
         </Button>
       </div>
 

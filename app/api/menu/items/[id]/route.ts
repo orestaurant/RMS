@@ -102,7 +102,10 @@ export async function PATCH(
     if (body.prepTime !== undefined || body.preparationTimeMinutes !== undefined) {
       data.preparationTimeMinutes = parseInt(body.prepTime ?? body.preparationTimeMinutes) || 15
     }
-    if (body.imageUrl !== undefined) data.imageUrl = body.imageUrl ? String(body.imageUrl).trim() : null
+    if (body.imageUrl !== undefined || body.image !== undefined) {
+      const imgVal = body.imageUrl !== undefined ? body.imageUrl : body.image
+      data.imageUrl = imgVal ? String(imgVal).trim() : null
+    }
 
     const updated = await prisma.menuItem.update({
       where: { id },

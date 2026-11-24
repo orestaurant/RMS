@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Search,
   Plus,
@@ -18,6 +18,9 @@ import {
   QrCode,
   ExternalLink,
   ChefHat,
+  Image as ImageIcon,
+  Upload,
+  X,
 } from 'lucide-react'
 import { TableQRGenerator } from '@/components/tables/table-qr-generator'
 import { Card, CardContent } from '@/components/ui/card'
@@ -64,6 +67,38 @@ export interface MenuCategory {
   itemCount?: number
 }
 
+// High-res curated production-ready dish photo presets for instant 1-click selection
+const CURATED_FOOD_PHOTOS = [
+  {
+    name: 'Paneer Tikka',
+    url: 'https://images.unsplash.com/photo-1599488615731-7e5c2823ff28?auto=format&fit=crop&w=600&q=80',
+  },
+  {
+    name: 'Masala Dosa',
+    url: 'https://images.unsplash.com/photo-1668236543090-82eba5ee5976?auto=format&fit=crop&w=600&q=80',
+  },
+  {
+    name: 'Biryani',
+    url: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?auto=format&fit=crop&w=600&q=80',
+  },
+  {
+    name: 'Butter Chicken',
+    url: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?auto=format&fit=crop&w=600&q=80',
+  },
+  {
+    name: 'Pizza Margherita',
+    url: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=600&q=80',
+  },
+  {
+    name: 'Burger & Fries',
+    url: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=600&q=80',
+  },
+  {
+    name: 'Gulab Jamun',
+    url: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=600&q=80',
+  },
+]
+
 export function MenuManagement() {
   const [items, setItems] = useState<MenuItem[]>([])
   const [categories, setCategories] = useState<MenuCategory[]>([])
@@ -89,7 +124,52 @@ export function MenuManagement() {
   const [isSpicy, setIsSpicy] = useState(false)
   const [prepTime, setPrepTime] = useState('15')
   const [isAvailable, setIsAvailable] = useState(true)
+  const [image, setImage] = useState('')
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const [imageLoadError, setImageLoadError] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const editFileInputRef = useRef<HTMLInputElement>(null)
   const [qrGeneratorOpen, setQrGeneratorOpen] = useState(false)
+
+  // Handle direct file upload from device / camera
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setUploadingImage(true)
+      setImageLoadError(false)
+
+      // 1. Instant client preview with FileReader
+      const reader = new FileReader()
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setImage(reader.result)
+        }
+      }
+      reader.readAsDataURL(file)
+
+      // 2. Server upload via /api/upload
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const json = await res.json()
+      if (res.ok && json.success && json.url) {
+        setImage(json.url)
+      }
+    } catch (err) {
+      console.warn('Upload error, kept data URL preview:', err)
+    } finally {
+      setUploadingImage(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      if (editFileInputRef.current) editFileInputRef.current.value = ''
+    }
+  }
 
   // Recipe / Bill of Materials (BOM) state
   const [recipeOpen, setRecipeOpen] = useState(false)
@@ -297,6 +377,8 @@ export function MenuManagement() {
           isSpicy,
           prepTime: parseInt(prepTime) || 15,
           isAvailable,
+          imageUrl: image.trim(),
+          image: image.trim(),
         }),
       })
 
@@ -319,6 +401,8 @@ export function MenuManagement() {
       setIsSpicy(false)
       setPrepTime('15')
       setIsAvailable(true)
+      setImage('')
+      setImageLoadError(false)
 
       setFeedback({ type: 'success', message: `Item "${json.data.name}" added to menu!` })
       setTimeout(() => setFeedback(null), 3500)
@@ -341,6 +425,8 @@ export function MenuManagement() {
     setIsSpicy(Boolean(item.isSpicy))
     setPrepTime(String(item.prepTime || 15))
     setIsAvailable(item.isAvailable)
+    setImage(item.image || (item as any).imageUrl || '')
+    setImageLoadError(false)
     setEditItemOpen(true)
   }
 
@@ -364,6 +450,8 @@ export function MenuManagement() {
           isSpicy,
           prepTime: parseInt(prepTime) || 15,
           isAvailable,
+          imageUrl: image.trim(),
+          image: image.trim(),
         }),
       })
 
@@ -376,6 +464,8 @@ export function MenuManagement() {
       fetchCategories()
       setEditItemOpen(false)
       setEditingItem(null)
+      setImage('')
+      setImageLoadError(false)
 
       setFeedback({ type: 'success', message: `Item "${json.data.name}" updated!` })
       setTimeout(() => setFeedback(null), 3000)
@@ -760,7 +850,7 @@ export function MenuManagement() {
 
       {/* ─── ADD ITEM DIALOG ────────────────────────────────────── */}
       <Dialog open={addItemOpen} onOpenChange={setAddItemOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add Menu Item</DialogTitle>
             <DialogDescription>
@@ -872,6 +962,129 @@ export function MenuManagement() {
               </div>
             </div>
 
+            {/* ── Dish Photo Upload & Image Address Section ── */}
+            <div className="p-3 rounded-2xl border border-border bg-muted/20 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="font-bold text-foreground text-xs flex items-center gap-1.5">
+                  <ImageIcon className="size-3.5 text-primary" />
+                  Dish Photo (File Upload or Image URL)
+                </label>
+                {image && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImage('')
+                      setImageLoadError(false)
+                    }}
+                    className="text-[11px] text-destructive hover:underline flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <X className="size-3" />
+                    Remove
+                  </button>
+                )}
+              </div>
+
+              {/* Hidden File Input */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+
+              {/* Upload Button + URL Input */}
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={uploadingImage}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-8 px-3 text-xs font-bold gap-1.5 border-primary/40 text-primary hover:bg-primary/10 shrink-0 cursor-pointer"
+                >
+                  {uploadingImage ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Upload className="size-3.5" />
+                  )}
+                  <span>{uploadingImage ? 'Uploading...' : 'Upload File'}</span>
+                </Button>
+
+                <Input
+                  placeholder="Or paste image address (e.g. https://.../photo.jpg)"
+                  value={image}
+                  onChange={(e) => {
+                    setImage(e.target.value)
+                    setImageLoadError(false)
+                  }}
+                  className="h-8 text-xs bg-background flex-1"
+                />
+              </div>
+
+              {/* 1-Click Quick Preset Food Photos */}
+              <div className="space-y-1">
+                <span className="text-[10px] text-muted-foreground font-semibold block">
+                  Quick Sample Photos (1-Tap):
+                </span>
+                <div className="flex flex-wrap gap-1">
+                  {CURATED_FOOD_PHOTOS.map((food) => (
+                    <button
+                      key={food.name}
+                      type="button"
+                      onClick={() => {
+                        setImage(food.url)
+                        setImageLoadError(false)
+                      }}
+                      className="px-2 py-0.5 rounded-md text-[10px] font-medium border border-border bg-background hover:border-primary/50 text-foreground transition-all cursor-pointer"
+                    >
+                      + {food.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Live Image Preview Box */}
+              {image && (
+                <div className="relative rounded-xl border border-border overflow-hidden bg-background p-2 flex items-center gap-3 animate-in fade-in">
+                  <div className="relative size-16 rounded-lg overflow-hidden shrink-0 border border-border/80 bg-muted/40">
+                    <img
+                      src={image}
+                      alt="Preview"
+                      referrerPolicy="no-referrer"
+                      className="size-full object-cover"
+                      onLoad={() => setImageLoadError(false)}
+                      onError={() => setImageLoadError(true)}
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    {imageLoadError ? (
+                      <div className="text-[11px] text-destructive space-y-0.5">
+                        <p className="font-bold flex items-center gap-1">
+                          <AlertCircle className="size-3" />
+                          Image preview unavailable
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          Link may be blocked or invalid. Use &quot;Upload File&quot; or choose a quick sample above.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-emerald-600 dark:text-emerald-400 space-y-0.5">
+                        <p className="font-bold flex items-center gap-1">
+                          <CheckCircle2 className="size-3 text-emerald-500" />
+                          Image loaded successfully!
+                        </p>
+                        <p className="text-[10px] text-muted-foreground truncate">
+                          Ready for catalog and customer menu display.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Dietary Type & Spicy Options */}
             <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-muted/20">
               <div className="flex items-center gap-4">
@@ -945,7 +1158,7 @@ export function MenuManagement() {
 
       {/* ─── EDIT ITEM DIALOG ────────────────────────────────────── */}
       <Dialog open={editItemOpen} onOpenChange={setEditItemOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Menu Item</DialogTitle>
             <DialogDescription>
@@ -1047,6 +1260,129 @@ export function MenuManagement() {
                   className="h-9 text-sm"
                 />
               </div>
+            </div>
+
+            {/* ── Dish Photo Upload & Image Address Section ── */}
+            <div className="p-3 rounded-2xl border border-border bg-muted/20 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="font-bold text-foreground text-xs flex items-center gap-1.5">
+                  <ImageIcon className="size-3.5 text-primary" />
+                  Dish Photo (File Upload or Image URL)
+                </label>
+                {image && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImage('')
+                      setImageLoadError(false)
+                    }}
+                    className="text-[11px] text-destructive hover:underline flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <X className="size-3" />
+                    Remove
+                  </button>
+                )}
+              </div>
+
+              {/* Hidden File Input */}
+              <input
+                type="file"
+                ref={editFileInputRef}
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+
+              {/* Upload Button + URL Input */}
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={uploadingImage}
+                  onClick={() => editFileInputRef.current?.click()}
+                  className="h-8 px-3 text-xs font-bold gap-1.5 border-primary/40 text-primary hover:bg-primary/10 shrink-0 cursor-pointer"
+                >
+                  {uploadingImage ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Upload className="size-3.5" />
+                  )}
+                  <span>{uploadingImage ? 'Uploading...' : 'Upload File'}</span>
+                </Button>
+
+                <Input
+                  placeholder="Or paste image address (e.g. https://.../photo.jpg)"
+                  value={image}
+                  onChange={(e) => {
+                    setImage(e.target.value)
+                    setImageLoadError(false)
+                  }}
+                  className="h-8 text-xs bg-background flex-1"
+                />
+              </div>
+
+              {/* 1-Click Quick Preset Food Photos */}
+              <div className="space-y-1">
+                <span className="text-[10px] text-muted-foreground font-semibold block">
+                  Quick Sample Photos (1-Tap):
+                </span>
+                <div className="flex flex-wrap gap-1">
+                  {CURATED_FOOD_PHOTOS.map((food) => (
+                    <button
+                      key={food.name}
+                      type="button"
+                      onClick={() => {
+                        setImage(food.url)
+                        setImageLoadError(false)
+                      }}
+                      className="px-2 py-0.5 rounded-md text-[10px] font-medium border border-border bg-background hover:border-primary/50 text-foreground transition-all cursor-pointer"
+                    >
+                      + {food.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Live Image Preview Box */}
+              {image && (
+                <div className="relative rounded-xl border border-border overflow-hidden bg-background p-2 flex items-center gap-3 animate-in fade-in">
+                  <div className="relative size-16 rounded-lg overflow-hidden shrink-0 border border-border/80 bg-muted/40">
+                    <img
+                      src={image}
+                      alt="Preview"
+                      referrerPolicy="no-referrer"
+                      className="size-full object-cover"
+                      onLoad={() => setImageLoadError(false)}
+                      onError={() => setImageLoadError(true)}
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    {imageLoadError ? (
+                      <div className="text-[11px] text-destructive space-y-0.5">
+                        <p className="font-bold flex items-center gap-1">
+                          <AlertCircle className="size-3" />
+                          Image preview unavailable
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          Link may be blocked or invalid. Use &quot;Upload File&quot; or choose a quick sample above.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-emerald-600 dark:text-emerald-400 space-y-0.5">
+                        <p className="font-bold flex items-center gap-1">
+                          <CheckCircle2 className="size-3 text-emerald-500" />
+                          Image loaded successfully!
+                        </p>
+                        <p className="text-[10px] text-muted-foreground truncate">
+                          Ready for catalog and customer menu display.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Dietary & Spicy */}
