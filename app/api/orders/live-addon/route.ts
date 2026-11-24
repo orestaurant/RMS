@@ -62,9 +62,17 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const branchId = activeTable?.branchId || authContext.branchId
-    const restaurantId = activeTable?.restaurantId || authContext.restaurantId
-    const organizationId = activeTable?.organizationId || authContext.organizationId
+    let branchId = activeTable?.branchId || authContext.branchId
+    let restaurantId = activeTable?.restaurantId || authContext.restaurantId
+    let organizationId = activeTable?.organizationId || authContext.organizationId
+
+    if (!branchId || !restaurantId || !organizationId) {
+      const fb = await prisma.branch.findFirst({ select: { id: true, restaurantId: true, organizationId: true } })
+      branchId = branchId || fb?.id
+      restaurantId = restaurantId || fb?.restaurantId
+      organizationId = organizationId || fb?.organizationId
+    }
+
     const tableNumber = activeTable?.tableNumber || reqTableNumber || 'POS'
 
     // Find active order or open bill for this table

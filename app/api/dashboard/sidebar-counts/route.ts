@@ -108,7 +108,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
         branchId = cachedBranch.id
       } else {
         const defaultBranch = await prisma.branch.findFirst({
-          select: { id: true, organizationId: true },
+          select: { id: true, organizationId: true, restaurantId: true },
         })
         if (defaultBranch) {
           branchId = defaultBranch.id

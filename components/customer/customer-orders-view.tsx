@@ -17,7 +17,6 @@ import {
   ArrowRight,
   ChevronRight,
   ChevronLeft,
-  Trash2,
   ShieldCheck,
   Music,
   Flame,
@@ -27,14 +26,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 import { SongRequestModal } from '@/components/customer/song-request-modal'
@@ -106,10 +97,6 @@ export function CustomerOrdersView({ hideHeader = false }: CustomerOrdersViewPro
   const [statusFilter, setStatusFilter] = useState<'all' | 'queue' | 'live' | 'completed'>('all')
   const [showSongModal, setShowSongModal] = useState<boolean>(false)
 
-  // Delete & Cancellation State
-  const [orderToDelete, setOrderToDelete] = useState<CustomerOrder | null>(null)
-  const [isDeleting, setIsDeleting] = useState<boolean>(false)
-
   // High-performance Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [ordersPerPage] = useState<number>(6)
@@ -152,55 +139,6 @@ export function CustomerOrdersView({ hideHeader = false }: CustomerOrdersViewPro
     const startIndex = (currentPage - 1) * ordersPerPage
     return filteredOrders.slice(startIndex, startIndex + ordersPerPage)
   }, [filteredOrders, currentPage, ordersPerPage])
-
-  // Delete order handler
-  const handleDeleteOrder = async () => {
-    if (!orderToDelete) return
-    setIsDeleting(true)
-    const targetId = orderToDelete.id || orderToDelete.orderNumber
-    const targetNumber = orderToDelete.orderNumber
-
-    // Instant optimistic update
-    setOrders((prev) => prev.filter((o) => o.id !== orderToDelete.id && o.orderNumber !== orderToDelete.orderNumber))
-    setOrderToDelete(null)
-
-    try {
-      const res = await fetch(`/api/orders/${targetId}`, {
-        method: 'DELETE',
-      })
-      const data = await res.json().catch(() => ({}))
-
-      if (res.ok && (data.success || data.data?.deleted)) {
-        setFeedback({
-          type: 'success',
-          message: `Order #${targetNumber} has been deleted successfully.`,
-        })
-      } else {
-        const fallbackRes = await fetch(`/api/customer/orders?id=${targetId}`, {
-          method: 'DELETE',
-        })
-        const fallbackData = await fallbackRes.json().catch(() => ({}))
-        if (fallbackRes.ok && fallbackData.success) {
-          setFeedback({
-            type: 'success',
-            message: `Order #${targetNumber} has been deleted successfully.`,
-          })
-        } else {
-          throw new Error(data.message || fallbackData.message || 'Failed to delete order')
-        }
-      }
-    } catch (err: unknown) {
-      console.error('Delete order error:', err)
-      const msg = err instanceof Error ? err.message : `Failed to delete order #${targetNumber}. Refreshing records...`
-      setFeedback({
-        type: 'error',
-        message: msg,
-      })
-      loadData(false)
-    } finally {
-      setIsDeleting(false)
-    }
-  }
 
   // Fetch customer profile & orders
   const loadData = useCallback(async (isSilent = false) => {
@@ -585,18 +523,6 @@ export function CustomerOrdersView({ hideHeader = false }: CustomerOrdersViewPro
                         <span className="text-base font-bold text-foreground">
                           ₹{Number(order.total || order.totalAmount || 0).toLocaleString('en-IN')}
                         </span>
-
-                        {/* Delete / Cancel Order Button */}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setOrderToDelete(order)}
-                          className="h-7 px-2.5 text-xs font-semibold text-muted-foreground hover:text-destructive hover:border-destructive/40 hover:bg-destructive/10 cursor-pointer gap-1 transition-colors"
-                          title="Delete / Cancel Order"
-                        >
-                          <Trash2 className="size-3 text-destructive" />
-                          <span className="hidden sm:inline">Delete</span>
-                        </Button>
                       </div>
                     </div>
                   </CardHeader>
@@ -675,51 +601,6 @@ export function CustomerOrdersView({ hideHeader = false }: CustomerOrdersViewPro
           </div>
         )}
       </div>
-
-      {/* Delete / Cancel Order Confirmation Dialog */}
-      <Dialog open={!!orderToDelete} onOpenChange={(open) => !open && setOrderToDelete(null)}>
-        <DialogContent className="sm:max-w-md bg-card border-border">
-          <DialogHeader>
-            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <Trash2 className="size-4 text-destructive" />
-              <span>Cancel / Delete Order #{orderToDelete?.orderNumber}</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground pt-1">
-              Are you sure you want to cancel and remove this dining order? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogFooter className="gap-2 sm:gap-0 pt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setOrderToDelete(null)}
-              className="text-xs"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={isDeleting}
-              onClick={handleDeleteOrder}
-              className="text-xs font-semibold gap-1.5"
-            >
-              {isDeleting ? (
-                <>
-                  <RefreshCw className="size-3.5 animate-spin" />
-                  <span>Deleting...</span>
-                </>
-              ) : (
-                <>
-                  <Trash2 className="size-3.5" />
-                  <span>Yes, Delete Order</span>
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Song Playing Request (DJ Sync) Modal */}
       <SongRequestModal

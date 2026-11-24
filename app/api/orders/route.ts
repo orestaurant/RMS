@@ -328,14 +328,14 @@ export async function POST(request: NextRequest) {
 
     // 3. Resolve Branch, Restaurant, and Organization context (with fast memory cache)
     let branch: any = getCachedBranchMeta(branchId)
-    if (!branch) {
+    if (!branch || !branch.organizationId || !branch.restaurantId) {
       if (branchId) {
         branch = await prisma.branch.findUnique({
           where: { id: branchId },
           select: { id: true, organizationId: true, restaurantId: true, name: true },
         })
       }
-      if (!branch) {
+      if (!branch || !branch.organizationId || !branch.restaurantId) {
         branch = await prisma.branch.findFirst({
           orderBy: { isPrimary: 'desc' },
           select: { id: true, organizationId: true, restaurantId: true, name: true },
@@ -360,14 +360,55 @@ export async function POST(request: NextRequest) {
           select: { id: true, organizationId: true, restaurantId: true, name: true },
         })
       }
-      if (branch && !branchId) {
+      if (branch) {
         setCachedBranchMeta(branch)
       }
     }
 
-    const organizationId = branch.organizationId
-    const restaurantId = branch.restaurantId
-    branchId = branch.id
+    let organizationId = branch?.organizationId || branch?.restaurant?.organizationId
+    let restaurantId = branch?.restaurantId || branch?.restaurant?.id
+    branchId = branch?.id
+
+    // Fallback safety: If either is still missing, resolve from DB
+    if (!organizationId || !restaurantId) {
+      if (branchId) {
+        const fullBranch = await prisma.branch.findUnique({
+          where: { id: branchId },
+          select: { id: true, organizationId: true, restaurantId: true },
+        })
+        if (fullBranch) {
+          organizationId = organizationId || fullBranch.organizationId
+          restaurantId = restaurantId || fullBranch.restaurantId
+        }
+      }
+      if (!restaurantId) {
+        const firstRestaurant = await prisma.restaurant.findFirst({
+          select: { id: true, organizationId: true },
+        })
+        if (firstRestaurant) {
+          restaurantId = firstRestaurant.id
+          organizationId = organizationId || firstRestaurant.organizationId
+        }
+      }
+      if (!organizationId) {
+        const firstOrg = await prisma.organization.findFirst({
+          select: { id: true },
+        })
+        if (firstOrg) {
+          organizationId = firstOrg.id
+        }
+      }
+    }
+
+    if (!organizationId || !restaurantId || !branchId) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Unable to resolve restaurant or organization context for order. Please check system setup.',
+        },
+        { status: 500 }
+      )
+    }
 
     // 4. Resolve Table & 5. Fetch Menu Items concurrently (with high-speed memory caching)
     let tableId = providedTableId || null

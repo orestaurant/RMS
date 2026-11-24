@@ -30,9 +30,12 @@ async function fetchFreshStats(branchIdParam: string | null): Promise<DashboardS
           select: {
             id: true,
             name: true,
+            organizationId: true,
+            restaurantId: true,
             restaurant: {
               select: {
                 id: true,
+                organizationId: true,
                 name: true,
                 operatingHours: true,
               },
@@ -43,9 +46,12 @@ async function fetchFreshStats(branchIdParam: string | null): Promise<DashboardS
           select: {
             id: true,
             name: true,
+            organizationId: true,
+            restaurantId: true,
             restaurant: {
               select: {
                 id: true,
+                organizationId: true,
                 name: true,
                 operatingHours: true,
               },

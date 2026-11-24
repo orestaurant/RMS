@@ -176,18 +176,34 @@ export function getCachedBranchMeta(branchId?: string | null): any | null {
     branchMetaCache.delete(key)
     return null
   }
+  // Prevent returning incomplete branch metadata lacking critical identifiers
+  if (item.data && (!item.data.organizationId || !item.data.restaurantId)) {
+    branchMetaCache.delete(key)
+    return null
+  }
   return item.data
 }
 
 export function setCachedBranchMeta(branch: any) {
-  if (branch) {
+  if (branch && branch.id) {
+    const restaurantId = branch.restaurantId || branch.restaurant?.id || null
+    const organizationId = branch.organizationId || branch.restaurant?.organizationId || null
+
+    const existing = branchMetaCache.get(branch.id)?.data || {}
+    const mergedData = {
+      ...existing,
+      ...branch,
+      ...(restaurantId ? { restaurantId } : {}),
+      ...(organizationId ? { organizationId } : {}),
+    }
+
     const entry = {
-      data: branch,
+      data: mergedData,
       timestamp: Date.now(),
     }
-    if (branch.id) {
-      branchMetaCache.set(branch.id, entry)
+    branchMetaCache.set(branch.id, entry)
+    if (branch.isPrimary || !branchMetaCache.has('default')) {
+      branchMetaCache.set('default', entry)
     }
-    branchMetaCache.set('default', entry)
   }
 }
