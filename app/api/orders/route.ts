@@ -715,10 +715,10 @@ export async function POST(request: NextRequest) {
           discountPercentage = 15
           discountAmount = Math.round(calculatedSubtotal * 0.15 * 100) / 100
           discountReason = 'First-Time Customer Special (15% off) - FIRST15'
-        } else {
+        } else if (calculatedSubtotal >= 1000) {
           discountPercentage = 10
           discountAmount = Math.round(calculatedSubtotal * 0.10 * 100) / 100
-          discountReason = 'Existing Customer Discount (10% off)'
+          discountReason = 'Existing Customer Discount (10% off on orders above ₹1,000)'
         }
       } else if (couponCode.startsWith('REVIEW10') || couponCode.includes('REVIEW')) {
         // Enforce 1 review discount per customer (check if already claimed)
@@ -744,9 +744,11 @@ export async function POST(request: NextRequest) {
           discountReason = `Review Discount (10% off) - ${couponCode}`
         }
       } else if (couponCode === 'EXISTING10' || couponCode === 'WELCOME10') {
-        discountPercentage = 10
-        discountAmount = Math.round(calculatedSubtotal * 0.10 * 100) / 100
-        discountReason = `${couponCode} (10% off)`
+        if (calculatedSubtotal >= 1000) {
+          discountPercentage = 10
+          discountAmount = Math.round(calculatedSubtotal * 0.10 * 100) / 100
+          discountReason = `${couponCode} (10% off on orders above ₹1,000)`
+        }
       } else if (body.discountAmount && Number(body.discountAmount) > 0) {
         discountAmount = Math.min(calculatedSubtotal, Number(body.discountAmount))
         discountPercentage = Number(body.discountPercentage) || 0

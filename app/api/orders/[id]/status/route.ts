@@ -16,6 +16,7 @@ import {
 } from '@/lib/kds-utils'
 import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 
 // Valid status transitions state machine
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
@@ -86,6 +87,29 @@ export async function PATCH(
         ),
         { status: 400 }
       )
+    }
+
+    // RBAC: Waiters can only accept orders ('accepted'/'confirmed') or mark them served ('served'/'completed').
+    // Transitioning to 'cooking'/'preparing' or 'ready' is strictly reserved for Chef & Admins.
+    const authCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
+    let requesterRole = ''
+    if (authCookie) {
+      try {
+        const payload = await verifyJWT(authCookie)
+        requesterRole = String(payload?.role || '').toLowerCase().trim()
+      } catch (err) {}
+    }
+
+    if (requesterRole === 'waiter') {
+      if (['cooking', 'preparing', 'ready'].includes(normalizedTarget)) {
+        return NextResponse.json(
+          errorResponse(
+            'Access Denied: Waiters can only Accept orders or Mark them Served. Preparation and Ready statuses are controlled by Kitchen Staff (Chef).',
+            'FORBIDDEN'
+          ),
+          { status: 403 }
+        )
+      }
     }
 
     // Lookup order in PostgreSQL

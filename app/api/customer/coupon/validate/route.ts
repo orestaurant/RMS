@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
           {
             success: false,
             valid: false,
-            message: 'The 15% discount is only valid on your first order. As an existing customer, you get 10% off with EXISTING10 or your review discount!',
+            message: 'The 15% discount is only valid on your first order. As an existing customer, you get 10% off on orders above ₹1,000 with EXISTING10 or your review discount!',
           },
           { status: 400 }
         )
@@ -164,8 +164,8 @@ export async function POST(request: NextRequest) {
       string,
       { type: 'PERCENTAGE' | 'FLAT'; value: number; minOrder: number; description: string }
     > = {
-      EXISTING10: { type: 'PERCENTAGE', value: 10, minOrder: 200, description: '10% Existing Customer Discount' },
-      WELCOME10: { type: 'PERCENTAGE', value: 10, minOrder: 200, description: '10% Customer Discount' },
+      EXISTING10: { type: 'PERCENTAGE', value: 10, minOrder: 1000, description: '10% Existing Customer Discount (Min. Order ₹1,000)' },
+      WELCOME10: { type: 'PERCENTAGE', value: 10, minOrder: 1000, description: '10% Customer Discount (Min. Order ₹1,000)' },
       FLAT50: { type: 'FLAT', value: 50, minOrder: 300, description: 'Flat ₹50 Off' },
       CHEF20: { type: 'PERCENTAGE', value: 20, minOrder: 500, description: 'Chef Special 20% Discount' },
       HAPPYHOUR: { type: 'PERCENTAGE', value: 15, minOrder: 400, description: 'Happy Hour 15% Discount' },

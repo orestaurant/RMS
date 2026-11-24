@@ -10,6 +10,7 @@ import {
   normalizeKdsStatus,
 } from '@/lib/kds-utils'
 import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,6 +25,29 @@ export async function PATCH(
     const { status, priority, toggleItemId, notes, fullId, orderNumber } = body
 
     const normalizedKdsStatus = status ? normalizeKdsStatus(status) : null
+
+    // RBAC: Waiters can only accept orders ('accepted') or mark them served ('served').
+    // Starting cooking ('cooking') or marking ready ('ready') is strictly reserved for Chef & Admins.
+    const authCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
+    let requesterRole = ''
+    if (authCookie) {
+      try {
+        const payload = await verifyJWT(authCookie)
+        requesterRole = String(payload?.role || '').toLowerCase().trim()
+      } catch (err) {}
+    }
+
+    if (requesterRole === 'waiter') {
+      if (normalizedKdsStatus === 'cooking' || normalizedKdsStatus === 'ready') {
+        return NextResponse.json(
+          errorResponse(
+            'Access Denied: Waiters can only Accept orders or Mark them Served. Preparation and Ready statuses are controlled by Kitchen Staff (Chef).',
+            'FORBIDDEN'
+          ),
+          { status: 403 }
+        )
+      }
+    }
 
     // Status mapping from KDS to DB OrderStatusEnum
     // KDS: pending | accepted | cooking | ready | served

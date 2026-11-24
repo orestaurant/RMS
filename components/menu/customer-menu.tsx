@@ -770,7 +770,16 @@ export function CustomerMenu() {
         setAppliedCouponPercent(15)
         setAppliedCouponMinOrder(0)
         setCouponMessage('15% First-Time Customer Discount Applied!')
-      } else if (code.startsWith('REVIEW10') || code.includes('REVIEW') || code === 'EXISTING10') {
+      } else if (code === 'EXISTING10' || code === 'WELCOME10') {
+        setAppliedCoupon(code)
+        setAppliedCouponPercent(10)
+        setAppliedCouponMinOrder(1000)
+        setCouponMessage(
+          cartSubtotal >= 1000
+            ? '10% Discount Applied on Order above ₹1,000!'
+            : `Add ₹${(1000 - cartSubtotal).toFixed(2)} more to unlock 10% discount (Minimum order ₹1,000).`
+        )
+      } else if (code.startsWith('REVIEW10') || code.includes('REVIEW')) {
         setAppliedCoupon(code)
         setAppliedCouponPercent(10)
         setAppliedCouponMinOrder(300)
@@ -3069,30 +3078,44 @@ export function CustomerMenu() {
                           </Button>
                         </div>
                       ) : customerAuth && !customerAuth.isFirstOrder ? (
-                        <div className="p-2.5 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold text-foreground flex items-center gap-1 truncate">
-                              <span>✨</span>
-                              <span className="font-mono">EXISTING10</span>
-                              <span className="font-semibold text-[11px]">• 10% Off for Valued Guests</span>
-                            </p>
-                            <p className="text-[10px] text-muted-foreground">
-                              Enjoy 10% off on your dining order
-                            </p>
+                        cartSubtotal >= 1000 ? (
+                          <div className="p-2.5 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-foreground flex items-center gap-1 truncate">
+                                <span>✨</span>
+                                <span className="font-mono">EXISTING10</span>
+                                <span className="font-semibold text-[11px]">• 10% Off on Orders Above ₹1,000</span>
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                Enjoy 10% off on your dining order (Min. order ₹1,000)
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => {
+                                setCouponInput('EXISTING10')
+                                handleApplyCoupon('EXISTING10')
+                              }}
+                              disabled={validatingCoupon}
+                              className="h-7 px-2.5 text-[11px] font-semibold rounded-lg shrink-0 cursor-pointer"
+                            >
+                              {validatingCoupon ? <RefreshCw className="size-3 animate-spin" /> : 'Apply 10%'}
+                            </Button>
                           </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={() => {
-                              setCouponInput('EXISTING10')
-                              handleApplyCoupon('EXISTING10')
-                            }}
-                            disabled={validatingCoupon}
-                            className="h-7 px-2.5 text-[11px] font-semibold rounded-lg shrink-0 cursor-pointer"
-                          >
-                            {validatingCoupon ? <RefreshCw className="size-3 animate-spin" /> : 'Apply 10%'}
-                          </Button>
-                        </div>
+                        ) : (
+                          <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                                <span>✨</span>
+                                <span>Add ₹{(1000 - cartSubtotal).toFixed(0)} more to unlock 10% discount!</span>
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                10% off for valued guests on orders of ₹1,000 or more
+                              </p>
+                            </div>
+                          </div>
+                        )
                       ) : null}
                     </>
                   )}

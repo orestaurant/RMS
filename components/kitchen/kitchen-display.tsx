@@ -52,6 +52,7 @@ import {
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import type { LiveBatch } from '@/lib/live-batch-manager'
+import { useAuthContext } from '@/hooks/useAuthContext'
 
 export type KanbanStatus = 'pending' | 'accepted' | 'cooking' | 'ready' | 'served'
 export type PriorityLevel = 'normal' | 'high' | 'urgent'
@@ -308,6 +309,7 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
   onReprioritize,
   cuisineBatches,
   onQuickAddBatch,
+  userRole,
 }: {
   ticket: KitchenTicket
   onAdvance: (id: string, nextStatus: KanbanStatus) => void
@@ -315,7 +317,9 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
   onReprioritize: (ticketId: string, priority: PriorityLevel) => void
   cuisineBatches: Record<string, CuisineBatch>
   onQuickAddBatch?: (ticketId: string, cuisine: string) => void
+  userRole?: string
 }) {
+  const isWaiter = userRole?.toLowerCase() === 'waiter'
   const currentStatus = ticket.status as 'pending' | 'accepted' | 'cooking' | 'ready'
   const nextStatus = nextTransitions[currentStatus] || null
 
@@ -503,13 +507,15 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
               <span className="text-[11px] text-muted-foreground">
                 Batch cooking window active! Add now with same cuisine.
               </span>
-              <Button
-                size="sm"
-                className="h-7 text-xs bg-amber-500 hover:bg-amber-600 text-black font-extrabold shadow-sm shrink-0 px-2.5"
-                onClick={() => onQuickAddBatch && onQuickAddBatch(ticket.id, matchingBatch.cuisine)}
-              >
-                + Add ({matchingBatch.remainingSeconds}s)
-              </Button>
+              {!isWaiter && (
+                <Button
+                  size="sm"
+                  className="h-7 text-xs bg-amber-500 hover:bg-amber-600 text-black font-extrabold shadow-sm shrink-0 px-2.5"
+                  onClick={() => onQuickAddBatch && onQuickAddBatch(ticket.id, matchingBatch.cuisine)}
+                >
+                  + Add ({matchingBatch.remainingSeconds}s)
+                </Button>
+              )}
             </div>
           ) : (
             <p className="text-[11px] text-destructive/90 leading-tight">
@@ -584,33 +590,57 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
       {/* Action Advance Buttons per Lifecycle State Machine */}
       <div className="mt-2.5 pt-2.5 border-t border-border/50 flex items-center w-full shrink-0">
         {currentStatus === 'accepted' ? (
-          <div className="grid grid-cols-2 gap-2 w-full">
+          isWaiter ? (
+            <div className="flex items-center justify-between w-full p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-semibold">
+              <span className="flex items-center gap-1.5 truncate">
+                <Clock className="size-3.5 animate-spin shrink-0" />
+                <span className="truncate">In Kitchen Queue — Awaiting Chef</span>
+              </span>
+              <Badge variant="outline" className="border-amber-500/40 text-amber-500 text-[10px] shrink-0">
+                Chef Action
+              </Badge>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 w-full">
+              <Button
+                size="sm"
+                className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white shadow-sm active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
+                onClick={() => onAdvance(ticket.id, 'cooking')}
+              >
+                <Flame className="size-4 shrink-0 text-amber-300 animate-pulse" />
+                <span className="truncate">Start Preparing</span>
+              </Button>
+              <Button
+                size="sm"
+                className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
+                onClick={() => onAdvance(ticket.id, 'ready')}
+              >
+                <CheckCircle2 className="size-4 shrink-0" />
+                <span className="truncate">Mark Ready</span>
+              </Button>
+            </div>
+          )
+        ) : currentStatus === 'cooking' ? (
+          isWaiter ? (
+            <div className="flex items-center justify-between w-full p-2.5 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-600 dark:text-orange-400 text-xs font-semibold">
+              <span className="flex items-center gap-1.5 truncate">
+                <Flame className="size-3.5 text-orange-500 animate-pulse shrink-0" />
+                <span className="truncate">Chef Cooking in Kitchen...</span>
+              </span>
+              <Badge variant="outline" className="border-orange-500/40 text-orange-500 text-[10px] shrink-0">
+                In Cooking
+              </Badge>
+            </div>
+          ) : (
             <Button
               size="sm"
-              className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white shadow-sm active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
-              onClick={() => onAdvance(ticket.id, 'cooking')}
-            >
-              <Flame className="size-4 shrink-0 text-amber-300 animate-pulse" />
-              <span className="truncate">Start Preparing</span>
-            </Button>
-            <Button
-              size="sm"
-              className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
+              className="w-full h-10 text-xs sm:text-sm font-extrabold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-md active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-2 transition-all"
               onClick={() => onAdvance(ticket.id, 'ready')}
             >
-              <CheckCircle2 className="size-4 shrink-0" />
-              <span className="truncate">Mark Ready</span>
+              <CheckCircle2 className="size-4.5 mr-1" />
+              <span>Mark Ready</span>
             </Button>
-          </div>
-        ) : currentStatus === 'cooking' ? (
-          <Button
-            size="sm"
-            className="w-full h-10 text-xs sm:text-sm font-extrabold tracking-wide bg-emerald-600 hover:bg-emerald-700 text-white shadow-md active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-2 transition-all"
-            onClick={() => onAdvance(ticket.id, 'ready')}
-          >
-            <CheckCircle2 className="size-4.5 mr-1" />
-            <span>Mark Ready</span>
-          </Button>
+          )
         ) : currentStatus === 'ready' ? (
           <Button
             size="sm"
@@ -621,25 +651,37 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
             <span>Mark Served</span>
           </Button>
         ) : currentStatus === 'pending' ? (
-          <div className="grid grid-cols-2 gap-2.5 w-full">
+          isWaiter ? (
             <Button
               size="sm"
-              className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white shadow-sm hover:shadow active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
-              onClick={() => onAdvance(ticket.id, 'cooking')}
-            >
-              <Flame className="size-4 shrink-0 text-amber-300 animate-pulse" />
-              <span className="truncate">Start Preparing</span>
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full min-w-0 h-10 px-2.5 text-xs font-extrabold tracking-wide border-2 border-primary/70 bg-primary/5 hover:bg-primary text-primary hover:text-primary-foreground shadow-xs active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
+              className="w-full h-10 px-4 text-xs font-extrabold tracking-wide bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-sm hover:shadow active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-2 transition-all"
               onClick={() => onAdvance(ticket.id, 'accepted')}
             >
-              <span className="truncate">Accept Order</span>
-              <ArrowRight className="size-3.5 shrink-0" />
+              <Check className="size-4 shrink-0" />
+              <span>Accept Order</span>
+              <ArrowRight className="size-3.5 shrink-0 ml-1" />
             </Button>
-          </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5 w-full">
+              <Button
+                size="sm"
+                className="w-full min-w-0 h-10 px-2.5 text-xs font-bold tracking-wide bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white shadow-sm hover:shadow active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
+                onClick={() => onAdvance(ticket.id, 'cooking')}
+              >
+                <Flame className="size-4 shrink-0 text-amber-300 animate-pulse" />
+                <span className="truncate">Start Preparing</span>
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full min-w-0 h-10 px-2.5 text-xs font-extrabold tracking-wide border-2 border-primary/70 bg-primary/5 hover:bg-primary text-primary hover:text-primary-foreground shadow-xs active:scale-[0.98] cursor-pointer rounded-xl flex items-center justify-center gap-1.5 transition-all"
+                onClick={() => onAdvance(ticket.id, 'accepted')}
+              >
+                <span className="truncate">Accept Order</span>
+                <ArrowRight className="size-3.5 shrink-0" />
+              </Button>
+            </div>
+          )
         ) : (
           <Button
             size="sm"
@@ -657,6 +699,10 @@ const KitchenOrderCard = React.memo(function KitchenOrderCard({
 })
 
 export function KitchenDisplay() {
+  const { auth } = useAuthContext()
+  const userRole = String(auth?.role || '').toLowerCase().trim()
+  const isWaiter = userRole === 'waiter'
+
   const [tickets, setTickets] = useState<KitchenTicket[]>([])
   const [batchItems, setBatchItems] = useState<BatchItem[]>([])
   const [stations, setStations] = useState<string[]>(['All', 'Grill & Tandoor', 'Main Kitchen', 'Beverages / Bar', 'Desserts'])
@@ -931,6 +977,12 @@ export function KitchenDisplay() {
   const handleAdvance = async (id: string, nextStatus: KanbanStatus) => {
     const targetTicket = tickets.find((t) => t.id === id || t.fullId === id)
     if (!targetTicket) return
+
+    // RBAC: Waiters can only accept orders or mark them served
+    if (isWaiter && (nextStatus === 'cooking' || nextStatus === 'ready')) {
+      console.warn('Waiters cannot trigger cooking or ready status.')
+      return
+    }
 
     // When advancing into Preparation (Cooking) from Queue:
     if (nextStatus === 'cooking') {
@@ -1623,14 +1675,21 @@ export function KitchenDisplay() {
                             </div>
 
                             {/* Chef Mark Ready Action */}
-                            <Button
-                              size="sm"
-                              className="w-full h-8 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer"
-                              onClick={() => handleMarkBatchReady(batch.id)}
-                            >
-                              <CheckCircle2 className="size-3.5 mr-1" />
-                              Mark Ready & Auto-Distribute
-                            </Button>
+                            {!isWaiter ? (
+                              <Button
+                                size="sm"
+                                className="w-full h-8 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer"
+                                onClick={() => handleMarkBatchReady(batch.id)}
+                              >
+                                <CheckCircle2 className="size-3.5 mr-1" />
+                                Mark Ready & Auto-Distribute
+                              </Button>
+                            ) : (
+                              <div className="flex items-center justify-center p-2 rounded-lg bg-muted/40 border border-border/40 text-xs text-muted-foreground font-medium">
+                                <ChefHat className="size-3.5 mr-1.5 text-amber-500" />
+                                <span>Cooking Managed by Kitchen Chef</span>
+                              </div>
+                            )}
                           </div>
                         )
                       })}
@@ -1660,6 +1719,7 @@ export function KitchenDisplay() {
                       onReprioritize={handleReprioritize}
                       cuisineBatches={cuisineBatches}
                       onQuickAddBatch={handleQuickAddBatch}
+                      userRole={userRole}
                     />
                   ))}
                 </div>
@@ -1776,6 +1836,7 @@ export function KitchenDisplay() {
                       onReprioritize={handleReprioritize}
                       cuisineBatches={cuisineBatches}
                       onQuickAddBatch={handleQuickAddBatch}
+                      userRole={userRole}
                     />
                   ))}
                 </div>
@@ -1838,6 +1899,7 @@ export function KitchenDisplay() {
                         onReprioritize={handleReprioritize}
                         cuisineBatches={cuisineBatches}
                         onQuickAddBatch={handleQuickAddBatch}
+                        userRole={userRole}
                       />
                     ))}
                   </div>
