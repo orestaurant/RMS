@@ -22,6 +22,8 @@ import {
   CheckCircle2,
   ArrowUpRight,
   TrendingUp,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -52,6 +54,8 @@ interface CustomerOrder {
   id: string
   orderNumber: string
   status: string
+  paymentStatus?: string
+  isBilled?: boolean
   total: number
   totalAmount: number
   createdAt: string
@@ -77,20 +81,54 @@ const statusBadgeStyles: Record<string, { label: string; className: string }> = 
   CANCELLED: { label: 'Cancelled', className: 'bg-destructive/15 text-destructive border-destructive/30' },
 }
 
+interface PaginationMeta {
+  page: number
+  limit: number
+  total: number
+  totalPages: number
+  hasNextPage: boolean
+  hasPrevPage: boolean
+}
+
+interface OrderSummary {
+  totalOrders: number
+  activeOrdersCount: number
+  completedOrdersCount: number
+  totalSpent: number
+}
+
 export function CustomerDashboardView() {
   const { auth } = useAuthContext()
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
   const [loading, setLoading] = useState(true)
+  const [pageLoading, setPageLoading] = useState(false)
   const [showSongModal, setShowSongModal] = useState(false)
+
+  // Server-side pagination state for Live Orders Tracker
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(3)
+  const [pagination, setPagination] = useState<PaginationMeta>({
+    page: 1,
+    limit: 3,
+    total: 0,
+    totalPages: 1,
+    hasNextPage: false,
+    hasPrevPage: false,
+  })
+  const [summary, setSummary] = useState<OrderSummary | null>(null)
 
   const customerName = auth?.name || profile?.name || 'Customer'
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
-  const fetchCustomerData = useCallback(async () => {
+  const fetchCustomerData = useCallback(async (isPageChange = false) => {
     try {
-      setLoading(true)
+      if (isPageChange) {
+        setPageLoading(true)
+      } else {
+        setLoading(true)
+      }
       const currentCustId = auth?.id || profile?.id
       const queryParams = new URLSearchParams()
       if (currentCustId) {
@@ -100,17 +138,20 @@ export function CustomerDashboardView() {
       if (auth?.email) {
         queryParams.set('email', auth.email)
       }
-      const ordersUrl = queryParams.toString()
-        ? `/api/customer/orders?${queryParams.toString()}`
-        : '/api/customer/orders'
+      queryParams.set('scope', 'active')
+      queryParams.set('page', String(currentPage))
+      queryParams.set('limit', String(pageSize))
+      queryParams.set('includeSummary', 'true')
+
+      const ordersUrl = `/api/customer/orders?${queryParams.toString()}`
 
       const [meRes, ordersRes] = await Promise.all([
-        fetch('/api/customer/auth/me', { cache: 'no-store' }),
+        isPageChange ? Promise.resolve(null) : fetch('/api/customer/auth/me', { cache: 'no-store' }),
         fetch(ordersUrl, { cache: 'no-store' }),
       ])
 
       let loadedProfile: CustomerProfile | null = profile
-      if (meRes.ok) {
+      if (meRes && meRes.ok) {
         const meJson = await meRes.json()
         if (meJson.success && meJson.customer) {
           loadedProfile = meJson.customer
@@ -151,6 +192,15 @@ export function CustomerDashboardView() {
           })
 
           setOrders(strictlyCustomerOrders)
+          if (ordersJson.pagination) {
+            setPagination(ordersJson.pagination)
+            if (currentPage > ordersJson.pagination.totalPages && ordersJson.pagination.totalPages >= 1) {
+              setCurrentPage(ordersJson.pagination.totalPages)
+            }
+          }
+          if (ordersJson.summary) {
+            setSummary(ordersJson.summary)
+          }
         } else {
           setOrders([])
         }
@@ -162,29 +212,29 @@ export function CustomerDashboardView() {
       setOrders([])
     } finally {
       setLoading(false)
+      setPageLoading(false)
     }
-  }, [auth?.id, auth?.email, profile?.id])
+  }, [auth?.id, auth?.email, profile?.id, currentPage, pageSize])
 
   useEffect(() => {
-    fetchCustomerData()
+    fetchCustomerData(currentPage > 1 || summary !== null)
   }, [fetchCustomerData])
 
-  // Strict Account-Based Order Filtering:
-  // Dynamically compute all KPI metrics strictly from the authenticated customer's non-deleted, non-cancelled orders
-  const validOrders = orders.filter(
-    (o) => !['cancelled', 'refunded'].includes(String(o.status).toLowerCase())
-  )
-  const activeOrders = validOrders.filter((o) =>
+  // Active orders on the current page
+  const activeOrders = orders.filter((o) =>
     ['pending', 'confirmed', 'preparing', 'cooking', 'ready', 'accepted'].includes(String(o.status).toLowerCase())
   )
-  const completedOrders = validOrders.filter((o) =>
-    ['served', 'completed'].includes(String(o.status).toLowerCase())
-  )
-  const totalOrdersCount = validOrders.length
-  const totalSpentAmount = validOrders.reduce(
-    (sum, o) => sum + (Number(o.total || o.totalAmount) || 0),
-    0
-  )
+  // Lifetime KPI totals from server summary (fallback to local calculation if summary absent)
+  const totalOrdersCount = summary ? summary.totalOrders : orders.length
+  const completedOrdersCount = summary
+    ? summary.completedOrdersCount
+    : orders.filter((o) => ['served', 'completed'].includes(String(o.status).toLowerCase())).length
+  const activeOrdersTotalCount = summary ? summary.activeOrdersCount : pagination.total || activeOrders.length
+  const totalSpentAmount = summary
+    ? summary.totalSpent
+    : orders
+        .filter((o) => ['completed', 'paid', 'settled'].includes(String(o.paymentStatus || '').toLowerCase()))
+        .reduce((sum, o) => sum + (Number(o.total || o.totalAmount) || 0), 0)
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">
@@ -208,8 +258,8 @@ export function CustomerDashboardView() {
           <Button
             variant="outline"
             size="sm"
-            onClick={fetchCustomerData}
-            disabled={loading}
+            onClick={() => fetchCustomerData(false)}
+            disabled={loading || pageLoading}
             className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
           >
             <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
@@ -290,7 +340,7 @@ export function CustomerDashboardView() {
                   </Badge>
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
-                  <span>Dining investment</span>
+                  <span>Paid &amp; settled bills</span>
                   <ArrowUpRight className="size-3.5 text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
               </div>
@@ -312,7 +362,7 @@ export function CustomerDashboardView() {
               <div className="mt-2 space-y-1">
                 <div className="flex items-baseline justify-between">
                   <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground font-mono">
-                    {completedOrders.length}
+                    {completedOrdersCount}
                   </span>
                   <Badge variant="outline" className="border-violet-500/30 text-violet-600 dark:text-violet-400 bg-violet-500/5 text-[10px] font-semibold">
                     Served
@@ -340,103 +390,323 @@ export function CustomerDashboardView() {
         {/* Left Column: Active Order Status & Recent Orders */}
         <div className="lg:col-span-2 flex flex-col gap-6">
           {/* Active Orders Section */}
-          <Card className="border-border/60 shadow-sm">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base font-semibold flex items-center gap-2">
-                    <Clock className="size-4 text-primary" />
-                    Live Orders Tracker
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    Live updates as your order moves from kitchen preparation to your table
-                  </CardDescription>
+          <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm">
+            <CardHeader className="border-b border-border/50 bg-muted/20 px-5 py-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="relative flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <Flame className="size-4.5" />
+                    {activeOrders.length > 0 && (
+                      <span className="absolute -right-0.5 -top-0.5 flex size-2.5">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                        <span className="relative inline-flex size-2.5 rounded-full bg-emerald-500 ring-2 ring-card" />
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <CardTitle className="text-base font-bold tracking-tight text-foreground">
+                      Live Orders Tracker
+                    </CardTitle>
+                    <CardDescription className="text-xs text-muted-foreground">
+                      Real-time kitchen progress from preparation to your table
+                    </CardDescription>
+                  </div>
                 </div>
-                {activeOrders.length > 0 && (
-                  <Badge variant="outline" className="border-primary/30 text-primary font-mono text-xs">
-                    {activeOrders.length} Active
+                {activeOrdersTotalCount > 0 && (
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 whitespace-nowrap rounded-full border-emerald-500/30 bg-emerald-500/10 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-600 dark:text-emerald-400"
+                  >
+                    <span className="mr-1.5 inline-block size-1.5 rounded-full bg-emerald-500" />
+                    {activeOrdersTotalCount} Active
                   </Badge>
                 )}
               </div>
             </CardHeader>
-            <CardContent className="pt-0">
+
+            <CardContent className="p-5">
               {loading ? (
-                <div className="space-y-3 py-2">
-                  <div className="h-16 w-full rounded-lg shimmer" />
-                  <div className="h-16 w-full rounded-lg shimmer" />
+                <div className="space-y-3">
+                  <div className="h-36 w-full rounded-2xl shimmer" />
+                  <div className="h-36 w-full rounded-2xl shimmer" />
                 </div>
               ) : activeOrders.length === 0 ? (
-                <div className="flex flex-col items-center justify-center p-8 text-center border border-dashed rounded-xl border-border/80 bg-muted/20">
-                  <div className="size-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">
+                <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/80 bg-muted/15 px-6 py-10 text-center">
+                  <div className="mb-3 flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-xs">
                     <UtensilsCrossed className="size-5" />
                   </div>
-                  <h4 className="font-semibold text-sm text-foreground">No active orders right now</h4>
-                  <p className="text-xs text-muted-foreground max-w-sm mt-1">
+                  <h4 className="text-sm font-semibold text-foreground">No active orders right now</h4>
+                  <p className="mt-1 max-w-sm text-xs text-muted-foreground">
                     Ready to dine? Explore our menu, view current table availability, or reorder your favorites.
                   </p>
                   <Link href="/menu" className="mt-4">
-                    <Button size="sm" className="gap-2 text-xs">
+                    <Button size="sm" className="gap-2 rounded-xl text-xs font-semibold shadow-xs cursor-pointer">
                       <Sparkles className="size-3.5" />
                       <span>Order from Menu</span>
                     </Button>
                   </Link>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className={cn('space-y-4 transition-opacity duration-200', pageLoading && 'opacity-50 pointer-events-none')}>
                   {activeOrders.map((order) => {
                     const badge = statusBadgeStyles[order.status] || {
                       label: order.status,
                       className: 'bg-muted text-muted-foreground border-border',
                     }
-                    const itemsSummary = Array.isArray(order.items)
-                      ? order.items.map((i) => `${i.quantity}x ${i.name}`).join(', ')
-                      : 'Dish items'
+                    const statusLower = String(order.status || '').toLowerCase()
+                    const currentStep =
+                      statusLower === 'ready'
+                        ? 4
+                        : statusLower === 'preparing' || statusLower === 'cooking'
+                          ? 3
+                          : statusLower === 'confirmed' || statusLower === 'accepted'
+                            ? 2
+                            : 1
+
+                    const steps = [
+                      { step: 1, label: 'Placed' },
+                      { step: 2, label: 'Confirmed' },
+                      { step: 3, label: 'Cooking' },
+                      { step: 4, label: 'Ready' },
+                    ]
+                    const itemsList = Array.isArray(order.items) ? order.items : []
+                    const visibleItems = itemsList.slice(0, 4)
+                    const extraItemsCount = Math.max(0, itemsList.length - 4)
 
                     return (
                       <div
                         key={order.id}
-                        className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border/70 bg-card hover:border-primary/40 transition-colors gap-3"
+                        className="group overflow-hidden rounded-2xl border border-border/75 bg-gradient-to-b from-card to-muted/10 shadow-xs transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                       >
-                        <div className="flex flex-col gap-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-sm text-foreground font-mono">
+                        {/* Top Header: Order Number + Time + Status Pill */}
+                        <div className="flex flex-wrap items-center justify-between gap-2.5 px-4 pt-4 pb-3">
+                          <div className="flex flex-wrap items-center gap-2 min-w-0">
+                            <span className="whitespace-nowrap font-mono text-sm font-extrabold tracking-tight text-foreground">
                               #{order.orderNumber}
                             </span>
-                            <Badge variant="outline" className={cn('text-[11px] font-medium border', badge.className)}>
-                              {badge.label}
-                            </Badge>
+                            <span className="inline-flex items-center gap-1 rounded-md bg-muted/70 px-2 py-0.5 text-[11px] font-medium text-muted-foreground whitespace-nowrap">
+                              <Clock className="size-3" />
+                              {new Date(order.createdAt).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
                           </div>
-                          <p className="text-xs text-muted-foreground line-clamp-1 truncate">
-                            {itemsSummary}
-                          </p>
-                          <span className="text-[11px] text-muted-foreground/80">
-                            {new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
+
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              'shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
+                              badge.className
+                            )}
+                          >
+                            {badge.label}
+                          </Badge>
                         </div>
 
-                        <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-border/60">
-                          <span className="text-sm font-bold text-foreground mr-1">
-                            ₹{Number(order.total || order.totalAmount || 0).toLocaleString('en-IN')}
-                          </span>
-                          <Link href={`/menu?appendOrderId=${order.id}&table=1`}>
-                            <Button
-                              size="sm"
-                              className="h-8 text-xs font-bold gap-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white cursor-pointer shadow-xs"
-                              title="Add dishes directly to this live order"
-                            >
-                              <Plus className="size-3" />
-                              <span>Add on Live Order</span>
-                            </Button>
-                          </Link>
-                          <Link href="/customer-orders">
-                            <Button variant="outline" size="sm" className="h-8 text-xs">
-                              <span>View Receipt</span>
-                            </Button>
-                          </Link>
+                        {/* Kitchen Progress Stepper */}
+                        <div className="px-4 pb-3">
+                          <div className="rounded-xl border border-border/50 bg-muted/25 px-3.5 py-2.5">
+                            <div className="grid grid-cols-4 gap-2">
+                              {steps.map((s) => {
+                                const isDone = currentStep > s.step
+                                const isCurrent = currentStep === s.step
+                                return (
+                                  <div key={s.step} className="flex flex-col gap-1.5">
+                                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-border/70">
+                                      <div
+                                        className={cn(
+                                          'h-full rounded-full transition-all duration-500',
+                                          isDone
+                                            ? 'w-full bg-emerald-500'
+                                            : isCurrent
+                                              ? 'w-full bg-gradient-to-r from-orange-500 to-amber-500 animate-pulse'
+                                              : 'w-0'
+                                        )}
+                                      />
+                                    </div>
+                                    <span
+                                      className={cn(
+                                        'text-[10px] font-semibold tracking-wide',
+                                        isCurrent
+                                          ? 'text-orange-600 dark:text-orange-400'
+                                          : isDone
+                                            ? 'text-emerald-600 dark:text-emerald-400'
+                                            : 'text-muted-foreground/70'
+                                      )}
+                                    >
+                                      {s.label}
+                                    </span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Ordered Items Chips */}
+                        <div className="flex flex-wrap items-center gap-1.5 px-4 pb-4">
+                          {visibleItems.length > 0 ? (
+                            <>
+                              {visibleItems.map((item, idx) => (
+                                <span
+                                  key={`${item.id || item.name}-${idx}`}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-background/80 px-2.5 py-1 text-xs font-medium text-foreground shadow-2xs"
+                                >
+                                  <span className="font-mono text-[11px] font-bold text-primary">
+                                    {item.quantity}×
+                                  </span>
+                                  <span className="truncate max-w-[160px]">{item.name}</span>
+                                </span>
+                              ))}
+                              {extraItemsCount > 0 && (
+                                <span className="rounded-lg bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                                  +{extraItemsCount} more
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Dish items</span>
+                          )}
+                        </div>
+
+                        {/* Bottom Action Bar */}
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 bg-muted/25 px-4 py-3">
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                              Order Total
+                            </span>
+                            <span className="font-mono text-base font-extrabold tracking-tight text-foreground">
+                              ₹{Number(order.total || order.totalAmount || 0).toLocaleString('en-IN')}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Link href={`/menu?appendOrderId=${order.id}&table=1`}>
+                              <Button
+                                size="sm"
+                                className="h-8.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-3.5 text-xs font-bold text-white shadow-xs transition-all hover:from-orange-600 hover:to-amber-600 hover:shadow-sm cursor-pointer gap-1.5"
+                                title="Add dishes directly to this live order"
+                              >
+                                <Plus className="size-3.5" />
+                                <span>Add on Live Order</span>
+                              </Button>
+                            </Link>
+                            <Link href="/customer-orders">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8.5 rounded-xl border-border/80 bg-background/80 px-3 text-xs font-semibold hover:bg-accent cursor-pointer gap-1.5"
+                              >
+                                <Receipt className="size-3.5 text-muted-foreground" />
+                                <span>View Receipt</span>
+                              </Button>
+                            </Link>
+                          </div>
                         </div>
                       </div>
                     )
                   })}
+
+                  {/* Scalable Server-Side Pagination Bar */}
+                  {(pagination.total > pageSize || pagination.totalPages > 1) && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-border/60">
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span>
+                          Showing{' '}
+                          <span className="font-semibold text-foreground font-mono">
+                            {(pagination.page - 1) * pagination.limit + 1}
+                          </span>
+                          –
+                          <span className="font-semibold text-foreground font-mono">
+                            {Math.min(pagination.page * pagination.limit, pagination.total)}
+                          </span>{' '}
+                          of{' '}
+                          <span className="font-semibold text-foreground font-mono">
+                            {pagination.total}
+                          </span>
+                        </span>
+
+                        <div className="flex items-center gap-1 rounded-lg border border-border/70 bg-muted/30 p-0.5">
+                          {[3, 5, 10].map((size) => (
+                            <button
+                              key={size}
+                              type="button"
+                              onClick={() => {
+                                setPageSize(size)
+                                setCurrentPage(1)
+                              }}
+                              className={cn(
+                                'px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold transition-colors cursor-pointer',
+                                pageSize === size
+                                  ? 'bg-background text-foreground shadow-2xs'
+                                  : 'text-muted-foreground hover:text-foreground'
+                              )}
+                            >
+                              {size}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!pagination.hasPrevPage || pageLoading}
+                          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                          className="h-8 px-2.5 rounded-lg text-xs gap-1 cursor-pointer"
+                        >
+                          <ChevronLeft className="size-3.5" />
+                          <span>Prev</span>
+                        </Button>
+
+                        {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
+                          .filter(
+                            (p) =>
+                              p === 1 ||
+                              p === pagination.totalPages ||
+                              Math.abs(p - pagination.page) <= 1
+                          )
+                          .reduce<(number | 'ellipsis')[]>((acc, p, idx, arr) => {
+                            if (idx > 0 && p - arr[idx - 1] > 1) {
+                              acc.push('ellipsis')
+                            }
+                            acc.push(p)
+                            return acc
+                          }, [])
+                          .map((item, idx) =>
+                            item === 'ellipsis' ? (
+                              <span key={`el-${idx}`} className="px-1.5 text-xs text-muted-foreground">
+                                …
+                              </span>
+                            ) : (
+                              <Button
+                                key={item}
+                                variant={pagination.page === item ? 'default' : 'outline'}
+                                size="sm"
+                                disabled={pageLoading}
+                                onClick={() => setCurrentPage(item)}
+                                className="h-8 w-8 p-0 rounded-lg font-mono text-xs cursor-pointer"
+                              >
+                                {item}
+                              </Button>
+                            )
+                          )}
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!pagination.hasNextPage || pageLoading}
+                          onClick={() => setCurrentPage((p) => Math.min(pagination.totalPages, p + 1))}
+                          className="h-8 px-2.5 rounded-lg text-xs gap-1 cursor-pointer"
+                        >
+                          <span>Next</span>
+                          <ChevronRight className="size-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>

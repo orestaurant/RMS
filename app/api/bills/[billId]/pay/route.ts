@@ -9,6 +9,7 @@ import prisma from '@/lib/prisma'
 import { addNotification } from '@/lib/notifications-store'
 import { logCommunication } from '@/lib/communication-ledger'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
+import { syncCustomerOrderStats } from '@/lib/customer-stats'
 
 export async function POST(
   request: NextRequest,
@@ -192,6 +193,32 @@ export async function POST(
           ]
         : []),
     ])
+
+    // Sync customer totalSpent / totalOrders stats now that the bill is settled
+    try {
+      const linkedOrders = await prisma.order.findMany({
+        where: {
+          OR: [
+            { billId: existing.id },
+            ...(existing.tableId ? [{ tableId: existing.tableId }] : []),
+          ],
+          customerId: { not: null },
+          deletedAt: null,
+        },
+        select: { customerId: true },
+      })
+      const customerIds = Array.from(
+        new Set([
+          ...(existing.customerId ? [existing.customerId] : []),
+          ...linkedOrders.map((o) => o.customerId).filter((id): id is string => Boolean(id)),
+        ])
+      )
+      if (customerIds.length > 0) {
+        await Promise.all(customerIds.map((cid) => syncCustomerOrderStats(cid)))
+      }
+    } catch (syncErr) {
+      console.warn('Customer stats sync warning after payment:', syncErr)
+    }
 
     // Record formal Payment entry if bill has organizationId
     try {

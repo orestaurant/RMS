@@ -29,6 +29,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { DEFAULT_NOTE_POINTS } from '@/lib/note-points'
+import { useNotePoints } from '@/hooks/useNotePoints'
 
 export interface CustomerLocationData {
   isLocationLocked?: boolean
@@ -49,19 +51,11 @@ export interface CustomerLocationLockProps {
   compact?: boolean
   title?: string
   className?: string
+  restaurantId?: string | null
+  landmarks?: string[]
 }
 
-export const PRESET_LANDMARKS = [
-  'Under Banyan Tree',
-  'Near Highway ATM',
-  'Near Tree / Shade',
-  'Food Cart Front',
-  'Main Road Side',
-  'Opposite Gate',
-  'Corner Parking',
-  'Near Liquor Shop',
-  'Near Petrol Pump',
-]
+export const PRESET_LANDMARKS = DEFAULT_NOTE_POINTS
 
 /**
  * Validates whether the given latitude & longitude represent valid, non-zero coordinates.
@@ -86,7 +80,11 @@ export function CustomerLocationLock({
   compact = false,
   title = 'Customer Location / Vehicle Lock',
   className,
+  restaurantId,
+  landmarks,
 }: CustomerLocationLockProps) {
+  const { notePoints: dynamicNotePoints } = useNotePoints(restaurantId)
+  const activeLandmarks = landmarks && landmarks.length > 0 ? landmarks : dynamicNotePoints
   // Local state ensures inputs & pills are immediately editable and never frozen
   const [localData, setLocalData] = useState<CustomerLocationData>(() => ({
     isLocationLocked: Boolean(data?.isLocationLocked),
@@ -478,7 +476,7 @@ export function CustomerLocationLock({
 
             {/* Quick-tap preset pills */}
             <div className="flex flex-wrap gap-1.5">
-              {PRESET_LANDMARKS.map((pill) => {
+              {activeLandmarks.map((pill) => {
                 const isSelected = Boolean(
                   localData.landmarkNote &&
                   localData.landmarkNote.toLowerCase().includes(pill.toLowerCase())

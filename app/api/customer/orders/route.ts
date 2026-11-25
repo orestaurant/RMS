@@ -58,6 +58,17 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url)
     const queryCustId = url.searchParams.get('customerId') || url.searchParams.get('userId')
     const queryEmail = url.searchParams.get('email')
+    const pageParam = url.searchParams.get('page')
+    const limitParam = url.searchParams.get('limit')
+    const scopeParam = (url.searchParams.get('scope') || 'all').toLowerCase().trim()
+    const includeSummary = url.searchParams.get('includeSummary') === 'true'
+
+    const isPaginated = Boolean(pageParam || limitParam)
+    const page = Math.max(1, parseInt(pageParam || '1', 10) || 1)
+    const limit = limitParam
+      ? Math.min(50, Math.max(1, parseInt(limitParam, 10) || 5))
+      : 100
+    const skip = isPaginated ? (page - 1) * limit : 0
 
     if (!customerId && (queryCustId || queryEmail)) {
       const cust = await prisma.customer.findFirst({
@@ -146,35 +157,95 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const orders = await prisma.order.findMany({
-      where: {
-        OR: orConditions,
-        deletedAt: null,
-      },
-      include: {
-        items: {
-          include: {
-            menuItem: true,
+    const ACTIVE_STATUSES = [
+      'pending',
+      'confirmed',
+      'preparing',
+      'ready',
+      'accepted',
+      'PENDING',
+      'PREPARING',
+      'ACCEPTED',
+      'READY',
+    ]
+    const COMPLETED_STATUSES = ['served', 'completed', 'SERVED', 'COMPLETED']
+
+    const baseWhere: any = {
+      OR: orConditions,
+      deletedAt: null,
+    }
+
+    const listWhere: any = { ...baseWhere }
+    if (scopeParam === 'active') {
+      listWhere.status = { in: ACTIVE_STATUSES }
+    } else if (scopeParam === 'completed') {
+      listWhere.status = { in: COMPLETED_STATUSES }
+    }
+
+    const validNonCancelledWhere: any = {
+      ...baseWhere,
+      status: { notIn: ['cancelled', 'CANCELLED', 'refunded'] },
+    }
+
+    const [orders, totalCount, summaryData] = await Promise.all([
+      prisma.order.findMany({
+        where: listWhere,
+        include: {
+          items: {
+            include: {
+              menuItem: true,
+            },
+          },
+          table: true,
+          branch: {
+            select: {
+              name: true,
+            },
+          },
+          customer: {
+            select: {
+              id: true,
+              email: true,
+              name: true,
+            },
           },
         },
-        table: true,
-        branch: {
-          select: {
-            name: true,
-          },
+        orderBy: {
+          createdAt: 'desc',
         },
-        customer: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    })
+        skip,
+        take: limit,
+      }),
+      isPaginated ? prisma.order.count({ where: listWhere }) : Promise.resolve(-1),
+      includeSummary
+        ? Promise.all([
+            prisma.order.count({ where: validNonCancelledWhere }),
+            prisma.order.count({
+              where: {
+                ...baseWhere,
+                status: { in: ACTIVE_STATUSES },
+              },
+            }),
+            prisma.order.count({
+              where: {
+                ...baseWhere,
+                status: { in: COMPLETED_STATUSES },
+              },
+            }),
+            prisma.order.aggregate({
+              where: {
+                ...validNonCancelledWhere,
+                OR: [
+                  { paymentStatus: 'completed' },
+                  { bill: { status: 'PAID' } },
+                  { bill: { paymentStatus: 'completed' } },
+                ],
+              },
+              _sum: { totalAmount: true },
+            }),
+          ])
+        : Promise.resolve(null),
+    ])
 
     // Auto-link any matching unlinked orders to customerId in the background
     const unlinkedOrderIds = orders
@@ -220,9 +291,30 @@ export async function GET(request: NextRequest) {
       }
     })
 
+    const effectiveTotal = totalCount >= 0 ? totalCount : formattedOrders.length
+    const totalPages = Math.max(1, Math.ceil(effectiveTotal / limit))
+
     return NextResponse.json({
       success: true,
       orders: formattedOrders,
+      pagination: {
+        page,
+        limit,
+        total: effectiveTotal,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
+      ...(summaryData
+        ? {
+            summary: {
+              totalOrders: summaryData[0],
+              activeOrdersCount: summaryData[1],
+              completedOrdersCount: summaryData[2],
+              totalSpent: Number(summaryData[3]._sum?.totalAmount || 0),
+            },
+          }
+        : {}),
     })
   } catch (error: any) {
     console.error('Error fetching customer orders:', error)
@@ -343,12 +435,11 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // 4. Update customer aggregate stats
+    // 4. Update customer order count (totalSpent is only updated once bill is paid/settled)
     await prisma.customer.update({
       where: { id: session.customerId },
       data: {
         totalOrders: { increment: 1 },
-        totalSpent: { increment: totalCalculated },
       },
     }).catch((err) => {
       console.warn('Failed to increment customer stats:', err)
