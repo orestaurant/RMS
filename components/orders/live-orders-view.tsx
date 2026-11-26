@@ -84,12 +84,23 @@ export interface LiveOrder {
   total: number
   createdAt?: string | Date
   isLocationLocked?: boolean
+  vehicleName?: string | null
   vehicleNumber?: string | null
   landmarkNote?: string | null
   customerLat?: number | null
   customerLng?: number | null
   locationAccuracy?: number | null
   locationCapturedAt?: string | Date | null
+}
+
+function isCarOrder(order: LiveOrder): boolean {
+  return Boolean(
+    order.vehicleName ||
+      order.vehicleNumber ||
+      order.landmarkNote ||
+      order.customerLat ||
+      order.isLocationLocked
+  )
 }
 
 const statusConfig: Record<
@@ -165,6 +176,7 @@ function OrderRow({
 
   const [draftLocation, setDraftLocation] = useState<CustomerLocationData>({
     isLocationLocked: order.isLocationLocked,
+    vehicleName: order.vehicleName,
     vehicleNumber: order.vehicleNumber,
     landmarkNote: order.landmarkNote,
     customerLat: order.customerLat,
@@ -176,6 +188,7 @@ function OrderRow({
   useEffect(() => {
     setDraftLocation({
       isLocationLocked: order.isLocationLocked,
+      vehicleName: order.vehicleName,
       vehicleNumber: order.vehicleNumber,
       landmarkNote: order.landmarkNote,
       customerLat: order.customerLat,
@@ -185,6 +198,7 @@ function OrderRow({
     })
   }, [
     order.isLocationLocked,
+    order.vehicleName,
     order.vehicleNumber,
     order.landmarkNote,
     order.customerLat,
@@ -271,9 +285,9 @@ function OrderRow({
           </div>
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="truncate">{order.waiter}</span>
-            {order.vehicleNumber && (
-              <span className="text-[10px] font-mono font-bold text-primary truncate max-w-[70px]">
-                • {order.vehicleNumber}
+            {(order.vehicleNumber || order.vehicleName) && (
+              <span className="text-[10px] font-mono font-bold text-primary truncate max-w-[110px]">
+                • {order.vehicleName ? `${order.vehicleName}${order.vehicleNumber ? ` (${order.vehicleNumber})` : ''}` : order.vehicleNumber}
               </span>
             )}
           </div>
@@ -743,20 +757,27 @@ function OrderRow({
 
           <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3.5">
             {/* Indian High-Security Style License Plate Card */}
-            {(draftLocation.vehicleNumber || order.vehicleNumber) ? (
+            {(draftLocation.vehicleNumber || order.vehicleNumber || draftLocation.vehicleName || order.vehicleName) ? (
               <div className="flex flex-col items-center justify-center p-4 rounded-xl bg-gradient-to-b from-muted/60 to-muted/20 border-2 border-border shadow-inner">
                 <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider mb-1.5 flex items-center gap-1.5">
                   <Car className="size-3.5 text-primary" /> Target Customer Vehicle
                 </div>
-                <div className="inline-flex items-center rounded-lg border-2 border-slate-700 bg-white dark:bg-slate-900 px-5 py-2 shadow-md">
-                  <div className="flex flex-col items-center mr-3 pr-3 border-r border-slate-300 dark:border-slate-700 text-blue-600 select-none">
-                    <span className="text-[10px] font-black leading-none tracking-tight">IND</span>
-                    <span className="text-[10px] leading-none mt-0.5">🇮🇳</span>
+                {(draftLocation.vehicleName || order.vehicleName) && (
+                  <p className="text-xs font-bold text-foreground mb-2">
+                    {draftLocation.vehicleName || order.vehicleName}
+                  </p>
+                )}
+                {(draftLocation.vehicleNumber || order.vehicleNumber) && (
+                  <div className="inline-flex items-center rounded-lg border-2 border-slate-700 bg-white dark:bg-slate-900 px-5 py-2 shadow-md">
+                    <div className="flex flex-col items-center mr-3 pr-3 border-r border-slate-300 dark:border-slate-700 text-blue-600 select-none">
+                      <span className="text-[10px] font-black leading-none tracking-tight">IND</span>
+                      <span className="text-[10px] leading-none mt-0.5">🇮🇳</span>
+                    </div>
+                    <span className="font-mono text-2xl sm:text-3xl font-black tracking-widest text-slate-900 dark:text-slate-100 select-all">
+                      {draftLocation.vehicleNumber || order.vehicleNumber}
+                    </span>
                   </div>
-                  <span className="font-mono text-2xl sm:text-3xl font-black tracking-widest text-slate-900 dark:text-slate-100 select-all">
-                    {draftLocation.vehicleNumber || order.vehicleNumber}
-                  </span>
-                </div>
+                )}
               </div>
             ) : null}
 
@@ -1023,7 +1044,7 @@ export function LiveOrdersView() {
             cooking: fetchedOrders.filter((o) => o.status === 'cooking' || (o.status as any) === 'preparing').length,
             ready: fetchedOrders.filter((o) => o.status === 'ready').length,
             served: fetchedOrders.filter((o) => o.status === 'served').length,
-            carOrders: fetchedOrders.filter((o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)).length,
+            carOrders: fetchedOrders.filter(isCarOrder).length,
           }
           const dynamicStats = {
             activeCount: fetchedOrders.filter((o) => ['pending', 'accepted', 'cooking', 'ready', 'preparing'].includes(o.status)).length,
@@ -1147,9 +1168,7 @@ export function LiveOrdersView() {
   const handleOrderDeleted = (orderId: string) => {
     setOrders((prev) => {
       const updated = prev.filter((o) => o.id !== orderId && o.fullId !== orderId)
-      const carCount = updated.filter(
-        (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
-      ).length
+      const carCount = updated.filter(isCarOrder).length
       setCounts({
         all: updated.length,
         pending: updated.filter((o) => o.status === 'pending').length,
@@ -1176,9 +1195,7 @@ export function LiveOrdersView() {
           ? { ...o, ...updatedOrder }
           : o
       )
-      const carCount = updated.filter(
-        (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
-      ).length
+      const carCount = updated.filter(isCarOrder).length
       setCounts({
         all: updated.length,
         pending: updated.filter((o) => o.status === 'pending').length,
@@ -1198,10 +1215,7 @@ export function LiveOrdersView() {
   }
 
   const carOrdersCount = useMemo(
-    () =>
-      orders.filter(
-        (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
-      ).length,
+    () => orders.filter(isCarOrder).length,
     [orders]
   )
 
@@ -1219,7 +1233,7 @@ export function LiveOrdersView() {
         return false
       }
       if (filterMode === 'car') {
-        return Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
+        return isCarOrder(o)
       }
       return true
     })

@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getCustomerSession } from '@/lib/customer-auth'
+import { isCustomerFirstOrder } from '@/lib/customer-stats'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,7 +45,9 @@ export async function POST(request: NextRequest) {
 
     // ── 1. First-Time Customer 15% Discount (FIRST15) ───────────────────
     if (code === 'FIRST15') {
-      const isFirst = !customer || Number(customer.totalOrders || 0) === 0
+      const isFirst = customer
+        ? await isCustomerFirstOrder(customer.id, customer.totalOrders)
+        : true
       if (!isFirst) {
         return NextResponse.json(
           {

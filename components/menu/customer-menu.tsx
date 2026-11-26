@@ -1,8 +1,8 @@
 'use client'
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { useSearchParams, useRouter } from 'next/navigation'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import {
   UtensilsCrossed,
   ShoppingBag,
@@ -192,9 +192,24 @@ export function getOrderLifecycleInfo(status: string) {
   }
 }
 
+const NON_VEG_NAME_REGEX = /chicken|mutton|fish|egg|prawn|meat|lamb|beef|pork|seafood/i
+
+function normalizeDietaryParam(value: string | null): 'all' | 'veg' | 'non-veg' {
+  const v = (value || '').toLowerCase().trim()
+  if (v === 'veg') return 'veg'
+  if (v === 'non-veg' || v === 'nonveg') return 'non-veg'
+  return 'all'
+}
+
 export function CustomerMenu() {
   const searchParams = useSearchParams()
   const router = useRouter()
+  const pathname = usePathname()
+
+  const urlSearch = searchParams?.get('search') || searchParams?.get('q') || ''
+  const urlDishId = searchParams?.get('dishId') || ''
+  const urlCategory = searchParams?.get('category') || 'all'
+  const urlDietary = normalizeDietaryParam(searchParams?.get('dietary') ?? null)
 
   // 1. Table Number State & Persistence
   const [tableNumber, setTableNumber] = useState<string>('')
@@ -207,6 +222,7 @@ export function CustomerMenu() {
   const [isDriveInModalOpen, setIsDriveInModalOpen] = useState<boolean>(false)
   const [locationData, setLocationData] = useState<CustomerLocationData>({
     isLocationLocked: false,
+    vehicleName: '',
     vehicleNumber: '',
     landmarkNote: '',
     customerLat: null,
@@ -232,23 +248,84 @@ export function CustomerMenu() {
   const [isAppendMode, setIsAppendMode] = useState<boolean>(false)
   const [appendTargetOrder, setAppendTargetOrder] = useState<any | null>(null)
 
-  // Real-time tick for live dish preparation countdown timers
-  const [liveNow, setLiveNow] = useState<number>(Date.now())
+  // Real-time tick for live dish preparation countdown timers (only active while Orders modal is open)
+  const [liveNow, setLiveNow] = useState<number>(() => Date.now())
   useEffect(() => {
+    if (!showOrdersModal) return
+    setLiveNow(Date.now())
     const t = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         setLiveNow(Date.now())
       }
-    }, 1000)
+    }, 5000)
     return () => clearInterval(t)
-  }, [])
+  }, [showOrdersModal])
 
-  // 4. Filters & Pagination State
-  const [selectedCategory, setSelectedCategory] = useState<string>('all')
-  const [searchQuery, setSearchQuery] = useState<string>('')
-  const [dietaryFilter, setDietaryFilter] = useState<'all' | 'veg' | 'non-veg'>('all')
+  // 4. Filters & Pagination State (initialized directly from URL search params)
+  const [selectedCategory, setSelectedCategory] = useState<string>(urlCategory)
+  const [searchQuery, setSearchQuery] = useState<string>(urlSearch)
+  const [selectedDishId, setSelectedDishId] = useState<string>(urlDishId)
+  const [dietaryFilter, setDietaryFilter] = useState<'all' | 'veg' | 'non-veg'>(urlDietary)
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [itemsPerPage, setItemsPerPage] = useState<number>(8)
+
+  // Keep filter state synchronized when navigating via URL (e.g. CustomerTopSearch or Back/Forward)
+  const urlFilterKey = `${urlSearch}::${urlDishId}::${urlCategory}::${urlDietary}`
+  const prevUrlFilterKeyRef = useRef<string>(urlFilterKey)
+  useEffect(() => {
+    if (prevUrlFilterKeyRef.current !== urlFilterKey) {
+      prevUrlFilterKeyRef.current = urlFilterKey
+      setSearchQuery(urlSearch)
+      setSelectedDishId(urlDishId)
+      setSelectedCategory(urlCategory)
+      setDietaryFilter(urlDietary)
+    }
+  }, [urlFilterKey, urlSearch, urlDishId, urlCategory, urlDietary])
+
+  // Resolve category name in URL (e.g. ?category=Starters) to its category ID once categories load
+  useEffect(() => {
+    if (selectedCategory === 'all' || categories.length === 0) return
+    const alreadyMatchesId = categories.some((c) => c.id === selectedCategory)
+    if (alreadyMatchesId) return
+    const matchedByName = categories.find(
+      (c) => c.name.toLowerCase() === selectedCategory.toLowerCase()
+    )
+    if (matchedByName) {
+      setSelectedCategory(matchedByName.id)
+    }
+  }, [categories, selectedCategory])
+
+  // Strip search/filter query params from URL while preserving table, mode & order params
+  const clearUrlFilters = useCallback(
+    (includeCategoryAndDietary: boolean) => {
+      const nextParams = new URLSearchParams(searchParams?.toString() || '')
+      nextParams.delete('search')
+      nextParams.delete('q')
+      nextParams.delete('dishId')
+      if (includeCategoryAndDietary) {
+        nextParams.delete('category')
+        nextParams.delete('dietary')
+      }
+      const nextQuery = nextParams.toString()
+      prevUrlFilterKeyRef.current = `::::${includeCategoryAndDietary ? 'all' : urlCategory}::${includeCategoryAndDietary ? 'all' : urlDietary}`
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    },
+    [pathname, router, searchParams, urlCategory, urlDietary]
+  )
+
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery('')
+    setSelectedDishId('')
+    clearUrlFilters(false)
+  }, [clearUrlFilters])
+
+  const handleResetAllFilters = useCallback(() => {
+    setSearchQuery('')
+    setSelectedDishId('')
+    setSelectedCategory('all')
+    setDietaryFilter('all')
+    clearUrlFilters(true)
+  }, [clearUrlFilters])
 
   // 5. Cart & Drawer State
   const [cart, setCart] = useState<{ [cartKey: string]: CartItem }>({})
@@ -276,32 +353,66 @@ export function CustomerMenu() {
     reviewDiscountClaimed: boolean
   } | null>(null)
 
+  // Fetch & sync customer profile and default coupon eligibility with server state
+  const refreshCustomerAuth = useCallback(async () => {
+    try {
+      const res = await fetch('/api/customer/auth/me', { cache: 'no-store' })
+      const data = await res.json()
+      if (!data.success || !data.customer) return
+
+      const cust = data.customer
+      setCustomerAuth(cust)
+
+      if (cust.isFirstOrder) {
+        setCouponInput((prev) => prev || 'FIRST15')
+        return
+      }
+
+      // Customer already has at least one placed order: never prefill or keep FIRST15 active
+      setAppliedCoupon((prev) => (prev === 'FIRST15' ? null : prev))
+
+      if (cust.reviewDiscountCode && !cust.reviewDiscountClaimed) {
+        setSavedReviewCoupon(cust.reviewDiscountCode)
+        setCouponInput((prev) =>
+          !prev || prev.trim().toUpperCase() === 'FIRST15' ? cust.reviewDiscountCode : prev
+        )
+      } else {
+        setSavedReviewCoupon(null)
+        setCouponInput((prev) => (prev.trim().toUpperCase() === 'FIRST15' ? '' : prev))
+        if (cust.reviewDiscountClaimed) {
+          try {
+            localStorage.removeItem('resto_saved_coupon')
+          } catch {}
+        }
+      }
+    } catch {
+      // Ignore transient auth check failures on public menu
+    }
+  }, [])
+
   // Auto-detect customer profile & saved review discount coupon from localStorage/session
   useEffect(() => {
     try {
       const saved = localStorage.getItem('resto_saved_coupon')
       if (saved) {
-        setSavedReviewCoupon(saved)
-        setCouponInput(saved)
+        if (saved.trim().toUpperCase() === 'FIRST15') {
+          localStorage.removeItem('resto_saved_coupon')
+        } else {
+          setSavedReviewCoupon(saved)
+          setCouponInput(saved)
+        }
       }
     } catch (e) {}
 
-    fetch('/api/customer/auth/me', { cache: 'no-store' })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.customer) {
-          setCustomerAuth(data.customer)
-          // If customer has never ordered before (first-time customer), suggest FIRST15
-          if (data.customer.isFirstOrder) {
-            setCouponInput('FIRST15')
-          } else if (data.customer.reviewDiscountCode && !data.customer.reviewDiscountClaimed) {
-            setSavedReviewCoupon(data.customer.reviewDiscountCode)
-            setCouponInput(data.customer.reviewDiscountCode)
-          }
-        }
-      })
-      .catch(() => {})
-  }, [])
+    refreshCustomerAuth()
+  }, [refreshCustomerAuth])
+
+  // Re-verify first-order status when cart opens while marked eligible (handles multi-tab orders)
+  useEffect(() => {
+    if (isCartOpen && customerAuth?.isFirstOrder) {
+      refreshCustomerAuth()
+    }
+  }, [isCartOpen, customerAuth?.isFirstOrder, refreshCustomerAuth])
 
   // 5b. Customization Modal State
   const [customizingItem, setCustomizingItem] = useState<CustomerMenuItem | null>(null)
@@ -321,13 +432,15 @@ export function CustomerMenu() {
   useEffect(() => {
     const urlTable = searchParams?.get('table') || searchParams?.get('tableNumber')
     const urlMode = searchParams?.get('mode') || searchParams?.get('orderType')
+    const urlVehicleName = searchParams?.get('car') || searchParams?.get('vehicleName')
     const urlVehicle = searchParams?.get('vehicle') || searchParams?.get('vehicleNumber')
     const urlLandmark = searchParams?.get('landmark') || searchParams?.get('spot')
     const isDriveInParam =
       urlMode === 'drive_in' ||
       urlMode === 'car' ||
       searchParams?.get('drive_in') === 'true' ||
-      Boolean(urlVehicle)
+      Boolean(urlVehicle) ||
+      Boolean(urlVehicleName)
 
     let initialMode: 'dine_in' | 'drive_in' = 'dine_in'
     if (urlTable && urlTable.trim()) {
@@ -354,12 +467,17 @@ export function CustomerMenu() {
           setLocationData((prev) => ({
             ...prev,
             ...parsed,
+            // Pre-order customer spot setup must always stay editable
+            isLocationLocked: false,
+            vehicleName: urlVehicleName ? String(urlVehicleName).trim() : parsed.vehicleName || '',
             vehicleNumber: urlVehicle ? String(urlVehicle).trim().toUpperCase() : parsed.vehicleNumber || '',
             landmarkNote: urlLandmark ? String(urlLandmark).trim() : parsed.landmarkNote || '',
           }))
-        } else if (urlVehicle || urlLandmark) {
+        } else if (urlVehicleName || urlVehicle || urlLandmark) {
           setLocationData((prev) => ({
             ...prev,
+            isLocationLocked: false,
+            vehicleName: urlVehicleName ? String(urlVehicleName).trim() : '',
             vehicleNumber: urlVehicle ? String(urlVehicle).trim().toUpperCase() : '',
             landmarkNote: urlLandmark ? String(urlLandmark).trim() : '',
           }))
@@ -509,12 +627,19 @@ export function CustomerMenu() {
     setShowTableModal(false)
   }
 
-  // Helper to count total quantity of a menu item across all customized keys
-  const getItemQtyInCart = (itemId: string) => {
-    return Object.values(cart)
-      .filter((ci) => ci.menuItem.id === itemId)
-      .reduce((sum, ci) => sum + ci.quantity, 0)
-  }
+  // Precomputed O(1) cart quantity lookup per menuItemId
+  const cartQtyByItemId = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const ci of Object.values(cart)) {
+      map.set(ci.menuItem.id, (map.get(ci.menuItem.id) || 0) + ci.quantity)
+    }
+    return map
+  }, [cart])
+
+  const getItemQtyInCart = useCallback(
+    (itemId: string) => cartQtyByItemId.get(itemId) || 0,
+    [cartQtyByItemId]
+  )
 
   // Open Customization Modal (for new item or editing existing cart item)
   const openCustomizeModal = (
@@ -766,10 +891,16 @@ export function CustomerMenu() {
     } catch (e) {
       // Offline / fallback verification
       if (code === 'FIRST15') {
-        setAppliedCoupon(code)
-        setAppliedCouponPercent(15)
-        setAppliedCouponMinOrder(0)
-        setCouponMessage('15% First-Time Customer Discount Applied!')
+        if (customerAuth && !customerAuth.isFirstOrder) {
+          setCouponError(
+            'The 15% discount is only valid on your first order. As an existing customer, you get 10% off on orders above ₹1,000 with EXISTING10 or your review discount!'
+          )
+        } else {
+          setAppliedCoupon(code)
+          setAppliedCouponPercent(15)
+          setAppliedCouponMinOrder(0)
+          setCouponMessage('15% First-Time Customer Discount Applied!')
+        }
       } else if (code === 'EXISTING10' || code === 'WELCOME10') {
         setAppliedCoupon(code)
         setAppliedCouponPercent(10)
@@ -799,6 +930,7 @@ export function CustomerMenu() {
   const handleRemoveCoupon = () => {
     setAppliedCoupon(null)
     setAppliedCouponPercent(0)
+    setAppliedCouponMinOrder(0)
     setCouponMessage(null)
     setCouponError(null)
   }
@@ -845,17 +977,27 @@ export function CustomerMenu() {
 
   const totalActiveOrders = queueOrders.length + prepOrders.length
 
-  // Filtered Menu Items
+  const isSearchFocused = Boolean(searchQuery.trim() || selectedDishId)
+
+  // Filtered Menu Items (single-pass filter + relevance ranking for search queries)
   const filteredItems = useMemo(() => {
-    return menuItems.filter((item) => {
+    const trimmedQuery = searchQuery.trim().toLowerCase()
+    const selectedCatLower = selectedCategory.toLowerCase()
+
+    const matched = menuItems.filter((item) => {
       // Must be available
       if (item.isAvailable === false) return false
+
+      // Exact dish selection from top search dropdown
+      if (selectedDishId) {
+        if (item.id !== selectedDishId) return false
+      }
 
       // Category match
       if (selectedCategory !== 'all') {
         const matchesCat =
           item.categoryId === selectedCategory ||
-          (item.category || '').toLowerCase() === selectedCategory.toLowerCase()
+          (item.category || '').toLowerCase() === selectedCatLower
         if (!matchesCat) return false
       }
 
@@ -863,23 +1005,34 @@ export function CustomerMenu() {
       if (dietaryFilter === 'veg' && !item.isVeg) return false
       if (dietaryFilter === 'non-veg' && item.isVeg) return false
 
-      // Search match
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim()
-        const matchName = item.name.toLowerCase().includes(q)
-        const matchDesc = item.description?.toLowerCase().includes(q)
-        const matchCat = item.category?.toLowerCase().includes(q)
+      // Search match (skipped when exact dishId is selected)
+      if (!selectedDishId && trimmedQuery) {
+        const matchName = item.name.toLowerCase().includes(trimmedQuery)
+        const matchDesc = item.description?.toLowerCase().includes(trimmedQuery)
+        const matchCat = item.category?.toLowerCase().includes(trimmedQuery)
         if (!matchName && !matchDesc && !matchCat) return false
       }
 
       return true
     })
-  }, [menuItems, selectedCategory, dietaryFilter, searchQuery])
+
+    if (!selectedDishId && trimmedQuery && matched.length > 1) {
+      return [...matched].sort((a, b) => {
+        const aName = a.name.toLowerCase()
+        const bName = b.name.toLowerCase()
+        const aRank = aName === trimmedQuery ? 0 : aName.startsWith(trimmedQuery) ? 1 : aName.includes(trimmedQuery) ? 2 : 3
+        const bRank = bName === trimmedQuery ? 0 : bName.startsWith(trimmedQuery) ? 1 : bName.includes(trimmedQuery) ? 2 : 3
+        return aRank - bRank
+      })
+    }
+
+    return matched
+  }, [menuItems, selectedCategory, dietaryFilter, searchQuery, selectedDishId])
 
   // Reset pagination to page 1 on filter/search change
   useEffect(() => {
     setCurrentPage(1)
-  }, [selectedCategory, searchQuery, dietaryFilter, itemsPerPage])
+  }, [selectedCategory, searchQuery, selectedDishId, dietaryFilter, itemsPerPage])
 
   // Pagination Calculations
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / itemsPerPage))
@@ -925,9 +1078,9 @@ export function CustomerMenu() {
     }
 
     if (orderMode === 'drive_in') {
-      if (!locationData.vehicleNumber && !locationData.landmarkNote && !isValidCoord(locationData.customerLat, locationData.customerLng)) {
+      if (!locationData.vehicleNumber && !locationData.vehicleName && !locationData.landmarkNote && !isValidCoord(locationData.customerLat, locationData.customerLng)) {
         setIsDriveInModalOpen(true)
-        setOrderError('Please enter your vehicle number or highway parking spot before placing order.')
+        setOrderError('Please enter your car name, vehicle number, or highway parking spot before placing order.')
         return
       }
     } else if (!tableNumber) {
@@ -940,7 +1093,11 @@ export function CustomerMenu() {
       setOrderError(null)
 
       const finalTable = orderMode === 'drive_in'
-        ? (locationData.vehicleNumber ? `🚗 ${locationData.vehicleNumber.trim().toUpperCase()}` : '🚗 Car Delivery')
+        ? (locationData.vehicleNumber
+            ? `🚗 ${locationData.vehicleNumber.trim().toUpperCase()}`
+            : locationData.vehicleName
+            ? `🚗 ${locationData.vehicleName.trim()}`
+            : '🚗 Car Delivery')
         : tableNumber
 
       // ── Handle Append Mode (Attach to Existing Live Order) ──
@@ -991,6 +1148,7 @@ export function CustomerMenu() {
         couponCode: appliedCoupon && isCouponMinOrderMet ? appliedCoupon : undefined,
         discountAmount: appliedCoupon && isCouponMinOrderMet ? discountAmount : 0,
         discountPercentage: appliedCoupon && isCouponMinOrderMet ? (appliedCouponPercent || 10) : 0,
+        vehicleName: orderMode === 'drive_in' ? (locationData.vehicleName?.trim() || undefined) : undefined,
         vehicleNumber: orderMode === 'drive_in' ? (locationData.vehicleNumber?.trim().toUpperCase() || undefined) : undefined,
         landmarkNote: orderMode === 'drive_in' ? (locationData.landmarkNote?.trim() || undefined) : undefined,
         customerLat: orderMode === 'drive_in' ? locationData.customerLat : undefined,
@@ -1033,18 +1191,36 @@ export function CustomerMenu() {
       setCart({})
       setIsCartOpen(false)
       setOrderNotes('')
-      // Clear applied and saved coupon upon order completion
+      // Clear applied, prefilled, and saved coupon state upon order completion
       try {
         localStorage.removeItem('resto_saved_coupon')
       } catch (e) {}
+      const usedReviewCoupon = Boolean(
+        appliedCoupon && (appliedCoupon.startsWith('REVIEW10') || appliedCoupon.includes('REVIEW'))
+      )
+      setCouponInput('')
       setAppliedCoupon(null)
+      setAppliedCouponPercent(0)
+      setAppliedCouponMinOrder(0)
       setSavedReviewCoupon(null)
       setCouponMessage(null)
       setCouponError(null)
+      // Optimistically mark customer as existing (no longer eligible for FIRST15) before background sync
+      setCustomerAuth((prev) =>
+        prev
+          ? {
+              ...prev,
+              isFirstOrder: false,
+              totalOrders: (prev.totalOrders || 0) + 1,
+              ...(usedReviewCoupon ? { reviewDiscountClaimed: true } : {}),
+            }
+          : prev
+      )
       // Instantly open live order tracker
       setShowOrdersModal(true)
-      // Background non-blocking table orders refresh
+      // Background non-blocking table orders & auth state refresh
       fetchTableOrders()
+      refreshCustomerAuth()
     } catch (err: any) {
       console.error('Order creation failed:', err)
       setOrderError(err.message || 'Network error occurred while sending order. Please try again.')
@@ -1093,6 +1269,9 @@ export function CustomerMenu() {
       if (locationData.vehicleNumber) {
         return `🚗 ${locationData.vehicleNumber.trim().toUpperCase()}`
       }
+      if (locationData.vehicleName) {
+        return `🚗 ${locationData.vehicleName.trim()}`
+      }
       return '🚗 Car Delivery'
     }
     if (!tableNumber) return 'No Table'
@@ -1101,17 +1280,38 @@ export function CustomerMenu() {
     if (/^t\d+/i.test(s)) return s.toUpperCase()
     if (/^\d+$/.test(s)) return `Table ${s.padStart(2, '0')}`
     return s
-  }, [orderMode, locationData.vehicleNumber, tableNumber])
+  }, [orderMode, locationData.vehicleName, locationData.vehicleNumber, tableNumber])
 
-  // Active categories with available items only (hides empty 0-item categories)
+  // Single-pass O(N) category count index + active categories
+  const categoryItemCounts = useMemo(() => {
+    const byId = new Map<string, number>()
+    const byName = new Map<string, number>()
+    for (const item of menuItems) {
+      if (item.categoryId) {
+        byId.set(item.categoryId, (byId.get(item.categoryId) || 0) + 1)
+      }
+      const catName = (item.category || '').toLowerCase()
+      if (catName) {
+        byName.set(catName, (byName.get(catName) || 0) + 1)
+      }
+    }
+    return { byId, byName }
+  }, [menuItems])
+
+  const getCategoryItemCount = useCallback(
+    (cat: { id: string; name: string }) => {
+      return (
+        categoryItemCounts.byId.get(cat.id) ??
+        categoryItemCounts.byName.get(cat.name.toLowerCase()) ??
+        0
+      )
+    },
+    [categoryItemCounts]
+  )
+
   const activeCategories = useMemo(() => {
-    return categories.filter((cat) => {
-      const count = menuItems.filter(
-        (i) => i.categoryId === cat.id || (i.category || '').toLowerCase() === cat.name.toLowerCase()
-      ).length
-      return count > 0
-    })
-  }, [categories, menuItems])
+    return categories.filter((cat) => getCategoryItemCount(cat) > 0)
+  }, [categories, getCategoryItemCount])
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col antialiased selection:bg-primary/20 transition-colors duration-200">
@@ -1211,14 +1411,14 @@ export function CustomerMenu() {
             >
               <Car className="size-3.5" />
               <span>Drive-In</span>
-              {locationData.vehicleNumber ? (
+              {locationData.vehicleNumber || locationData.vehicleName ? (
                 <span className={cn(
-                  'text-[10px] px-1.5 py-0.5 rounded-md font-extrabold flex items-center gap-0.5 max-w-[80px] truncate',
+                  'text-[10px] px-1.5 py-0.5 rounded-md font-extrabold flex items-center gap-0.5 max-w-[96px] truncate',
                   orderMode === 'drive_in'
                     ? 'bg-white/20 text-white'
                     : 'bg-muted text-foreground'
                 )}>
-                  {locationData.vehicleNumber}
+                  {locationData.vehicleNumber || locationData.vehicleName}
                   <Edit3 className="size-2.5 opacity-80" />
                 </span>
               ) : (
@@ -2209,12 +2409,14 @@ export function CustomerMenu() {
 
       {/* 5. MAIN CONTENT AREA */}
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 space-y-5 pb-28">
-        {/* Live 20-Second Chef Preparation & Batch Add-on Banner */}
-        <LiveBatchAddonBanner
-          currentTableNumber={tableNumber || 'Table 1'}
-          customerName="Menu Guest"
-          onOrderPlaced={fetchTableOrders}
-        />
+        {/* Live 20-Second Chef Preparation & Batch Add-on Banner (hidden during focused dish search) */}
+        {!isSearchFocused && (
+          <LiveBatchAddonBanner
+            currentTableNumber={tableNumber || 'Table 1'}
+            customerName="Menu Guest"
+            onOrderPlaced={fetchTableOrders}
+          />
+        )}
         {/* Live Orders Status Quick Pill Banner */}
         {totalActiveOrders > 0 && (
           <div
@@ -2250,13 +2452,21 @@ export function CustomerMenu() {
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
             <Input
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value
+                setSearchQuery(val)
+                if (selectedDishId) setSelectedDishId('')
+                if (!val.trim() && (urlSearch || urlDishId)) {
+                  clearUrlFilters(false)
+                }
+              }}
               placeholder="Search dishes, drinks, ingredients..."
               className="pl-10 h-11 rounded-2xl bg-card border border-border/70 text-xs sm:text-sm shadow-2xs focus-visible:ring-2 focus-visible:ring-primary/20"
             />
-            {searchQuery && (
+            {(searchQuery || selectedDishId) && (
               <button
-                onClick={() => setSearchQuery('')}
+                type="button"
+                onClick={handleClearSearch}
                 className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1 cursor-pointer"
                 aria-label="Clear search"
               >
@@ -2315,39 +2525,59 @@ export function CustomerMenu() {
           </div>
         </div>
 
-        {/* Category Pills (Horizontal Sticky Bar) */}
-        <div className="sticky top-[64px] z-20 -mx-4 px-4 py-2.5 bg-background/90 backdrop-blur-xl border-b border-border/50 flex items-center gap-2 overflow-x-auto no-scrollbar">
-          <button
-            onClick={() => setSelectedCategory('all')}
-            className={cn(
-              'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition-all cursor-pointer select-none',
-              selectedCategory === 'all'
-                ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
-                : 'bg-card border border-border/70 text-muted-foreground hover:text-foreground hover:border-border'
-            )}
-          >
-            All Items ({menuItems.length})
-          </button>
-          {activeCategories.map((cat) => {
-            const count = menuItems.filter(
-              (i) => i.categoryId === cat.id || (i.category || '').toLowerCase() === cat.name.toLowerCase()
-            ).length
-            return (
-              <button
-                key={cat.id}
-                onClick={() => setSelectedCategory(cat.id)}
-                className={cn(
-                  'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition-all cursor-pointer select-none',
-                  selectedCategory === cat.id
-                    ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
-                    : 'bg-card border border-border/70 text-muted-foreground hover:text-foreground hover:border-border'
-                )}
-              >
-                {cat.name} ({count})
-              </button>
-            )
-          })}
-        </div>
+        {/* Focused Search Banner OR Full Category Pills Bar */}
+        {isSearchFocused ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-2xl bg-primary/5 border border-primary/25">
+            <div className="flex items-center gap-2 text-xs font-semibold text-foreground min-w-0">
+              <Search className="size-3.5 text-primary shrink-0" />
+              <span className="truncate">
+                Showing <strong className="font-black text-primary">{filteredItems.length}</strong>{' '}
+                {filteredItems.length === 1 ? 'dish' : 'dishes'}
+                {searchQuery.trim() ? ` for “${searchQuery.trim()}”` : ''}
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleResetAllFilters}
+              className="h-7 px-3 rounded-xl text-xs font-bold border-primary/30 hover:bg-primary hover:text-primary-foreground cursor-pointer shrink-0"
+            >
+              Show Full Menu
+            </Button>
+          </div>
+        ) : (
+          <div className="sticky top-[64px] z-20 -mx-4 px-4 py-2.5 bg-background/90 backdrop-blur-xl border-b border-border/50 flex items-center gap-2 overflow-x-auto no-scrollbar">
+            <button
+              onClick={() => setSelectedCategory('all')}
+              className={cn(
+                'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition-all cursor-pointer select-none',
+                selectedCategory === 'all'
+                  ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
+                  : 'bg-card border border-border/70 text-muted-foreground hover:text-foreground hover:border-border'
+              )}
+            >
+              All Items ({menuItems.length})
+            </button>
+            {activeCategories.map((cat) => {
+              const count = getCategoryItemCount(cat)
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => setSelectedCategory(cat.id)}
+                  className={cn(
+                    'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition-all cursor-pointer select-none',
+                    selectedCategory === cat.id
+                      ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
+                      : 'bg-card border border-border/70 text-muted-foreground hover:text-foreground hover:border-border'
+                  )}
+                >
+                  {cat.name} ({count})
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         {/* Loading / Error States */}
         {loading ? (
@@ -2386,12 +2616,8 @@ export function CustomerMenu() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => {
-                setSearchQuery('')
-                setSelectedCategory('all')
-                setDietaryFilter('all')
-              }}
-              className="rounded-xl text-xs"
+              onClick={handleResetAllFilters}
+              className="rounded-xl text-xs cursor-pointer"
             >
               Reset Filters
             </Button>
@@ -2417,7 +2643,7 @@ export function CustomerMenu() {
                   {items.map((item) => {
                     const inCartQty = getItemQtyInCart(item.id)
                     const desc = getCleanDescription(item.description)
-                    const isNonVeg = !item.isVeg || /chicken|mutton|fish|egg|prawn|meat|lamb|beef|pork|seafood/i.test(item.name || '')
+                    const isNonVeg = !item.isVeg || NON_VEG_NAME_REGEX.test(item.name || '')
 
                     return (
                       <div
@@ -2768,7 +2994,13 @@ export function CustomerMenu() {
                     <div className="min-w-0">
                       <p className="text-[11px] text-muted-foreground font-medium">Highway Delivery For</p>
                       <p className="text-sm font-extrabold text-foreground truncate">
-                        {locationData.vehicleNumber ? `🚗 ${locationData.vehicleNumber}` : 'Car Spot Unset'}
+                        {locationData.vehicleName && locationData.vehicleNumber
+                          ? `🚗 ${locationData.vehicleName} (${locationData.vehicleNumber})`
+                          : locationData.vehicleNumber
+                          ? `🚗 ${locationData.vehicleNumber}`
+                          : locationData.vehicleName
+                          ? `🚗 ${locationData.vehicleName}`
+                          : 'Car Spot Unset'}
                       </p>
                     </div>
                   </div>
@@ -2779,7 +3011,7 @@ export function CustomerMenu() {
                     className="h-7 text-xs font-bold px-2.5 gap-1.5 border-primary/40 text-primary hover:bg-primary/10 cursor-pointer shrink-0"
                   >
                     <Edit3 className="size-3" />
-                    <span>{locationData.vehicleNumber || locationData.landmarkNote ? 'Edit Spot' : 'Set Spot'}</span>
+                    <span>{locationData.vehicleName || locationData.vehicleNumber || locationData.landmarkNote ? 'Edit Spot' : 'Set Spot'}</span>
                   </Button>
                 </div>
 
@@ -3354,6 +3586,7 @@ export function CustomerMenu() {
                   localStorage.setItem('rms_customer_location', JSON.stringify(updated))
                 }
               }}
+              allowLock={false}
               showToggle={false}
               title="Vehicle Details & Parking Spot"
             />
@@ -3371,10 +3604,18 @@ export function CustomerMenu() {
             <Button
               size="sm"
               onClick={() => {
+                const cleanedLocation: CustomerLocationData = {
+                  ...locationData,
+                  isLocationLocked: false,
+                  vehicleName: locationData.vehicleName?.trim().replace(/\s+/g, ' ') || '',
+                  vehicleNumber: locationData.vehicleNumber?.trim().toUpperCase().replace(/\s+/g, ' ') || '',
+                  landmarkNote: locationData.landmarkNote?.trim() || '',
+                }
+                setLocationData(cleanedLocation)
                 setOrderMode('drive_in')
                 if (typeof window !== 'undefined') {
                   localStorage.setItem('rms_customer_order_mode', 'drive_in')
-                  localStorage.setItem('rms_customer_location', JSON.stringify(locationData))
+                  localStorage.setItem('rms_customer_location', JSON.stringify(cleanedLocation))
                 }
                 setIsDriveInModalOpen(false)
               }}

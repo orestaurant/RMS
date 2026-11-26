@@ -178,8 +178,8 @@ export function CustomerBillModal({
         // If user already tapped a tip optimistically, sync with server immediately
         if (pendingTipRef.current !== null && pendingTipRef.current !== json.data.tipAmount) {
           applyTipToServer(pendingTipRef.current, json.data.id)
-        } else if (json.data.tipAmount > 0 && selectedTip === 0) {
-          setSelectedTip(json.data.tipAmount)
+        } else if (json.data.tipAmount > 0) {
+          setSelectedTip((prev) => (prev === 0 ? json.data.tipAmount : prev))
         }
 
         if (asCustomerRequest) {
@@ -194,7 +194,7 @@ export function CustomerBillModal({
         setLoading(false)
       }
     },
-    [tableNumber, selectedOrderId, customerName, customerPhone, tableOrders?.length, selectedTip]
+    [tableNumber, selectedOrderId, customerName, customerPhone, tableOrders?.length]
   )
 
   useEffect(() => {

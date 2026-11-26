@@ -17,6 +17,8 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams
     const category = searchParams.get('category') || 'all'
     const search = searchParams.get('search') || ''
+    const dietary = searchParams.get('dietary') || 'all'
+    const onlyAvailable = searchParams.get('available') === 'true'
     const branchId = searchParams.get('branchId')
     const explicitRestId = searchParams.get('restaurantId')
     const pageParam = searchParams.get('page')
@@ -140,22 +142,41 @@ export async function GET(request: NextRequest) {
       filtered = filtered.filter((i) => i.restaurantId === restaurantId)
     }
 
+    if (onlyAvailable) {
+      filtered = filtered.filter((i) => i.isAvailable !== false)
+    }
+
+    if (dietary === 'veg') {
+      filtered = filtered.filter((i) => Boolean(i.isVeg))
+    } else if (dietary === 'non-veg') {
+      filtered = filtered.filter((i) => !i.isVeg)
+    }
+
     if (category && category !== 'all') {
+      const catLower = category.toLowerCase()
       filtered = filtered.filter(
         (i) =>
           i.categoryId === category ||
-          (i.category || '').toLowerCase() === category.toLowerCase()
+          (i.category || '').toLowerCase() === catLower
       )
     }
 
     if (search.trim()) {
       const q = search.trim().toLowerCase()
-      filtered = filtered.filter(
-        (i) =>
-          i.name.toLowerCase().includes(q) ||
-          i.description.toLowerCase().includes(q) ||
-          i.category.toLowerCase().includes(q)
-      )
+      filtered = filtered
+        .filter(
+          (i) =>
+            i.name.toLowerCase().includes(q) ||
+            i.description.toLowerCase().includes(q) ||
+            i.category.toLowerCase().includes(q)
+        )
+        .sort((a, b) => {
+          const aName = a.name.toLowerCase()
+          const bName = b.name.toLowerCase()
+          const aScore = aName === q ? 0 : aName.startsWith(q) ? 1 : aName.includes(q) ? 2 : 3
+          const bScore = bName === q ? 0 : bName.startsWith(q) ? 1 : bName.includes(q) ? 2 : 3
+          return aScore - bScore
+        })
     }
 
     const total = filtered.length

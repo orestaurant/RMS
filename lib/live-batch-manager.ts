@@ -13,6 +13,10 @@ import {
   updateFallbackOrder,
 } from '@/lib/kds-utils'
 import { invalidateDashboardStatsCache } from '@/lib/dashboard-cache'
+import {
+  notifyOrderPrepared,
+  markOrderPreparedNotificationsRead,
+} from '@/lib/notifications-store'
 
 export type BatchStatus =
   | 'PREPARING_LOCK_WINDOW' // 20s open grace window for live customer +1 add-ons
@@ -449,6 +453,15 @@ export async function markBatchReady(batchId: string): Promise<{
 
     // Update in-memory fallback orders
     updateFallbackOrder(alloc.orderNumber, { status: 'ready' })
+
+    await notifyOrderPrepared({
+      orderId: alloc.orderId || null,
+      orderNumber: alloc.orderNumber,
+      tableNumber: String(alloc.tableNumber || 'Table'),
+      customerName: alloc.customerName || 'Guest',
+      customerId: alloc.customerId || null,
+      itemsSummary: `${alloc.quantity}× ${batch.dishName}`,
+    }).catch(() => {})
   }
 
   batch.distributionHistory = distributions
@@ -486,6 +499,7 @@ export async function markBatchServed(batchId: string): Promise<{ success: boole
         }).catch(() => {})
       }
       updateFallbackOrder(alloc.orderNumber, { status: 'served' })
+      await markOrderPreparedNotificationsRead(alloc.orderNumber).catch(() => {})
     } catch (e) {}
   }
 

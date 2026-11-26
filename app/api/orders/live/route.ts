@@ -313,6 +313,7 @@ export async function GET(request: NextRequest) {
             total: Number(order.totalAmount || order.total || 0),
             createdAt: order.createdAt,
             isLocationLocked: Boolean(order.isLocationLocked ?? (order.metadata as any)?.isLocationLocked),
+            vehicleName: (order.metadata as any)?.vehicleName ?? null,
             vehicleNumber: order.vehicleNumber ?? (order.metadata as any)?.vehicleNumber ?? null,
             landmarkNote: order.landmarkNote ?? (order.metadata as any)?.landmarkNote ?? null,
             customerLat:
@@ -376,6 +377,7 @@ export async function GET(request: NextRequest) {
             total,
             createdAt: mo.createdAt || new Date().toISOString(),
             isLocationLocked: Boolean(mo.isLocationLocked),
+            vehicleName: mo.vehicleName || null,
             vehicleNumber: mo.vehicleNumber || null,
             landmarkNote: mo.landmarkNote || null,
             customerLat: mo.customerLat ?? null,

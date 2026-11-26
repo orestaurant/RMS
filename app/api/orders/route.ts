@@ -19,6 +19,8 @@ import {
   setCachedBranchMeta,
 } from '@/lib/dashboard-cache'
 import { getCustomerSession } from '@/lib/customer-auth'
+import { isCustomerFirstOrder } from '@/lib/customer-stats'
+import { createPersistentNotification } from '@/lib/notifications-store'
 
 // High-speed in-memory caches to eliminate redundant Neon DB round-trips over Singapore link
 const inMemoryTableCache = new Map<string, { id: string; tableNumber: string }>()
@@ -186,6 +188,7 @@ export async function GET(request: NextRequest) {
       createdAt: o.createdAt,
       notes: o.notes || (o.metadata as any)?.notes || null,
       isLocationLocked: Boolean(o.isLocationLocked ?? (o.metadata as any)?.isLocationLocked),
+      vehicleName: (o.metadata as any)?.vehicleName ?? null,
       vehicleNumber: o.vehicleNumber ?? (o.metadata as any)?.vehicleNumber ?? null,
       landmarkNote: o.landmarkNote ?? (o.metadata as any)?.landmarkNote ?? null,
       customerLat: o.customerLat !== null && o.customerLat !== undefined ? Number(o.customerLat) : ((o.metadata as any)?.customerLat !== undefined ? Number((o.metadata as any).customerLat) : null),
@@ -224,6 +227,7 @@ export async function GET(request: NextRequest) {
             createdAt: fb.createdAt || new Date().toISOString(),
             notes: fb.specialNotes || fb.notes || null,
             isLocationLocked: Boolean(fb.isLocationLocked),
+            vehicleName: fb.vehicleName || null,
             vehicleNumber: fb.vehicleNumber || null,
             landmarkNote: fb.landmarkNote || null,
             customerLat: fb.customerLat ?? null,
@@ -281,6 +285,7 @@ export async function POST(request: NextRequest) {
       notes = '',
       customerId = null,
       isLocationLocked = false,
+      vehicleName = null,
       vehicleNumber = null,
       landmarkNote = null,
       customerLat = null,
@@ -299,6 +304,7 @@ export async function POST(request: NextRequest) {
     const parsedLng = customerLng !== null && customerLng !== undefined && !isNaN(Number(customerLng)) ? Number(customerLng) : null
     const parsedAccuracy = locationAccuracy !== null && locationAccuracy !== undefined && !isNaN(Number(locationAccuracy)) ? Number(locationAccuracy) : null
     const parsedCapturedAt = locationCapturedAt ? new Date(locationCapturedAt) : (parsedLat !== null ? new Date() : null)
+    const parsedVehicleName = vehicleName ? String(vehicleName).trim().slice(0, 80) : null
     const parsedVehicle = vehicleNumber ? String(vehicleNumber).trim().toUpperCase() : null
     const parsedLandmark = landmarkNote ? String(landmarkNote).trim() : null
     const parsedLocked = Boolean(isLocationLocked)
@@ -698,18 +704,9 @@ export async function POST(request: NextRequest) {
 
     if (couponCode) {
       if (couponCode === 'FIRST15') {
-        let isFirstTime = true
-        if (effectiveCustomerId) {
-          try {
-            const cust = await prisma.customer.findUnique({
-              where: { id: effectiveCustomerId },
-              select: { totalOrders: true },
-            })
-            if (cust && Number(cust.totalOrders || 0) > 0) {
-              isFirstTime = false
-            }
-          } catch (err) {}
-        }
+        const isFirstTime = effectiveCustomerId
+          ? await isCustomerFirstOrder(effectiveCustomerId)
+          : true
 
         if (isFirstTime) {
           discountPercentage = 15
@@ -805,7 +802,7 @@ export async function POST(request: NextRequest) {
         locationCapturedAt: parsedCapturedAt,
         metadata: {
           tableNumber: finalTableNumber,
-          customerName: body.customerName || (parsedVehicle ? `Car Guest (${parsedVehicle})` : 'Table Guest'),
+          customerName: body.customerName || (parsedVehicle ? `Car Guest (${parsedVehicleName ? `${parsedVehicleName} - ` : ''}${parsedVehicle})` : parsedVehicleName ? `Car Guest (${parsedVehicleName})` : 'Table Guest'),
           placedVia: body.source === 'POS' ? 'POS_TERMINAL' : 'QR_SELF_ORDER',
           subtotal: calculatedSubtotal,
           discountAmount,
@@ -814,6 +811,7 @@ export async function POST(request: NextRequest) {
           couponCode,
           taxAmount,
           isLocationLocked: parsedLocked,
+          vehicleName: parsedVehicleName,
           vehicleNumber: parsedVehicle,
           landmarkNote: parsedLandmark,
           customerLat: parsedLat,
@@ -842,27 +840,40 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // Update customer totalOrders and totalSpent
+    // Persist customer order stats & review coupon claim before returning so subsequent checks see updated state
+    const postOrderUpdates: Promise<unknown>[] = []
     if (effectiveCustomerId) {
-      prisma.customer.update({
-        where: { id: effectiveCustomerId },
-        data: {
-          totalOrders: { increment: 1 },
-          totalSpent: { increment: finalTotal },
-        },
-      }).catch((e) => {
-        console.warn('Could not increment customer order stats:', e)
-      })
+      postOrderUpdates.push(
+        prisma.customer
+          .update({
+            where: { id: effectiveCustomerId },
+            data: {
+              totalOrders: { increment: 1 },
+              totalSpent: { increment: finalTotal },
+            },
+          })
+          .catch((e) => {
+            console.warn('Could not increment customer order stats:', e)
+          })
+      )
     }
 
     // If review coupon code was used, mark it claimed in customerFeedback
     if (couponCode) {
-      prisma.customerFeedback.updateMany({
-        where: { discountCode: { equals: couponCode, mode: 'insensitive' } },
-        data: { discountClaimed: true },
-      }).catch((e) => {
-        console.warn('Could not mark review discount claimed:', e)
-      })
+      postOrderUpdates.push(
+        prisma.customerFeedback
+          .updateMany({
+            where: { discountCode: { equals: couponCode, mode: 'insensitive' } },
+            data: { discountClaimed: true },
+          })
+          .catch((e) => {
+            console.warn('Could not mark review discount claimed:', e)
+          })
+      )
+    }
+
+    if (postOrderUpdates.length > 0) {
+      await Promise.allSettled(postOrderUpdates)
     }
 
     // Invalidate dashboard stats cache, KDS cache, and live orders cache immediately
@@ -875,15 +886,16 @@ export async function POST(request: NextRequest) {
       registerActiveLiveOrder({
         id: order.orderNumber,
         fullId: order.id,
-        tableNumber: parsedVehicle ? `🚗 ${parsedVehicle}` : `Table ${finalTableNumber}`,
+        tableNumber: parsedVehicle ? `🚗 ${parsedVehicle}` : parsedVehicleName ? `🚗 ${parsedVehicleName}` : `Table ${finalTableNumber}`,
         source: body.source === 'POS' ? 'pos' : 'qr_order',
         waiter: body.waiter || (body.source === 'POS' ? 'POS Staff' : 'QR Self-Order'),
-        customerName: body.customerName || (parsedVehicle ? `Car (${parsedVehicle})` : `Guest (${finalTableNumber})`),
+        customerName: body.customerName || (parsedVehicle ? `Car (${parsedVehicleName ? `${parsedVehicleName} · ` : ''}${parsedVehicle})` : parsedVehicleName ? `Car (${parsedVehicleName})` : `Guest (${finalTableNumber})`),
         status: 'pending',
         priority: 'normal',
         createdAt: order.createdAt.toISOString(),
         specialNotes: notes || undefined,
         isLocationLocked: parsedLocked,
+        vehicleName: parsedVehicleName,
         vehicleNumber: parsedVehicle,
         landmarkNote: parsedLandmark,
         customerLat: parsedLat,
@@ -908,6 +920,31 @@ export async function POST(request: NextRequest) {
       console.warn('Could not register in KDS live queue:', kdsErr)
     }
 
+    // 11. Dispatch real-time new order notification to Waiter & Staff bell (non-blocking)
+    const notifTableLabel = parsedVehicle
+      ? `🚗 ${parsedVehicleName ? `${parsedVehicleName} (${parsedVehicle})` : parsedVehicle}`
+      : parsedVehicleName
+      ? `🚗 ${parsedVehicleName}`
+      : `Table ${finalTableNumber}`
+    const notifItemsSummary = orderItemsCreateData
+      .map((i: any) => `${i.quantity}× ${i.itemName}`)
+      .join(', ')
+
+    createPersistentNotification({
+      type: 'new_order',
+      title: `🛎️ New Order #${order.orderNumber} (${notifTableLabel})`,
+      body: `${notifItemsSummary || 'New order received'} — ₹${finalTotal.toFixed(0)}`,
+      customerId: effectiveCustomerId || null,
+      organizationId: organizationId || null,
+      metadata: {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        tableNumber: notifTableLabel,
+        customerId: effectiveCustomerId || null,
+        itemsSummary: notifItemsSummary,
+      },
+    }).catch((err) => console.warn('New order notification error:', err))
+
     return NextResponse.json(
       {
         success: true,
@@ -923,6 +960,7 @@ export async function POST(request: NextRequest) {
           itemsCount: orderItemsCreateData.length,
           createdAt: order.createdAt,
           isLocationLocked: order.isLocationLocked,
+          vehicleName: parsedVehicleName,
           vehicleNumber: order.vehicleNumber,
           landmarkNote: order.landmarkNote,
           customerLat: order.customerLat,

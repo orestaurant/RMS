@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { OrderStatusEnum, PaymentStatusEnum, Prisma } from '@prisma/client'
 import { getCustomerSession } from '@/lib/customer-auth'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import {
@@ -157,32 +158,42 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const ACTIVE_STATUSES = [
-      'pending',
-      'confirmed',
-      'preparing',
-      'ready',
-      'accepted',
-      'PENDING',
-      'PREPARING',
-      'ACCEPTED',
-      'READY',
+    const COMPLETED_STATUSES: OrderStatusEnum[] = ['served', 'completed', 'SERVED', 'COMPLETED']
+    const CANCELLED_OR_SETTLED_STATUSES: OrderStatusEnum[] = [
+      'cancelled',
+      'CANCELLED',
+      'refunded',
+      'completed',
+      'COMPLETED',
     ]
-    const COMPLETED_STATUSES = ['served', 'completed', 'SERVED', 'COMPLETED']
+    const SETTLED_PAYMENT_STATUSES: PaymentStatusEnum[] = ['completed', 'refunded', 'cancelled']
 
-    const baseWhere: any = {
+    const baseWhere: Prisma.OrderWhereInput = {
       OR: orConditions,
       deletedAt: null,
     }
 
-    const listWhere: any = { ...baseWhere }
-    if (scopeParam === 'active') {
-      listWhere.status = { in: ACTIVE_STATUSES }
-    } else if (scopeParam === 'completed') {
-      listWhere.status = { in: COMPLETED_STATUSES }
+    // Active tracker includes all non-cancelled orders (including 'served') until bill payment completes
+    const activeTrackerWhere: Prisma.OrderWhereInput = {
+      ...baseWhere,
+      status: { notIn: CANCELLED_OR_SETTLED_STATUSES },
+      paymentStatus: { notIn: SETTLED_PAYMENT_STATUSES },
+      NOT: [
+        { bill: { status: 'PAID' } },
+        { bill: { paymentStatus: 'completed' } },
+        { tableBill: { status: 'PAID' } },
+        { tableBill: { paymentStatus: 'completed' } },
+      ],
     }
 
-    const validNonCancelledWhere: any = {
+    const listWhere: Prisma.OrderWhereInput =
+      scopeParam === 'active'
+        ? activeTrackerWhere
+        : scopeParam === 'completed'
+          ? { ...baseWhere, status: { in: COMPLETED_STATUSES } }
+          : baseWhere
+
+    const validNonCancelledWhere: Prisma.OrderWhereInput = {
       ...baseWhere,
       status: { notIn: ['cancelled', 'CANCELLED', 'refunded'] },
     }
@@ -190,24 +201,48 @@ export async function GET(request: NextRequest) {
     const [orders, totalCount, summaryData] = await Promise.all([
       prisma.order.findMany({
         where: listWhere,
-        include: {
+        select: {
+          id: true,
+          orderNumber: true,
+          status: true,
+          total: true,
+          totalAmount: true,
+          source: true,
+          orderType: true,
+          paymentStatus: true,
+          isBilled: true,
+          billId: true,
+          tableId: true,
+          customerId: true,
+          metadata: true,
+          createdAt: true,
+          updatedAt: true,
           items: {
-            include: {
-              menuItem: true,
-            },
-          },
-          table: true,
-          branch: {
-            select: {
-              name: true,
-            },
-          },
-          customer: {
             select: {
               id: true,
-              email: true,
-              name: true,
+              itemName: true,
+              quantity: true,
+              basePrice: true,
+              itemTotal: true,
+              menuItem: {
+                select: { name: true },
+              },
             },
+          },
+          table: {
+            select: { tableNumber: true },
+          },
+          branch: {
+            select: { name: true },
+          },
+          customer: {
+            select: { id: true, email: true, name: true },
+          },
+          bill: {
+            select: { id: true, billNumber: true, status: true, paymentStatus: true },
+          },
+          tableBill: {
+            select: { id: true, billNumber: true, status: true, paymentStatus: true },
           },
         },
         orderBy: {
@@ -220,12 +255,7 @@ export async function GET(request: NextRequest) {
       includeSummary
         ? Promise.all([
             prisma.order.count({ where: validNonCancelledWhere }),
-            prisma.order.count({
-              where: {
-                ...baseWhere,
-                status: { in: ACTIVE_STATUSES },
-              },
-            }),
+            prisma.order.count({ where: activeTrackerWhere }),
             prisma.order.count({
               where: {
                 ...baseWhere,
@@ -239,6 +269,8 @@ export async function GET(request: NextRequest) {
                   { paymentStatus: 'completed' },
                   { bill: { status: 'PAID' } },
                   { bill: { paymentStatus: 'completed' } },
+                  { tableBill: { status: 'PAID' } },
+                  { tableBill: { paymentStatus: 'completed' } },
                 ],
               },
               _sum: { totalAmount: true },
@@ -266,6 +298,8 @@ export async function GET(request: NextRequest) {
       // If the order has not been approved in kitchen display (status is pending or missing), ensure it says 'pending'
       const finalStatus = rawStatus ? order.status : 'pending'
 
+      const linkedBill = order.bill || order.tableBill
+
       return {
         id: order.id,
         orderNumber: order.orderNumber,
@@ -275,10 +309,16 @@ export async function GET(request: NextRequest) {
         source: order.source || 'ONLINE',
         orderType: order.orderType,
         paymentStatus: order.paymentStatus,
+        isBilled: Boolean(order.isBilled),
+        billId: linkedBill?.id || order.billId || null,
+        billNumber: linkedBill?.billNumber || null,
+        billStatus: linkedBill?.status || null,
+        billPaymentStatus: linkedBill?.paymentStatus || null,
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,
         customerId: order.customerId || customerId,
         customerEmail: order.customer?.email || cleanEmail || null,
+        tableId: order.tableId || null,
         tableNumber: order.table?.tableNumber || (order.metadata as any)?.tableNumber || null,
         branchName: order.branch?.name || 'Main Branch',
         items: order.items.map((item) => ({

@@ -11,6 +11,10 @@ import {
 } from '@/lib/kds-utils'
 import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
+import {
+  notifyOrderPrepared,
+  markOrderPreparedNotificationsRead,
+} from '@/lib/notifications-store'
 
 export const dynamic = 'force-dynamic'
 
@@ -69,16 +73,27 @@ export async function PATCH(
       const isUuid = (str: string) =>
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
 
+      const orderSelect = {
+        id: true,
+        orderNumber: true,
+        organizationId: true,
+        customerId: true,
+        vehicleNumber: true,
+        metadata: true,
+        table: { select: { tableNumber: true } },
+        items: { select: { itemName: true, quantity: true } },
+      } as const
+
       // Fast primary-key lookup if valid UUID
       if (fullId && isUuid(fullId)) {
         existing = await prisma.order.findUnique({
           where: { id: fullId },
-          select: { id: true, orderNumber: true },
+          select: orderSelect,
         })
       } else if (id && isUuid(id)) {
         existing = await prisma.order.findUnique({
           where: { id },
-          select: { id: true, orderNumber: true },
+          select: orderSelect,
         })
       }
 
@@ -88,7 +103,7 @@ export async function PATCH(
         if (orderNum) {
           existing = await prisma.order.findFirst({
             where: { orderNumber: orderNum },
-            select: { id: true, orderNumber: true },
+            select: orderSelect,
           })
         }
       }
@@ -180,6 +195,36 @@ export async function PATCH(
     // Invalidate both caches immediately on any status change for real-time reactivity
     invalidateKDSCache()
     invalidateLiveOrdersCache()
+
+    // Emit server-side food-ready notification (for Waiters, Staff & Customer) or mark read on served
+    if (normalizedKdsStatus === 'ready') {
+      const meta = (existing?.metadata && typeof existing.metadata === 'object' ? existing.metadata : {}) as Record<string, any>
+      const tableNum =
+        existing?.table?.tableNumber ||
+        (existing?.vehicleNumber ? `🚗 ${existing.vehicleNumber}` : null) ||
+        meta.tableNumber ||
+        body.tableNumber ||
+        'Table'
+      const itemsSummary =
+        Array.isArray(existing?.items) && existing.items.length > 0
+          ? existing.items.map((i: any) => `${i.quantity}× ${i.itemName}`).join(', ')
+          : body.itemsSummary || null
+
+      await notifyOrderPrepared({
+        orderId: existing?.id || fullId || id,
+        orderNumber: existing?.orderNumber || orderNumber || id,
+        tableNumber: String(tableNum),
+        customerName: meta.customerName || body.customerName || null,
+        customerId: existing?.customerId || null,
+        organizationId: existing?.organizationId || null,
+        itemsSummary,
+      }).catch((err) => console.warn('Failed to emit order_prepared notification:', err))
+    } else if (normalizedKdsStatus === 'served') {
+      await markOrderPreparedNotificationsRead(
+        existing?.orderNumber || orderNumber || id,
+        existing?.organizationId || null
+      ).catch(() => {})
+    }
 
     return NextResponse.json(
       successResponse({

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Car,
   MapPin,
@@ -34,6 +34,7 @@ import { useNotePoints } from '@/hooks/useNotePoints'
 
 export interface CustomerLocationData {
   isLocationLocked?: boolean
+  vehicleName?: string | null
   vehicleNumber?: string | null
   landmarkNote?: string | null
   customerLat?: number | null
@@ -47,6 +48,7 @@ export interface CustomerLocationLockProps {
   onChange?: (updated: CustomerLocationData) => void
   onSave?: (updated: CustomerLocationData, unlockOverride?: boolean) => Promise<void> | void
   isEditable?: boolean
+  allowLock?: boolean
   showToggle?: boolean
   compact?: boolean
   title?: string
@@ -76,6 +78,7 @@ export function CustomerLocationLock({
   onChange,
   onSave,
   isEditable = true,
+  allowLock = true,
   showToggle = false,
   compact = false,
   title = 'Customer Location / Vehicle Lock',
@@ -85,16 +88,25 @@ export function CustomerLocationLock({
 }: CustomerLocationLockProps) {
   const { notePoints: dynamicNotePoints } = useNotePoints(restaurantId)
   const activeLandmarks = landmarks && landmarks.length > 0 ? landmarks : dynamicNotePoints
-  // Local state ensures inputs & pills are immediately editable and never frozen
-  const [localData, setLocalData] = useState<CustomerLocationData>(() => ({
-    isLocationLocked: Boolean(data?.isLocationLocked),
-    vehicleNumber: data?.vehicleNumber || '',
-    landmarkNote: data?.landmarkNote || '',
-    customerLat: data?.customerLat ?? null,
-    customerLng: data?.customerLng ?? null,
-    locationAccuracy: data?.locationAccuracy ?? null,
-    locationCapturedAt: data?.locationCapturedAt ?? null,
-  }))
+
+  const normalizeData = useCallback(
+    (src?: CustomerLocationData): CustomerLocationData => ({
+      isLocationLocked: allowLock ? Boolean(src?.isLocationLocked) : false,
+      vehicleName: src?.vehicleName || '',
+      vehicleNumber: src?.vehicleNumber || '',
+      landmarkNote: src?.landmarkNote || '',
+      customerLat: src?.customerLat ?? null,
+      customerLng: src?.customerLng ?? null,
+      locationAccuracy: src?.locationAccuracy ?? null,
+      locationCapturedAt: src?.locationCapturedAt ?? null,
+    }),
+    [allowLock]
+  )
+
+  // Local state + ref ensure inputs & pills are immediately editable without React 19 updater side-effects
+  const [localData, setLocalData] = useState<CustomerLocationData>(() => normalizeData(data))
+  const localDataRef = useRef<CustomerLocationData>(localData)
+  localDataRef.current = localData
 
   const [gpsLoading, setGpsLoading] = useState(false)
   const [gpsError, setGpsError] = useState<string | null>(null)
@@ -104,56 +116,79 @@ export function CustomerLocationLock({
   const [isExpanded, setIsExpanded] = useState(true)
   const [isEnabled, setIsEnabled] = useState(
     Boolean(
+      data?.vehicleName ||
       data?.vehicleNumber ||
       data?.landmarkNote ||
       isValidCoord(data?.customerLat, data?.customerLng) ||
-      data?.isLocationLocked
+      (allowLock && data?.isLocationLocked)
     )
   )
 
-  // Sync internal state whenever parent updates the data prop
+  // Sync internal state only when parent prop genuinely differs from current local state
   useEffect(() => {
-    if (data) {
-      setLocalData({
-        isLocationLocked: Boolean(data.isLocationLocked),
-        vehicleNumber: data.vehicleNumber || '',
-        landmarkNote: data.landmarkNote || '',
-        customerLat: data.customerLat ?? null,
-        customerLng: data.customerLng ?? null,
-        locationAccuracy: data.locationAccuracy ?? null,
-        locationCapturedAt: data.locationCapturedAt ?? null,
-      })
-      if (
-        data.vehicleNumber ||
-        data.landmarkNote ||
-        isValidCoord(data.customerLat, data.customerLng) ||
-        data.isLocationLocked
-      ) {
-        setIsEnabled(true)
-      }
+    if (!data) return
+    const normalized = normalizeData(data)
+    const cur = localDataRef.current
+    const changed =
+      Boolean(cur.isLocationLocked) !== Boolean(normalized.isLocationLocked) ||
+      (cur.vehicleName || '') !== (normalized.vehicleName || '') ||
+      (cur.vehicleNumber || '') !== (normalized.vehicleNumber || '') ||
+      (cur.landmarkNote || '') !== (normalized.landmarkNote || '') ||
+      (cur.customerLat ?? null) !== (normalized.customerLat ?? null) ||
+      (cur.customerLng ?? null) !== (normalized.customerLng ?? null) ||
+      (cur.locationAccuracy ?? null) !== (normalized.locationAccuracy ?? null) ||
+      (cur.locationCapturedAt ?? null) !== (normalized.locationCapturedAt ?? null)
+
+    if (changed) {
+      localDataRef.current = normalized
+      setLocalData(normalized)
+    }
+
+    if (
+      normalized.vehicleName ||
+      normalized.vehicleNumber ||
+      normalized.landmarkNote ||
+      isValidCoord(normalized.customerLat, normalized.customerLng) ||
+      normalized.isLocationLocked
+    ) {
+      setIsEnabled(true)
     }
   }, [
+    data,
     data?.isLocationLocked,
+    data?.vehicleName,
     data?.vehicleNumber,
     data?.landmarkNote,
     data?.customerLat,
     data?.customerLng,
     data?.locationAccuracy,
     data?.locationCapturedAt,
+    normalizeData,
   ])
 
-  const isLocked = Boolean(localData.isLocationLocked)
+  const isLocked = allowLock && Boolean(localData.isLocationLocked)
   const canEdit = isEditable && !isLocked
 
   const updateFields = (partial: Partial<CustomerLocationData>) => {
-    setLocalData((prev) => {
-      const next = {
-        ...prev,
-        ...partial,
-      }
-      onChange?.(next)
-      return next
-    })
+    const next: CustomerLocationData = {
+      ...localDataRef.current,
+      ...partial,
+    }
+    localDataRef.current = next
+    setLocalData(next)
+    onChange?.(next)
+  }
+
+  const handleVehicleNameChange = (value: string) => {
+    if (!canEdit) return
+    updateFields({ vehicleName: value })
+  }
+
+  const handleVehicleNameBlur = () => {
+    if (!canEdit) return
+    if (localDataRef.current.vehicleName) {
+      updateFields({ vehicleName: localDataRef.current.vehicleName.trim().replace(/\s+/g, ' ') })
+    }
   }
 
   const handleVehicleChange = (value: string) => {
@@ -164,8 +199,8 @@ export function CustomerLocationLock({
 
   const handleVehicleBlur = () => {
     if (!canEdit) return
-    if (localData.vehicleNumber) {
-      updateFields({ vehicleNumber: localData.vehicleNumber.trim().replace(/\s+/g, ' ') })
+    if (localDataRef.current.vehicleNumber) {
+      updateFields({ vehicleNumber: localDataRef.current.vehicleNumber.trim().replace(/\s+/g, ' ') })
     }
   }
 
@@ -368,6 +403,7 @@ export function CustomerLocationLock({
                 setIsEnabled(next)
                 if (!next) {
                   updateFields({
+                    vehicleName: '',
                     vehicleNumber: '',
                     landmarkNote: '',
                     customerLat: null,
@@ -423,11 +459,11 @@ export function CustomerLocationLock({
               )}
             </div>
           ) : (
-            <div className="flex items-center justify-between rounded-lg bg-muted/60 border border-border px-3 py-1.5 text-muted-foreground gap-2 flex-wrap sm:flex-nowrap">
-              <span className="text-[11px] min-w-0">
-                Enter vehicle & landmark, or capture GPS coordinates.
-              </span>
-              {(localData.vehicleNumber || localData.landmarkNote || hasCoords) && isEditable && (
+            <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap text-muted-foreground">
+              <p className="text-[11px] min-w-0">
+                Enter your car name, vehicle number &amp; parking spot, or capture GPS below.
+              </p>
+              {allowLock && (localData.vehicleName || localData.vehicleNumber || localData.landmarkNote || hasCoords) && isEditable && (
                 <Button
                   type="button"
                   variant="default"
@@ -442,14 +478,49 @@ export function CustomerLocationLock({
             </div>
           )}
 
+          {/* Car Name / Model & Color Input */}
+          <div className="space-y-1.5">
+            <label
+              htmlFor="customer-car-name-input"
+              className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5"
+            >
+              <Car className="size-3.5 text-primary" />
+              Car Name / Model &amp; Color
+            </label>
+            <div className="relative">
+              <Input
+                id="customer-car-name-input"
+                type="text"
+                value={localData.vehicleName || ''}
+                onChange={(e) => handleVehicleNameChange(e.target.value)}
+                onBlur={handleVehicleNameBlur}
+                placeholder="e.g. White Swift, Black Creta, Red i20"
+                disabled={!canEdit}
+                className={cn(
+                  'font-medium h-9 text-xs pl-8 bg-background',
+                  !canEdit && 'bg-muted/50 cursor-not-allowed opacity-90'
+                )}
+              />
+              <Car className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              {isLocked && (
+                <Lock className="size-3 absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              )}
+            </div>
+          </div>
+
           {/* Vehicle Number Input */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+            <label
+              htmlFor="customer-vehicle-number-input"
+              className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5"
+            >
               <Car className="size-3.5 text-primary" />
               Vehicle Number
             </label>
             <div className="relative">
               <Input
+                id="customer-vehicle-number-input"
+                type="text"
                 value={localData.vehicleNumber || ''}
                 onChange={(e) => handleVehicleChange(e.target.value)}
                 onBlur={handleVehicleBlur}

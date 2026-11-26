@@ -1,8 +1,10 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { usePathname } from 'next/navigation'
 import { useTheme } from '@/hooks/useTheme'
 import { useAuthContext } from '@/hooks/useAuthContext'
+import { triggerNotificationFeedback } from '@/lib/sound-vibrate'
 import {
   Bell,
   Moon,
@@ -44,29 +46,45 @@ interface NotificationItem {
   createdAt?: string
 }
 
+const NEW_ORDER_ROLES = new Set(['WAITER', 'ADMIN', 'SUPER_ADMIN', 'SUPERADMIN', 'MANAGER'])
+
 export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
   const [commandOpen, setCommandOpen] = useState(false)
+  const pathname = usePathname()
   const { theme, toggleTheme } = useTheme()
-  const { auth } = useAuthContext()
-  const isCustomer = String(auth?.role || '').toUpperCase() === 'CUSTOMER'
+  const { auth, loading: authLoading } = useAuthContext()
+  const roleUpper = String(auth?.role || '').toUpperCase()
+  const isCustomerPortalPage =
+    Boolean(pathname?.startsWith('/customer')) || title === 'Customer Portal'
+  const isCustomer = roleUpper === 'CUSTOMER' || isCustomerPortalPage
+  const canSeeNewOrder = !isCustomer && NEW_ORDER_ROLES.has(roleUpper)
   const [liveNotifications, setLiveNotifications] = useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
+  const hasInitializedNotifsRef = useRef(false)
+  const seenUnreadReadyIdsRef = useRef<Set<string>>(new Set())
 
   const fetchLiveNotifications = useCallback(async () => {
+    if (authLoading) return
     try {
       const custParam = isCustomer
         ? `&role=CUSTOMER${auth?.id ? `&customerId=${encodeURIComponent(auth.id)}` : ''}`
+        : roleUpper
+        ? `&role=${encodeURIComponent(roleUpper)}`
         : ''
-      const res = await fetch(`/api/notifications?limit=15${custParam}`)
+      const res = await fetch(`/api/notifications?limit=20${custParam}`, { cache: 'no-store' })
       const json = await res.json()
       if (json.success && json.data) {
         let notifs: NotificationItem[] = json.data.notifications || []
         if (isCustomer) {
-          // Strictly exclude any staff invoice/bill/table notifications
+          // Strictly exclude new_order & staff invoice/bill/table notifications from Customer Portal
           notifs = notifs.filter((n) => {
+            if (n.type === 'new_order' || n.type === 'bill_generated' || n.type === 'payment_received') {
+              return false
+            }
             const body = (n.body || '').toLowerCase()
             const notifTitle = (n.title || '').toLowerCase()
             if (
+              notifTitle.includes('new order #') ||
               body.includes('table is now available') ||
               body.includes('ready for customer settlement') ||
               notifTitle.includes('invoice #') ||
@@ -76,21 +94,64 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
             }
             return true
           })
+        } else if (!canSeeNewOrder) {
+          notifs = notifs.filter((n) => n.type !== 'new_order')
         }
+
+        // Trigger audible/haptic chime for staff/waiter when a brand-new food-ready alert arrives
+        const unreadReady = notifs.filter(
+          (n) =>
+            !n.read &&
+            (n.type === 'order_prepared' || (n.title || '').toLowerCase().includes('prepared'))
+        )
+        if (hasInitializedNotifsRef.current && !isCustomer) {
+          const hasNewReadyAlert = unreadReady.some(
+            (n) => !seenUnreadReadyIdsRef.current.has(String(n.id))
+          )
+          if (hasNewReadyAlert) {
+            triggerNotificationFeedback('order')
+          }
+        }
+        hasInitializedNotifsRef.current = true
+        for (const n of unreadReady) {
+          seenUnreadReadyIdsRef.current.add(String(n.id))
+        }
+
         setLiveNotifications(notifs)
-        setUnreadCount(isCustomer ? notifs.filter((n) => !n.read).length : (json.data.unreadCount || 0))
+        setUnreadCount(notifs.filter((n) => !n.read).length)
       }
     } catch (err) {
       console.warn('Could not sync notifications:', err)
     }
-  }, [isCustomer, auth?.id])
+  }, [authLoading, isCustomer, canSeeNewOrder, roleUpper, auth?.id])
 
   useEffect(() => {
+    if (authLoading) return
     fetchLiveNotifications()
-    // Poll every 8 seconds for real-time kitchen preparation alerts
-    const interval = setInterval(fetchLiveNotifications, 8000)
-    return () => clearInterval(interval)
-  }, [fetchLiveNotifications])
+
+    // Visibility-aware polling every 5 seconds for near-real-time Waiter/Kitchen alerts
+    const interval = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        fetchLiveNotifications()
+      }
+    }, 5000)
+
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchLiveNotifications()
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibility)
+    }
+
+    return () => {
+      clearInterval(interval)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibility)
+      }
+    }
+  }, [authLoading, fetchLiveNotifications])
 
   const handleMarkAllRead = async (e: React.MouseEvent) => {
     e.stopPropagation()

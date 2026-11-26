@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import Link from 'next/link'
 import {
   ShoppingBag,
@@ -32,6 +32,7 @@ import { useAuthContext } from '@/hooks/useAuthContext'
 import { cn } from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 import { SongRequestModal } from '@/components/customer/song-request-modal'
+import { CustomerBillModal } from '@/components/billing/customer-bill-modal'
 
 interface CustomerProfile {
   id: string
@@ -56,6 +57,11 @@ interface CustomerOrder {
   status: string
   paymentStatus?: string
   isBilled?: boolean
+  billId?: string | null
+  billNumber?: string | null
+  billStatus?: string | null
+  billPaymentStatus?: string | null
+  tableNumber?: string | null
   total: number
   totalAmount: number
   createdAt: string
@@ -104,6 +110,10 @@ export function CustomerDashboardView() {
   const [loading, setLoading] = useState(true)
   const [pageLoading, setPageLoading] = useState(false)
   const [showSongModal, setShowSongModal] = useState(false)
+  const [showBillModal, setShowBillModal] = useState(false)
+  const [selectedOrderIdForBill, setSelectedOrderIdForBill] = useState<string | null>(null)
+  const [selectedTableForBill, setSelectedTableForBill] = useState<string>('Table 1')
+  const profileRef = useRef<CustomerProfile | null>(null)
 
   // Server-side pagination state for Live Orders Tracker
   const [currentPage, setCurrentPage] = useState(1)
@@ -122,107 +132,167 @@ export function CustomerDashboardView() {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
-  const fetchCustomerData = useCallback(async (isPageChange = false) => {
-    try {
-      if (isPageChange) {
-        setPageLoading(true)
-      } else {
-        setLoading(true)
-      }
-      const currentCustId = auth?.id || profile?.id
-      const queryParams = new URLSearchParams()
-      if (currentCustId) {
-        queryParams.set('customerId', currentCustId)
-        queryParams.set('userId', currentCustId)
-      }
-      if (auth?.email) {
-        queryParams.set('email', auth.email)
-      }
-      queryParams.set('scope', 'active')
-      queryParams.set('page', String(currentPage))
-      queryParams.set('limit', String(pageSize))
-      queryParams.set('includeSummary', 'true')
-
-      const ordersUrl = `/api/customer/orders?${queryParams.toString()}`
-
-      const [meRes, ordersRes] = await Promise.all([
-        isPageChange ? Promise.resolve(null) : fetch('/api/customer/auth/me', { cache: 'no-store' }),
-        fetch(ordersUrl, { cache: 'no-store' }),
-      ])
-
-      let loadedProfile: CustomerProfile | null = profile
-      if (meRes && meRes.ok) {
-        const meJson = await meRes.json()
-        if (meJson.success && meJson.customer) {
-          loadedProfile = meJson.customer
-          setProfile(meJson.customer)
+  const fetchCustomerData = useCallback(
+    async (isPageChange = false, silent = false) => {
+      try {
+        if (!silent) {
+          if (isPageChange) {
+            setPageLoading(true)
+          } else {
+            setLoading(true)
+          }
         }
-      }
+        const currentCustId = auth?.id || profileRef.current?.id
+        const queryParams = new URLSearchParams()
+        if (currentCustId) {
+          queryParams.set('customerId', currentCustId)
+          queryParams.set('userId', currentCustId)
+        }
+        if (auth?.email) {
+          queryParams.set('email', auth.email)
+        }
+        queryParams.set('scope', 'active')
+        queryParams.set('page', String(currentPage))
+        queryParams.set('limit', String(pageSize))
+        queryParams.set('includeSummary', 'true')
 
-      if (ordersRes.ok) {
-        const ordersJson = await ordersRes.json()
-        if (ordersJson.success && Array.isArray(ordersJson.orders)) {
-          const targetCustomerId = loadedProfile?.id || auth?.id
-          const targetEmail = (loadedProfile?.email || auth?.email || '').toLowerCase().trim()
+        const ordersUrl = `/api/customer/orders?${queryParams.toString()}`
+        const skipMeFetch = isPageChange || (silent && Boolean(profileRef.current))
 
-          // Strict Account-Based Order Filtering:
-          // Strictly exclude any walk-in, anonymous, table-only, or other customers' orders
-          const strictlyCustomerOrders = ordersJson.orders.filter((order: CustomerOrder) => {
-            if (!order) return false
+        const [meRes, ordersRes] = await Promise.all([
+          skipMeFetch ? Promise.resolve(null) : fetch('/api/customer/auth/me', { cache: 'no-store' }),
+          fetch(ordersUrl, { cache: 'no-store' }),
+        ])
 
-            const orderCustId = order.customerId
-            const orderCustEmail = (order.customerEmail || '').toLowerCase().trim()
-
-            // Exclude orders with no customer association (walk-in, anonymous, table-only)
-            if (!orderCustId && !orderCustEmail) {
-              return false
-            }
-
-            // Exclude if customerId does not match current authenticated customer account
-            if (targetCustomerId && orderCustId && orderCustId !== targetCustomerId) {
-              return false
-            }
-
-            // Exclude if customerEmail does not match current authenticated customer account
-            if (targetEmail && orderCustEmail && orderCustEmail !== targetEmail) {
-              return false
-            }
-
-            return true
-          })
-
-          setOrders(strictlyCustomerOrders)
-          if (ordersJson.pagination) {
-            setPagination(ordersJson.pagination)
-            if (currentPage > ordersJson.pagination.totalPages && ordersJson.pagination.totalPages >= 1) {
-              setCurrentPage(ordersJson.pagination.totalPages)
-            }
+        let loadedProfile: CustomerProfile | null = profileRef.current
+        if (meRes && meRes.ok) {
+          const meJson = await meRes.json()
+          if (meJson.success && meJson.customer) {
+            loadedProfile = meJson.customer
+            profileRef.current = meJson.customer
+            setProfile(meJson.customer)
           }
-          if (ordersJson.summary) {
-            setSummary(ordersJson.summary)
+        }
+
+        if (ordersRes.ok) {
+          const ordersJson = await ordersRes.json()
+          if (ordersJson.success && Array.isArray(ordersJson.orders)) {
+            const targetCustomerId = loadedProfile?.id || auth?.id
+            const targetEmail = (loadedProfile?.email || auth?.email || '').toLowerCase().trim()
+
+            // Strict Account-Based Order Filtering:
+            // Strictly exclude any walk-in, anonymous, table-only, or other customers' orders
+            const strictlyCustomerOrders = ordersJson.orders.filter((order: CustomerOrder) => {
+              if (!order) return false
+
+              const orderCustId = order.customerId
+              const orderCustEmail = (order.customerEmail || '').toLowerCase().trim()
+
+              // Exclude orders with no customer association (walk-in, anonymous, table-only)
+              if (!orderCustId && !orderCustEmail) {
+                return false
+              }
+
+              // Exclude if customerId does not match current authenticated customer account
+              if (targetCustomerId && orderCustId && orderCustId !== targetCustomerId) {
+                return false
+              }
+
+              // Exclude if customerEmail does not match current authenticated customer account
+              if (targetEmail && orderCustEmail && orderCustEmail !== targetEmail) {
+                return false
+              }
+
+              return true
+            })
+
+            setOrders(strictlyCustomerOrders)
+            if (ordersJson.pagination) {
+              setPagination(ordersJson.pagination)
+              if (currentPage > ordersJson.pagination.totalPages && ordersJson.pagination.totalPages >= 1) {
+                setCurrentPage(ordersJson.pagination.totalPages)
+              }
+            }
+            if (ordersJson.summary) {
+              setSummary(ordersJson.summary)
+            }
+          } else if (!silent) {
+            setOrders([])
           }
-        } else {
+        } else if (!silent) {
           setOrders([])
         }
-      } else {
-        setOrders([])
+      } catch (err) {
+        console.error('Failed to load customer dashboard details:', err)
+        if (!silent) {
+          setOrders([])
+        }
+      } finally {
+        if (!silent) {
+          setLoading(false)
+          setPageLoading(false)
+        }
       }
-    } catch (err) {
-      console.error('Failed to load customer dashboard details:', err)
-      setOrders([])
-    } finally {
-      setLoading(false)
-      setPageLoading(false)
-    }
-  }, [auth?.id, auth?.email, profile?.id, currentPage, pageSize])
+    },
+    [auth?.id, auth?.email, currentPage, pageSize]
+  )
 
   useEffect(() => {
-    fetchCustomerData(currentPage > 1 || summary !== null)
+    fetchCustomerData(currentPage > 1 || summary !== null, false)
   }, [fetchCustomerData])
 
-  // Active orders on the current page
-  const activeOrders = orders.filter((o) =>
-    ['pending', 'confirmed', 'preparing', 'cooking', 'ready', 'accepted'].includes(String(o.status).toLowerCase())
+  // Silent background refresh when returning to tab so served/paid transitions reflect promptly
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchCustomerData(false, true)
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibility)
+    }
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibility)
+      }
+    }
+  }, [fetchCustomerData])
+
+  // Active orders stay visible (including when served) until bill payment is completed
+  const activeOrders = useMemo(
+    () =>
+      orders.filter((o) => {
+        const st = String(o.status || '').toLowerCase()
+        const paySt = String(o.paymentStatus || '').toLowerCase()
+        const billSt = String(o.billStatus || '').toLowerCase()
+        const billPaySt = String(o.billPaymentStatus || '').toLowerCase()
+        if (['cancelled', 'refunded', 'completed'].includes(st)) return false
+        if (['completed', 'paid', 'settled', 'refunded', 'cancelled'].includes(paySt)) return false
+        if (billSt === 'paid' || billPaySt === 'completed') return false
+        return true
+      }),
+    [orders]
+  )
+
+  const activeTableNumber = useMemo(
+    () => activeOrders.find((o) => o.tableNumber)?.tableNumber || 'Table 1',
+    [activeOrders]
+  )
+
+  const openBillModalForOrder = useCallback(
+    (order?: CustomerOrder) => {
+      if (order) {
+        setSelectedOrderIdForBill(order.id)
+        setSelectedTableForBill(order.tableNumber || activeTableNumber)
+      } else {
+        const firstOrder = activeOrders[0]
+        const shouldUseSingleOrder = activeOrders.length === 1 || !firstOrder?.tableNumber
+        setSelectedOrderIdForBill(shouldUseSingleOrder && firstOrder ? firstOrder.id : null)
+        setSelectedTableForBill(activeTableNumber)
+      }
+      setShowBillModal(true)
+    },
+    [activeOrders, activeTableNumber]
   )
   // Lifetime KPI totals from server summary (fallback to local calculation if summary absent)
   const totalOrdersCount = summary ? summary.totalOrders : orders.length
@@ -412,15 +482,30 @@ export function CustomerDashboardView() {
                     </CardDescription>
                   </div>
                 </div>
-                {activeOrdersTotalCount > 0 && (
-                  <Badge
-                    variant="outline"
-                    className="shrink-0 whitespace-nowrap rounded-full border-emerald-500/30 bg-emerald-500/10 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-600 dark:text-emerald-400"
-                  >
-                    <span className="mr-1.5 inline-block size-1.5 rounded-full bg-emerald-500" />
-                    {activeOrdersTotalCount} Active
-                  </Badge>
-                )}
+                <div className="flex items-center gap-2 shrink-0">
+                  {activeOrders.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openBillModalForOrder()}
+                      className="h-8 px-3 rounded-full font-extrabold text-xs gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 cursor-pointer"
+                      title="Generate bill, tip waiter, or pay online"
+                    >
+                      <Receipt className="size-3.5" />
+                      <span>Bill &amp; Tip</span>
+                    </Button>
+                  )}
+                  {activeOrdersTotalCount > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="shrink-0 whitespace-nowrap rounded-full border-emerald-500/30 bg-emerald-500/10 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-600 dark:text-emerald-400"
+                    >
+                      <span className="mr-1.5 inline-block size-1.5 rounded-full bg-emerald-500" />
+                      {activeOrdersTotalCount} Active
+                    </Badge>
+                  )}
+                </div>
               </div>
             </CardHeader>
 
@@ -454,24 +539,29 @@ export function CustomerDashboardView() {
                       className: 'bg-muted text-muted-foreground border-border',
                     }
                     const statusLower = String(order.status || '').toLowerCase()
+                    const isServed = statusLower === 'served'
                     const currentStep =
-                      statusLower === 'ready'
-                        ? 4
-                        : statusLower === 'preparing' || statusLower === 'cooking'
-                          ? 3
-                          : statusLower === 'confirmed' || statusLower === 'accepted'
-                            ? 2
-                            : 1
+                      isServed
+                        ? 5
+                        : statusLower === 'ready'
+                          ? 4
+                          : statusLower === 'preparing' || statusLower === 'cooking'
+                            ? 3
+                            : statusLower === 'confirmed' || statusLower === 'accepted'
+                              ? 2
+                              : 1
 
                     const steps = [
                       { step: 1, label: 'Placed' },
                       { step: 2, label: 'Confirmed' },
                       { step: 3, label: 'Cooking' },
                       { step: 4, label: 'Ready' },
+                      { step: 5, label: 'Served' },
                     ]
                     const itemsList = Array.isArray(order.items) ? order.items : []
                     const visibleItems = itemsList.slice(0, 4)
                     const extraItemsCount = Math.max(0, itemsList.length - 4)
+                    const orderTableParam = encodeURIComponent(order.tableNumber || '1')
 
                     return (
                       <div
@@ -491,26 +581,43 @@ export function CustomerDashboardView() {
                                 minute: '2-digit',
                               })}
                             </span>
+                            {order.tableNumber && (
+                              <span className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary whitespace-nowrap">
+                                {String(order.tableNumber).toLowerCase().startsWith('table')
+                                  ? order.tableNumber
+                                  : `Table ${order.tableNumber}`}
+                              </span>
+                            )}
                           </div>
 
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              'shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
-                              badge.className
+                          <div className="flex items-center gap-1.5">
+                            {isServed && (
+                              <Badge
+                                variant="outline"
+                                className="shrink-0 whitespace-nowrap rounded-full border-amber-500/40 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400"
+                              >
+                                Bill Pending
+                              </Badge>
                             )}
-                          >
-                            {badge.label}
-                          </Badge>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                'shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
+                                badge.className
+                              )}
+                            >
+                              {badge.label}
+                            </Badge>
+                          </div>
                         </div>
 
                         {/* Kitchen Progress Stepper */}
                         <div className="px-4 pb-3">
                           <div className="rounded-xl border border-border/50 bg-muted/25 px-3.5 py-2.5">
-                            <div className="grid grid-cols-4 gap-2">
+                            <div className="grid grid-cols-5 gap-2">
                               {steps.map((s) => {
-                                const isDone = currentStep > s.step
-                                const isCurrent = currentStep === s.step
+                                const isDone = currentStep > s.step || (isServed && s.step === 5)
+                                const isCurrent = !isServed && currentStep === s.step
                                 return (
                                   <div key={s.step} className="flex flex-col gap-1.5">
                                     <div className="h-1.5 w-full overflow-hidden rounded-full bg-border/70">
@@ -541,6 +648,11 @@ export function CustomerDashboardView() {
                                 )
                               })}
                             </div>
+                            {isServed && (
+                              <p className="mt-2 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                                Order served to your table! Click <span className="font-bold">Bill &amp; Pay</span> below to generate your bill, tip your waiter, and settle payment.
+                              </p>
+                            )}
                           </div>
                         </div>
 
@@ -582,16 +694,28 @@ export function CustomerDashboardView() {
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2">
-                            <Link href={`/menu?appendOrderId=${order.id}&table=1`}>
-                              <Button
-                                size="sm"
-                                className="h-8.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-3.5 text-xs font-bold text-white shadow-xs transition-all hover:from-orange-600 hover:to-amber-600 hover:shadow-sm cursor-pointer gap-1.5"
-                                title="Add dishes directly to this live order"
-                              >
-                                <Plus className="size-3.5" />
-                                <span>Add on Live Order</span>
-                              </Button>
-                            </Link>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => openBillModalForOrder(order)}
+                              className="h-8.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3.5 text-xs font-extrabold text-white shadow-xs transition-all cursor-pointer gap-1.5"
+                              title="Generate bill & pay for this order"
+                            >
+                              <Receipt className="size-3.5" />
+                              <span>Bill &amp; Pay</span>
+                            </Button>
+                            {!isServed && (
+                              <Link href={`/menu?appendOrderId=${order.id}&table=${orderTableParam}`}>
+                                <Button
+                                  size="sm"
+                                  className="h-8.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-3.5 text-xs font-bold text-white shadow-xs transition-all hover:from-orange-600 hover:to-amber-600 hover:shadow-sm cursor-pointer gap-1.5"
+                                  title="Add dishes directly to this live order"
+                                >
+                                  <Plus className="size-3.5" />
+                                  <span>Add on Live Order</span>
+                                </Button>
+                              </Link>
+                            )}
                             <Link href="/customer-orders">
                               <Button
                                 variant="outline"
@@ -821,11 +945,26 @@ export function CustomerDashboardView() {
         </div>
       </div>
 
+      {/* Digital Bill & Payment Modal (Matches Menu Billing Flow) */}
+      <CustomerBillModal
+        open={showBillModal}
+        onOpenChange={(open) => {
+          setShowBillModal(open)
+          if (!open) setSelectedOrderIdForBill(null)
+        }}
+        tableNumber={selectedTableForBill}
+        tableOrders={activeOrders}
+        selectedOrderId={selectedOrderIdForBill}
+        onSuccess={() => {
+          fetchCustomerData(false, true)
+        }}
+      />
+
       {/* Live DJ Song Request Modal */}
       <SongRequestModal
         open={showSongModal}
         onOpenChange={setShowSongModal}
-        tableNumber="Table 1"
+        tableNumber={activeTableNumber}
         guestName={customerName}
       />
     </div>

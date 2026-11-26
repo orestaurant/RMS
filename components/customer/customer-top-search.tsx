@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -30,6 +30,7 @@ interface DishSearchResult {
   isVeg?: boolean
   isVegan?: boolean
   isSpicy?: boolean
+  isAvailable?: boolean
   prepTime?: number
 }
 
@@ -49,10 +50,11 @@ const CATEGORY_CHIPS = [
 ]
 
 export function CustomerTopSearch({
-  tableNumber = '1',
+  tableNumber,
   className,
 }: CustomerTopSearchProps) {
   const router = useRouter()
+  const [effectiveTable, setEffectiveTable] = useState<string>(tableNumber || '1')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [searchResults, setSearchResults] = useState<DishSearchResult[]>([])
@@ -65,46 +67,98 @@ export function CustomerTopSearch({
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Live search dishes with debounce
+  // Preserve customer's active table from prop or localStorage
   useEffect(() => {
-    if (!searchQuery.trim() && selectedCategory === 'all') {
+    if (tableNumber && tableNumber.trim()) {
+      setEffectiveTable(tableNumber.trim())
+      return
+    }
+    try {
+      const saved = localStorage.getItem('rms_customer_table')
+      if (saved && saved.trim()) {
+        setEffectiveTable(saved.trim())
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, [tableNumber])
+
+  const buildMenuUrl = useCallback(
+    (options?: { search?: string; dishId?: string; includeCategoryFilter?: boolean }) => {
+      const params = new URLSearchParams()
+      const q = (options?.search ?? '').trim()
+      if (q) {
+        params.set('search', q)
+      }
+      if (options?.dishId) {
+        params.set('dishId', options.dishId)
+      }
+      if (options?.includeCategoryFilter) {
+        if (selectedCategory === 'veg') {
+          params.set('dietary', 'veg')
+        } else if (selectedCategory !== 'all') {
+          params.set('category', selectedCategory)
+        }
+      }
+      params.set('table', effectiveTable)
+      return `/menu?${params.toString()}`
+    },
+    [effectiveTable, selectedCategory]
+  )
+
+  // Live search dishes with debounce and request cancellation
+  useEffect(() => {
+    const trimmed = searchQuery.trim()
+    if (!trimmed && selectedCategory === 'all') {
       setSearchResults([])
       setIsSearching(false)
       return
     }
 
+    const controller = new AbortController()
     const timer = setTimeout(async () => {
       try {
         setIsSearching(true)
         const params = new URLSearchParams()
-        if (searchQuery.trim()) {
-          params.set('search', searchQuery.trim())
+        params.set('available', 'true')
+        if (trimmed) {
+          params.set('search', trimmed)
         }
-        if (selectedCategory !== 'all' && selectedCategory !== 'veg') {
+        if (selectedCategory === 'veg') {
+          params.set('dietary', 'veg')
+        } else if (selectedCategory !== 'all') {
           params.set('category', selectedCategory)
         }
 
-        const res = await fetch(`/api/menu/items?${params.toString()}`)
+        const res = await fetch(`/api/menu/items?${params.toString()}`, {
+          signal: controller.signal,
+        })
         const json = await res.json()
         if (res.ok && json.success && Array.isArray(json.data)) {
-          let items: DishSearchResult[] = json.data
-          if (selectedCategory === 'veg') {
-            items = items.filter((i) => i.isVeg)
-          }
+          const items = (json.data as DishSearchResult[]).filter(
+            (item) => item.isAvailable !== false
+          )
           setSearchResults(items)
           setIsDropdownOpen(true)
         } else {
           setSearchResults([])
         }
-      } catch (err) {
-        console.error('Failed to search dishes in navbar:', err)
-        setSearchResults([])
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          console.error('Failed to search dishes in navbar:', err)
+          setSearchResults([])
+        }
       } finally {
-        setIsSearching(false)
+        if (!controller.signal.aborted) {
+          setIsSearching(false)
+        }
       }
-    }, 250)
+    }, 220)
 
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
   }, [searchQuery, selectedCategory])
 
   // Close dropdown when clicking outside
@@ -138,8 +192,12 @@ export function CustomerTopSearch({
     if (e) e.preventDefault()
     setIsDropdownOpen(false)
     setIsMobileExpanded(false)
-    const targetUrl = `/menu?search=${encodeURIComponent(searchQuery.trim())}&table=${encodeURIComponent(tableNumber)}`
-    router.push(targetUrl)
+    router.push(
+      buildMenuUrl({
+        search: searchQuery,
+        includeCategoryFilter: true,
+      })
+    )
   }
 
   const handleClear = () => {
@@ -300,7 +358,7 @@ export function CustomerTopSearch({
                     )}
                     <div className="pt-1.5">
                       <Link
-                        href={`/menu?table=${encodeURIComponent(tableNumber)}`}
+                        href={buildMenuUrl()}
                         onClick={() => setIsDropdownOpen(false)}
                       >
                         <Button size="sm" variant="outline" className="h-7 text-xs font-medium cursor-pointer">
@@ -310,82 +368,81 @@ export function CustomerTopSearch({
                     </div>
                   </div>
                 ) : (
-                  searchResults.map((dish) => (
-                    <div
-                      key={dish.id}
-                      className="flex items-center justify-between p-2 rounded-xl hover:bg-muted/60 transition-colors gap-2.5"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        {dish.image ? (
-                          <img
-                            src={dish.image}
-                            alt={dish.name}
-                            className="size-10 sm:size-11 rounded-lg object-cover border border-border/60 shrink-0"
-                          />
-                        ) : (
-                          <div className="size-10 sm:size-11 rounded-lg bg-orange-500/10 text-orange-500 flex items-center justify-center shrink-0 border border-orange-500/20">
-                            <UtensilsCrossed className="size-4" />
-                          </div>
-                        )}
-
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-xs sm:text-sm font-bold text-foreground truncate">
-                              {dish.name}
-                            </span>
-                            {dish.isVeg !== undefined && (
-                              <span
-                                className={cn(
-                                  'size-2 rounded-full shrink-0',
-                                  dish.isVeg ? 'bg-emerald-500' : 'bg-rose-500'
-                                )}
-                                title={dish.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
-                              />
-                            )}
-                            {dish.isSpicy && (
-                              <span className="text-[9px] px-1 rounded bg-rose-500/10 text-rose-500 border border-rose-500/20">
-                                🌶️ Spicy
-                              </span>
-                            )}
-                            <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.2 rounded hidden sm:inline">
-                              {dish.category}
-                            </span>
-                          </div>
-
-                          {dish.description && (
-                            <p className="text-[10px] sm:text-[11px] text-muted-foreground line-clamp-1 truncate">
-                              {dish.description}
-                            </p>
+                  searchResults.map((dish) => {
+                    const dishUrl = buildMenuUrl({ search: dish.name, dishId: dish.id })
+                    return (
+                      <Link
+                        key={dish.id}
+                        href={dishUrl}
+                        onClick={() => {
+                          setIsDropdownOpen(false)
+                          setIsMobileExpanded(false)
+                        }}
+                        className="flex items-center justify-between p-2 rounded-xl hover:bg-muted/60 transition-colors gap-2.5 group"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {dish.image ? (
+                            <img
+                              src={dish.image}
+                              alt={dish.name}
+                              className="size-10 sm:size-11 rounded-lg object-cover border border-border/60 shrink-0"
+                            />
+                          ) : (
+                            <div className="size-10 sm:size-11 rounded-lg bg-orange-500/10 text-orange-500 flex items-center justify-center shrink-0 border border-orange-500/20">
+                              <UtensilsCrossed className="size-4" />
+                            </div>
                           )}
 
-                          <span className="text-xs font-bold text-primary font-mono block">
-                            ₹{dish.price}
-                          </span>
-                        </div>
-                      </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs sm:text-sm font-bold text-foreground group-hover:text-primary transition-colors truncate">
+                                {dish.name}
+                              </span>
+                              {dish.isVeg !== undefined && (
+                                <span
+                                  className={cn(
+                                    'size-2 rounded-full shrink-0',
+                                    dish.isVeg ? 'bg-emerald-500' : 'bg-rose-500'
+                                  )}
+                                  title={dish.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
+                                />
+                              )}
+                              {dish.isSpicy && (
+                                <span className="text-[9px] px-1 rounded bg-rose-500/10 text-rose-500 border border-rose-500/20">
+                                  🌶️ Spicy
+                                </span>
+                              )}
+                              <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.2 rounded hidden sm:inline">
+                                {dish.category}
+                              </span>
+                            </div>
 
-                      <Link
-                        href={`/menu?search=${encodeURIComponent(dish.name)}&table=${encodeURIComponent(tableNumber)}`}
-                        onClick={() => setIsDropdownOpen(false)}
-                        className="shrink-0"
-                      >
-                        <Button
-                          size="sm"
-                          className="h-7 px-2.5 text-[11px] font-semibold gap-1 bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer"
-                        >
+                            {dish.description && (
+                              <p className="text-[10px] sm:text-[11px] text-muted-foreground line-clamp-1 truncate">
+                                {dish.description}
+                              </p>
+                            )}
+
+                            <span className="text-xs font-bold text-primary font-mono block">
+                              ₹{dish.price}
+                            </span>
+                          </div>
+                        </div>
+
+                        <span className="shrink-0 inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-[11px] font-semibold bg-primary text-primary-foreground group-hover:bg-primary/90 shadow-2xs">
                           <ShoppingBag className="size-3 hidden xs:inline" />
                           <span>Order</span>
-                        </Button>
+                        </span>
                       </Link>
-                    </div>
-                  ))
+                    )
+                  })
                 )}
               </div>
 
               {/* Footer link to all menu */}
               <div className="p-2 bg-muted/30 border-t border-border/60 text-center">
                 <Link
-                  href={`/menu?table=${encodeURIComponent(tableNumber)}`}
+                  href={buildMenuUrl()}
                   onClick={() => setIsDropdownOpen(false)}
                   className="text-xs text-primary font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
                 >

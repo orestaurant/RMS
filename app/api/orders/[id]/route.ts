@@ -3,6 +3,10 @@ import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { updateFallbackOrder, removeFallbackOrder, invalidateLiveOrdersCache, invalidateKDSCache } from '@/lib/kds-utils'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
+import {
+  notifyOrderPrepared,
+  markOrderPreparedNotificationsRead,
+} from '@/lib/notifications-store'
 
 const isUuid = (val: string) =>
   typeof val === 'string' &&
@@ -47,6 +51,7 @@ export async function PATCH(
       priority,
       notes,
       isLocationLocked,
+      vehicleName,
       vehicleNumber,
       landmarkNote,
       customerLat,
@@ -82,11 +87,16 @@ export async function PATCH(
       const whereClause = isUuid(id) ? { OR: [{ id }, { orderNumber: id }] } : { orderNumber: id }
       const existing = await prisma.order.findFirst({
         where: whereClause,
+        include: {
+          table: { select: { tableNumber: true } },
+          items: { select: { itemName: true, quantity: true } },
+        },
       })
 
       if (existing) {
         // Enforce lock protection: if isLocationLocked is true, reject overwrites unless unlockOverride: true
         const isAttemptingLocationUpdate =
+          vehicleName !== undefined ||
           vehicleNumber !== undefined ||
           landmarkNote !== undefined ||
           customerLat !== undefined ||
@@ -136,9 +146,12 @@ export async function PATCH(
         }
 
         const prevMeta = (existing.metadata as Record<string, any>) || {}
+        const parsedVehicleName =
+          vehicleName !== undefined ? (vehicleName ? String(vehicleName).trim().slice(0, 80) : null) : undefined
         updateData.metadata = {
           ...prevMeta,
           ...(isLocationLocked !== undefined ? { isLocationLocked: updateData.isLocationLocked } : {}),
+          ...(parsedVehicleName !== undefined ? { vehicleName: parsedVehicleName } : {}),
           ...(vehicleNumber !== undefined ? { vehicleNumber: updateData.vehicleNumber } : {}),
           ...(landmarkNote !== undefined ? { landmarkNote: updateData.landmarkNote } : {}),
           ...(customerLat !== undefined ? { customerLat: updateData.customerLat } : {}),
@@ -153,6 +166,33 @@ export async function PATCH(
           where: { id: existing.id },
           data: updateData,
         })
+
+        if (updateData.status === 'READY') {
+          const tableLabel =
+            existing.table?.tableNumber ||
+            (updatedOrder.vehicleNumber ? `🚗 ${updatedOrder.vehicleNumber}` : null) ||
+            prevMeta.tableNumber ||
+            'Table'
+          const itemsSummary =
+            Array.isArray(existing.items) && existing.items.length > 0
+              ? existing.items.map((i: any) => `${i.quantity}× ${i.itemName}`).join(', ')
+              : null
+
+          await notifyOrderPrepared({
+            orderId: existing.id,
+            orderNumber: existing.orderNumber,
+            tableNumber: String(tableLabel),
+            customerName: prevMeta.customerName || null,
+            customerId: existing.customerId || null,
+            organizationId: existing.organizationId || null,
+            itemsSummary,
+          }).catch((err) => console.warn('Order ready notification error:', err))
+        } else if (updateData.status === 'SERVED') {
+          await markOrderPreparedNotificationsRead(
+            existing.orderNumber,
+            existing.organizationId
+          ).catch(() => {})
+        }
       }
     } catch (dbErr) {
       console.warn('Prisma order update fallback:', (dbErr as any)?.message)
@@ -163,6 +203,9 @@ export async function PATCH(
       ...(priority ? { priority } : {}),
       ...(notes !== undefined ? { specialNotes: notes } : {}),
       ...(isLocationLocked !== undefined ? { isLocationLocked: Boolean(isLocationLocked) } : {}),
+      ...(vehicleName !== undefined
+        ? { vehicleName: vehicleName ? String(vehicleName).trim().slice(0, 80) : null }
+        : {}),
       ...(vehicleNumber !== undefined
         ? { vehicleNumber: vehicleNumber ? String(vehicleNumber).trim().toUpperCase() : null }
         : {}),
@@ -191,6 +234,7 @@ export async function PATCH(
         id,
         status: status || updatedOrder?.status,
         isLocationLocked: isLocationLocked ?? updatedOrder?.isLocationLocked,
+        vehicleName: vehicleName !== undefined ? (vehicleName ? String(vehicleName).trim() : null) : (updatedOrder?.metadata as any)?.vehicleName,
         vehicleNumber: vehicleNumber ?? updatedOrder?.vehicleNumber,
         landmarkNote: landmarkNote ?? updatedOrder?.landmarkNote,
         customerLat: customerLat ?? updatedOrder?.customerLat,
@@ -226,6 +270,10 @@ export async function DELETE(
       const whereClause = isUuid(id) ? { OR: [{ id }, { orderNumber: id }] } : { orderNumber: id }
       const existing = await prisma.order.findFirst({
         where: whereClause,
+        include: {
+          table: { select: { tableNumber: true } },
+          items: { select: { itemName: true, quantity: true } },
+        },
       })
 
       if (existing) {
