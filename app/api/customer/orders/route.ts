@@ -921,6 +921,10 @@ export async function DELETE(request: NextRequest) {
         status: true,
         branchId: true,
         customerId: true,
+        tableId: true,
+        billId: true,
+        metadata: true,
+        table: { select: { tableNumber: true } },
       },
     })
 
@@ -931,19 +935,25 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    // Soft delete & purge order notifications in parallel
+    const orderMeta = (order.metadata as Record<string, any>) || {}
+
+    // Soft delete first so table remaining-order count accurately sees 0 if this was the last order
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        deletedAt: new Date(),
+        status: 'cancelled',
+      },
+    })
+
     await Promise.all([
-      prisma.order.update({
-        where: { id: order.id },
-        data: {
-          deletedAt: new Date(),
-          status: 'cancelled',
-        },
-      }),
       removeOrderNotifications({
         orderId: order.id,
         orderNumber: order.orderNumber,
         organizationId: order.organizationId,
+        tableId: order.tableId,
+        tableNumber: order.table?.tableNumber || orderMeta.tableNumber || null,
+        billId: order.billId,
       }),
       order.customerId ? syncCustomerOrderStats(order.customerId) : Promise.resolve(),
     ])
@@ -951,6 +961,7 @@ export async function DELETE(request: NextRequest) {
     // Invalidate caches
     invalidateKDSCache()
     invalidateLiveOrdersCache()
+    invalidatePOSTablesCache()
     if (order.branchId) {
       invalidateDashboardStatsCache(order.branchId)
     }

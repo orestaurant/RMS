@@ -520,6 +520,10 @@ export function CustomerBillModal({
             body: `Guest requested unpaid balance breakdown (₹${grandTotal.toFixed(2)}) at ${formattedTableSpot}.`,
             metadata: {
               tableNumber: formattedTableSpot,
+              billId: bill?.id || undefined,
+              billNumber: bill?.billNumber || undefined,
+              orderId: bill?.orderId || tableOrders?.[0]?.fullId || tableOrders?.[0]?.id || undefined,
+              orderNumber: bill?.orderNumber || tableOrders?.[0]?.orderNumber || undefined,
               amount: grandTotal,
             },
           }),

@@ -17,7 +17,6 @@ import {
   ChevronRight,
   ChevronLeft,
   Music,
-  Star,
   Printer,
   ShieldCheck,
 } from 'lucide-react'
@@ -424,15 +423,6 @@ export function CustomerOrdersView({ hideHeader = false }: CustomerOrdersViewPro
               <RefreshCw className={cn('size-3.5', isRefreshing && 'animate-spin')} />
               <span>Refresh</span>
             </Button>
-            <Link href="/customer/feedback">
-              <Button
-                variant="outline"
-                className="gap-1.5 h-9 font-semibold rounded-xl border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 text-xs cursor-pointer"
-              >
-                <Star className="size-4 fill-amber-500" />
-                <span>Review &amp; 10% Off</span>
-              </Button>
-            </Link>
             <Link href="/menu">
               <Button
                 variant="default"

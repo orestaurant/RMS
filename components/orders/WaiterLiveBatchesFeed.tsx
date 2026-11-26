@@ -82,16 +82,37 @@ export function WaiterLiveBatchesFeed({
     }
   }, [])
 
+  const hasAnyBatches = batches.length > 0
   useEffect(() => {
     fetchBatches()
-    const timer = setInterval(fetchBatches, 2500)
-    return () => clearInterval(timer)
-  }, [fetchBatches])
+    const intervalMs = hasAnyBatches ? 2500 : 5000
+    const timer = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        fetchBatches()
+      }
+    }, intervalMs)
 
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchBatches()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [fetchBatches, hasAnyBatches])
+
+  // Only run countdown tick when an active 20s lock window batch exists
+  const hasLockWindowBatch = batches.some((b) => b.status === 'PREPARING_LOCK_WINDOW')
   useEffect(() => {
+    if (!hasLockWindowBatch) return
+    setNow(Date.now())
     const tick = setInterval(() => setNow(Date.now()), 150)
     return () => clearInterval(tick)
-  }, [])
+  }, [hasLockWindowBatch])
 
   // Relevant batches for Waiter: Active cooking/lock windows AND Ready to serve batches
   const activeBatches = batches.filter(

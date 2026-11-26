@@ -10,11 +10,14 @@ interface CacheEntry<T = any> {
 
 const posMenuCache = new Map<string, CacheEntry>()
 const posTablesCache = new Map<string, CacheEntry>()
+const tablesViewCache = new Map<string, CacheEntry>()
 
 // 30 seconds default TTL for menu (fast checkout, low DB load)
 const DEFAULT_MENU_TTL = 30_000
 // 25 seconds default TTL for tables (status changes e.g. occupied/available)
 const DEFAULT_TABLES_TTL = 25_000
+// 4 seconds default TTL for live floor tables view (invalidated immediately on mutations)
+const DEFAULT_TABLES_VIEW_TTL = 4_000
 
 export function getPOSMenuCache<T = any>(key: string = 'default', ttlMs: number = DEFAULT_MENU_TTL): T | null {
   const entry = posMenuCache.get(key)
@@ -79,5 +82,30 @@ export function setPOSTablesCache<T = any>(key: string = 'default', data: T): vo
 
 export function invalidatePOSTablesCache(): void {
   posTablesCache.clear()
+  tablesViewCache.clear()
+}
+
+export function getTablesViewCache<T = any>(
+  key: string = 'default',
+  ttlMs: number = DEFAULT_TABLES_VIEW_TTL
+): T | null {
+  const entry = tablesViewCache.get(key)
+  if (!entry) return null
+  if (Date.now() - entry.timestamp > ttlMs) {
+    tablesViewCache.delete(key)
+    return null
+  }
+  return entry.data
+}
+
+export function setTablesViewCache<T = any>(key: string = 'default', data: T): void {
+  tablesViewCache.set(key, {
+    data,
+    timestamp: Date.now(),
+  })
+}
+
+export function invalidateTablesViewCache(): void {
+  tablesViewCache.clear()
 }
 

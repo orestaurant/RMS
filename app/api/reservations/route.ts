@@ -9,6 +9,7 @@ import { getMockAuthContext } from '@/api/middleware/auth'
 import { extractTenantContext } from '@/api/middleware/tenant'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { ValidationError } from '@/api/utils/errors'
+import { invalidatePOSTablesCache } from '@/lib/pos-cache'
 
 export async function GET(request: NextRequest) {
   try {
@@ -196,6 +197,7 @@ export async function POST(request: NextRequest) {
         })
         .catch(() => {})
     }
+    invalidatePOSTablesCache()
 
     return NextResponse.json(
       successResponse(reservation, 'Reservation created successfully'),
@@ -269,6 +271,7 @@ export async function PATCH(request: NextRequest) {
         })
         .catch(() => {})
     }
+    invalidatePOSTablesCache()
 
     return NextResponse.json(successResponse(reservation, 'Reservation updated successfully'))
   } catch (error: any) {
@@ -353,6 +356,7 @@ export async function DELETE(request: NextRequest) {
         })
       }
     }
+    invalidatePOSTablesCache()
 
     return NextResponse.json(
       successResponse(null, 'Reservation deleted successfully'),

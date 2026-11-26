@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { updateFallbackOrder, removeFallbackOrder, invalidateLiveOrdersCache, invalidateKDSCache } from '@/lib/kds-utils'
+import { invalidatePOSTablesCache } from '@/lib/pos-cache'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
 import {
   notifyOrderPrepared,
@@ -229,6 +230,7 @@ export async function PATCH(
 
     invalidateLiveOrdersCache()
     invalidateKDSCache()
+    invalidatePOSTablesCache()
 
     return NextResponse.json(
       successResponse({
@@ -280,6 +282,10 @@ export async function DELETE(
           orderNumber: true,
           organizationId: true,
           customerId: true,
+          tableId: true,
+          billId: true,
+          metadata: true,
+          table: { select: { tableNumber: true } },
         },
       })
 
@@ -287,19 +293,25 @@ export async function DELETE(
         deletedOrderId = existing.id
         deletedOrderNumber = existing.orderNumber
         deletedOrgId = existing.organizationId
+        const existingMeta = (existing.metadata as Record<string, any>) || {}
+        const resolvedTableNum = existing.table?.tableNumber || existingMeta.tableNumber || null
+
+        await prisma.order.update({
+          where: { id: existing.id },
+          data: {
+            deletedAt: new Date(),
+            status: 'cancelled',
+          },
+        })
 
         await Promise.all([
-          prisma.order.update({
-            where: { id: existing.id },
-            data: {
-              deletedAt: new Date(),
-              status: 'cancelled',
-            },
-          }),
           removeOrderNotifications({
             orderId: existing.id,
             orderNumber: existing.orderNumber,
             organizationId: existing.organizationId,
+            tableId: existing.tableId,
+            tableNumber: resolvedTableNum,
+            billId: existing.billId,
           }),
           existing.customerId
             ? syncCustomerOrderStats(existing.customerId)
@@ -319,6 +331,7 @@ export async function DELETE(
 
     invalidateLiveOrdersCache()
     invalidateKDSCache()
+    invalidatePOSTablesCache()
 
     return NextResponse.json(
       successResponse({

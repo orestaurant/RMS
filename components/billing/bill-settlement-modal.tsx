@@ -29,7 +29,6 @@ import {
   Users,
   Send,
   Percent,
-  Star,
   Car,
   AlertTriangle,
   ShieldCheck,
@@ -95,9 +94,6 @@ export function BillSettlementModal({
   const [splitCount, setSplitCount] = useState<number>(2)
   const [splitMethod, setSplitMethod] = useState<'equal' | 'item'>('equal')
   const [guestSplits, setGuestSplits] = useState<Array<{ name: string; amount: number; isPaid: boolean }>>([])
-
-  // Review Discount State
-  const [reviewDiscountApplied, setReviewDiscountApplied] = useState(false)
 
   // Highway Payment Verified State
   const [highwayPaymentVerified, setHighwayPaymentVerified] = useState(false)
@@ -166,7 +162,6 @@ export function BillSettlementModal({
         setPartyThrowerPhone('')
       }
       setHighwayPaymentVerified(Boolean(meta.highwayPaymentVerified))
-      setReviewDiscountApplied(Boolean(meta.reviewDiscountApplied))
     } catch (err: any) {
       console.error('Error in BillSettlementModal:', err)
       setError(err.message || 'Unable to load bill for this table.')
@@ -246,15 +241,6 @@ export function BillSettlementModal({
     } finally {
       setApplyingDiscount(false)
     }
-  }
-
-  // Apply Review Discount (e.g. 10% off subtotal)
-  const handleApplyReviewDiscount = () => {
-    const revDiscount = Math.round(subtotal * 0.1 * 100) / 100
-    setDiscountInput(String(revDiscount))
-    setReviewDiscountApplied(true)
-    setActionNotice('10% Review Discount applied to bill!')
-    setTimeout(() => setActionNotice(null), 4000)
   }
 
   // Persist customer phone & name on the bill
@@ -804,26 +790,13 @@ export function BillSettlementModal({
                   </div>
                 </div>
 
-                {/* Discount & Review Discount */}
+                {/* Manager Discount */}
                 <div className="p-3.5 rounded-2xl bg-muted/30 border border-border space-y-2 text-xs">
                   <div className="flex items-center justify-between">
                     <label className="font-bold text-muted-foreground flex items-center gap-1">
                       <Percent className="size-3 text-primary" />
                       Manager Discount (₹)
                     </label>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleApplyReviewDiscount}
-                      className={cn(
-                        'h-6 px-2 text-[10px] font-bold gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10',
-                        reviewDiscountApplied && 'bg-amber-500/20 text-amber-500'
-                      )}
-                    >
-                      <Star className="size-3 fill-amber-500" />
-                      {reviewDiscountApplied ? '10% Review Discount Added' : 'Apply Review Discount (10%)'}
-                    </Button>
                   </div>
                   <div className="flex items-center gap-2">
                     <Input

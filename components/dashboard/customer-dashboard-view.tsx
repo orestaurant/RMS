@@ -25,7 +25,6 @@ import {
   ChevronRight,
   ChefHat,
   Leaf,
-  Zap,
   ShieldCheck,
   Soup,
   Pizza,
@@ -1567,19 +1566,6 @@ export function CustomerDashboardView() {
               </div>
             </CardContent>
           </Card>
-
-          {/* Dining Assurance Pill Card */}
-          <div className="rounded-2xl border border-border/60 bg-muted/25 p-4 flex items-center gap-3">
-            <div className="size-9 rounded-xl bg-[#24963F]/10 text-[#24963F] dark:text-emerald-400 flex items-center justify-center shrink-0">
-              <Zap className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-bold text-foreground">Instant Kitchen Sync</p>
-              <p className="text-[11px] text-muted-foreground">
-                Orders &amp; live add-ons update directly with our kitchen pass
-              </p>
-            </div>
-          </div>
         </div>
       </div>
 

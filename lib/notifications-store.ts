@@ -6,6 +6,7 @@
 
 import prisma from '@/lib/prisma'
 import { getRealTimeLiveOrders } from '@/lib/kds-utils'
+import { normalizeTableLookupKey } from '@/lib/utils'
 
 export interface AppNotification {
   id: string
@@ -42,8 +43,10 @@ export interface NotifyOrderPreparedInput {
   itemsSummary?: string | null
 }
 
-const FEED_CACHE_TTL_MS = 3_000
+const FEED_CACHE_TTL_MS = 5_000
+const ORPHAN_CHECK_INTERVAL_MS = 15_000
 const READY_DEDUP_TTL_MS = 60_000
+let lastOrphanCheckAt = 0
 const NEW_ORDER_ALLOWED_ROLES = new Set([
   'WAITER',
   'ADMIN',
@@ -73,16 +76,50 @@ export function formatTimeAgo(dateInput: Date | string): string {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function extractTitleOrderRef(title?: string | null): string | null {
-  if (!title) return null
-  const match = title.match(/#([A-Z0-9]+-[A-Z0-9-]+|[A-Z0-9]{4,})/i)
-  return match?.[1] ? match[1].trim() : null
+function extractOrderRefs(text?: string | null): string[] {
+  if (!text) return []
+  const refs: string[] = []
+  const regex = /#([A-Z0-9]+-[A-Z0-9-]+|[A-Z0-9]{4,})/gi
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(text)) !== null) {
+    if (match[1]) refs.push(match[1].trim())
+  }
+  return refs
+}
+
+function isBillRequestNotification(n: AppNotification): boolean {
+  if (n.type === 'bill_generated') return true
+  const titleLower = (n.title || '').toLowerCase()
+  return (
+    titleLower.includes('bill requested') ||
+    titleLower.includes('pending bill requested') ||
+    titleLower.includes('split bill requested')
+  )
+}
+
+function extractNotificationTableKey(n: AppNotification): string {
+  const metaTable = n.metadata?.tableNumber ? String(n.metadata.tableNumber).trim() : ''
+  if (metaTable) return normalizeTableLookupKey(metaTable)
+
+  const titleMatch = (n.title || '').match(/[—-]\s*(.+)$/)
+  if (titleMatch?.[1]) return normalizeTableLookupKey(titleMatch[1])
+
+  const bodyMatch = (n.body || '').match(/\bat\s+(table\s*[a-z0-9-]+|t\d+)/i)
+  if (bodyMatch?.[1]) return normalizeTableLookupKey(bodyMatch[1])
+
+  return ''
 }
 
 function notificationMatchesOrderKeys(
   notif: AppNotification,
-  keysLower: Set<string>
+  keysLower: Set<string>,
+  billIdsLower?: Set<string>
 ): boolean {
+  if (billIdsLower && billIdsLower.size > 0 && notif.metadata?.billId) {
+    if (billIdsLower.has(String(notif.metadata.billId).trim().toLowerCase())) {
+      return true
+    }
+  }
   if (keysLower.size === 0) return false
   const ordId = notif.metadata?.orderId ? String(notif.metadata.orderId).trim().toLowerCase() : ''
   if (ordId && keysLower.has(ordId)) return true
@@ -92,12 +129,14 @@ function notificationMatchesOrderKeys(
     : ''
   if (ordNum && keysLower.has(ordNum)) return true
 
-  const titleRef = extractTitleOrderRef(notif.title)?.toLowerCase()
-  if (titleRef && keysLower.has(titleRef)) return true
+  for (const ref of [...extractOrderRefs(notif.title), ...extractOrderRefs(notif.body)]) {
+    if (keysLower.has(ref.toLowerCase())) return true
+  }
 
   const titleLower = (notif.title || '').toLowerCase()
+  const bodyLower = (notif.body || '').toLowerCase()
   for (const key of keysLower) {
-    if (titleLower.includes(`#${key}`)) return true
+    if (titleLower.includes(`#${key}`) || bodyLower.includes(`#${key}`)) return true
   }
   return false
 }
@@ -382,29 +421,119 @@ export async function markOrderPreparedNotificationsRead(
 }
 
 /**
- * Removes all notifications (new_order, order_prepared, etc.) associated with a deleted or cancelled order
+ * Removes bill request / invoice notifications for a table or bill (when settled or table has no remaining active orders).
+ */
+export async function removeBillRequestNotifications(params: {
+  tableNumber?: string | null
+  billId?: string | null
+  billNumber?: string | null
+  organizationId?: string | null
+}): Promise<void> {
+  const targetTableKey = params.tableNumber ? normalizeTableLookupKey(params.tableNumber) : ''
+  const billIdLower = params.billId ? String(params.billId).trim().toLowerCase() : ''
+  const billNumLower = params.billNumber ? String(params.billNumber).trim().toLowerCase() : ''
+
+  if (!targetTableKey && !billIdLower && !billNumLower) return
+
+  notificationsStore = notificationsStore.filter((n) => {
+    if (!isBillRequestNotification(n)) return true
+    if (billIdLower && String(n.metadata?.billId || '').trim().toLowerCase() === billIdLower) {
+      return false
+    }
+    if (billNumLower && String(n.metadata?.billNumber || '').trim().toLowerCase() === billNumLower) {
+      return false
+    }
+    if (targetTableKey && extractNotificationTableKey(n) === targetTableKey) {
+      return false
+    }
+    return true
+  })
+
+  try {
+    const candidates = await prisma.notification.findMany({
+      where: {
+        deletedAt: null,
+        ...(params.organizationId ? { organizationId: params.organizationId } : {}),
+        OR: [
+          { notificationType: 'bill_generated' },
+          { title: { contains: 'Bill Requested', mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, title: true, message: true, notificationType: true, data: true },
+      take: 100,
+    })
+
+    const idsToDelete = candidates
+      .filter((row) => {
+        const dataObj = (row.data && typeof row.data === 'object' ? row.data : {}) as Record<string, any>
+        if (billIdLower && String(dataObj.billId || '').trim().toLowerCase() === billIdLower) {
+          return true
+        }
+        if (billNumLower && String(dataObj.billNumber || '').trim().toLowerCase() === billNumLower) {
+          return true
+        }
+        if (targetTableKey) {
+          const fakeNotif: AppNotification = {
+            id: row.id,
+            type: (row.notificationType || 'alert') as AppNotification['type'],
+            title: row.title || '',
+            body: row.message || '',
+            time: '',
+            read: false,
+            createdAt: '',
+            metadata: dataObj,
+          }
+          return extractNotificationTableKey(fakeNotif) === targetTableKey
+        }
+        return false
+      })
+      .map((r) => r.id)
+
+    if (idsToDelete.length > 0) {
+      await prisma.notification.updateMany({
+        where: { id: { in: idsToDelete }, deletedAt: null },
+        data: { deletedAt: new Date() },
+      })
+    }
+  } catch {
+    // Best-effort DB sync
+  }
+
+  lastOrphanCheckAt = 0
+  invalidateNotificationCache(params.organizationId)
+}
+
+/**
+ * Removes all notifications (new_order, order_prepared, bill requests, etc.) associated with a deleted or cancelled order
  * across the in-memory store, deduplication cache, feed cache, and PostgreSQL.
  */
 export async function removeOrderNotifications(params: {
   orderId?: string | null
   orderNumber?: string | null
   organizationId?: string | null
+  tableId?: string | null
+  tableNumber?: string | null
+  billId?: string | null
 }): Promise<void> {
   const rawKeys = [params.orderId, params.orderNumber]
     .map((v) => (v ? String(v).trim() : ''))
     .filter(Boolean)
-  if (rawKeys.length === 0) return
+  if (rawKeys.length === 0 && !params.tableId && !params.tableNumber && !params.billId) return
 
   const uniqueKeys = Array.from(new Set(rawKeys))
   const keysLower = new Set(uniqueKeys.map((k) => k.toLowerCase()))
+  const billIdsLower = params.billId ? new Set([String(params.billId).trim().toLowerCase()]) : undefined
 
-  notificationsStore = notificationsStore.filter((n) => !notificationMatchesOrderKeys(n, keysLower))
+  notificationsStore = notificationsStore.filter(
+    (n) => !notificationMatchesOrderKeys(n, keysLower, billIdsLower)
+  )
   for (const dedupKey of recentReadyDedup.keys()) {
     const [, dedupOrd] = dedupKey.split(':')
     if (dedupOrd && keysLower.has(dedupOrd.toLowerCase())) {
       recentReadyDedup.delete(dedupKey)
     }
   }
+  lastOrphanCheckAt = 0
   invalidateNotificationCache(params.organizationId)
 
   const orClauses: any[] = []
@@ -412,21 +541,72 @@ export async function removeOrderNotifications(params: {
     orClauses.push({ data: { path: ['orderNumber'], equals: key } })
     orClauses.push({ data: { path: ['orderId'], equals: key } })
     orClauses.push({ title: { contains: `#${key}`, mode: 'insensitive' } })
+    orClauses.push({ message: { contains: `#${key}`, mode: 'insensitive' } })
+  }
+  if (params.billId) {
+    orClauses.push({ data: { path: ['billId'], equals: params.billId } })
   }
 
-  try {
-    await prisma.notification.updateMany({
-      where: {
-        deletedAt: null,
-        ...(params.organizationId ? { organizationId: params.organizationId } : {}),
-        OR: orClauses,
-      },
-      data: {
-        deletedAt: new Date(),
-      },
-    })
-  } catch {
-    // Best-effort DB sync
+  if (orClauses.length > 0) {
+    try {
+      await prisma.notification.updateMany({
+        where: {
+          deletedAt: null,
+          ...(params.organizationId ? { organizationId: params.organizationId } : {}),
+          OR: orClauses,
+        },
+        data: {
+          deletedAt: new Date(),
+        },
+      })
+    } catch {
+      // Best-effort DB sync
+    }
+  }
+
+  // If this order belonged to a table, check whether any active unpaid orders remain on that table.
+  // When 0 active orders remain, also purge stale Bill Requested / Pending Bill Requested notifications for that table.
+  if (params.tableId || params.tableNumber) {
+    try {
+      const remainingCount = params.tableId
+        ? await prisma.order.count({
+            where: {
+              tableId: params.tableId,
+              deletedAt: null,
+              status: { notIn: ['cancelled', 'CANCELLED', 'refunded', 'completed'] as any[] },
+              paymentStatus: { notIn: ['completed', 'refunded', 'cancelled'] },
+            },
+          })
+        : 0
+
+      if (remainingCount === 0) {
+        if (params.tableId) {
+          await prisma.bill
+            .updateMany({
+              where: {
+                tableId: params.tableId,
+                deletedAt: null,
+                paymentStatus: { not: 'completed' },
+                status: { in: ['REQUESTED', 'GENERATED', 'open', 'requested'] },
+              },
+              data: {
+                deletedAt: new Date(),
+                billStatus: 'cancelled',
+                status: 'CANCELLED',
+              },
+            })
+            .catch(() => {})
+        }
+
+        await removeBillRequestNotifications({
+          tableNumber: params.tableNumber,
+          billId: params.billId,
+          organizationId: params.organizationId,
+        })
+      }
+    } catch {
+      // Non-blocking cleanup
+    }
   }
 
   invalidateNotificationCache(params.organizationId)
@@ -586,61 +766,149 @@ export async function getStaffNotificationsFeed(options: {
       n.organizationId === options.organizationId
   )
 
-  // Self-healing orphan check: drop any notifications whose linked order was deleted or cancelled
+  // Self-healing orphan check: throttled to avoid an extra sequential Neon query on every 5s poll
   const deadOrderKeys = new Set<string>()
-  try {
+  const orphanBillNotifIds = new Set<string>()
+  const shouldRunOrphanCheck = Date.now() - lastOrphanCheckAt > ORPHAN_CHECK_INTERVAL_MS
+  if (shouldRunOrphanCheck) try {
+    lastOrphanCheckAt = Date.now()
+    const allCurrentNotifs = [...dbNotifs, ...storeNotifs]
     const refIds = new Set<string>()
     const refNumbers = new Set<string>()
-    for (const n of [...dbNotifs, ...storeNotifs]) {
+    const billNotifs: AppNotification[] = []
+    const billIdsToCheck = new Set<string>()
+    const billNumbersToCheck = new Set<string>()
+
+    for (const n of allCurrentNotifs) {
       const ordId = n.metadata?.orderId ? String(n.metadata.orderId).trim() : ''
       const ordNum = n.metadata?.orderNumber ? String(n.metadata.orderNumber).trim() : ''
-      const titleRef = extractTitleOrderRef(n.title)
       if (ordId && UUID_REGEX.test(ordId)) refIds.add(ordId)
       if (ordNum) refNumbers.add(ordNum)
-      if (titleRef) refNumbers.add(titleRef)
-    }
-
-    if (refIds.size > 0 || refNumbers.size > 0) {
-      const deadOrders = await prisma.order.findMany({
-        where: {
-          AND: [
-            {
-              OR: [
-                ...(refIds.size > 0 ? [{ id: { in: Array.from(refIds) } }] : []),
-                ...(refNumbers.size > 0 ? [{ orderNumber: { in: Array.from(refNumbers) } }] : []),
-              ],
-            },
-            {
-              OR: [
-                { deletedAt: { not: null } },
-                { status: { in: ['cancelled', 'CANCELLED'] as any[] } },
-              ],
-            },
-          ],
-        },
-        select: { id: true, orderNumber: true },
-      })
-
-      for (const ord of deadOrders) {
-        if (ord.id) deadOrderKeys.add(ord.id.toLowerCase())
-        if (ord.orderNumber) deadOrderKeys.add(ord.orderNumber.toLowerCase())
+      for (const ref of [...extractOrderRefs(n.title), ...extractOrderRefs(n.body)]) {
+        refNumbers.add(ref)
       }
 
-      if (deadOrderKeys.size > 0) {
-        notificationsStore = notificationsStore.filter(
-          (n) => !notificationMatchesOrderKeys(n, deadOrderKeys)
-        )
-        const staleDbIds = dbNotifs
-          .filter((n) => UUID_REGEX.test(n.id) && notificationMatchesOrderKeys(n, deadOrderKeys))
-          .map((n) => n.id)
-        if (staleDbIds.length > 0) {
-          prisma.notification
-            .updateMany({
-              where: { id: { in: staleDbIds }, deletedAt: null },
-              data: { deletedAt: new Date() },
-            })
-            .catch(() => {})
+      if (isBillRequestNotification(n)) {
+        billNotifs.push(n)
+        if (n.metadata?.billId && UUID_REGEX.test(String(n.metadata.billId))) {
+          billIdsToCheck.add(String(n.metadata.billId))
         }
+        if (n.metadata?.billNumber) {
+          billNumbersToCheck.add(String(n.metadata.billNumber))
+        }
+      }
+    }
+
+    const [deadOrders, activeTableOrders, settledOrDeadBills] = await Promise.all([
+      refIds.size > 0 || refNumbers.size > 0
+        ? prisma.order.findMany({
+            where: {
+              AND: [
+                {
+                  OR: [
+                    ...(refIds.size > 0 ? [{ id: { in: Array.from(refIds) } }] : []),
+                    ...(refNumbers.size > 0 ? [{ orderNumber: { in: Array.from(refNumbers) } }] : []),
+                  ],
+                },
+                {
+                  OR: [
+                    { deletedAt: { not: null } },
+                    { status: { in: ['cancelled', 'CANCELLED'] as any[] } },
+                  ],
+                },
+              ],
+            },
+            select: { id: true, orderNumber: true },
+          })
+        : Promise.resolve([]),
+      billNotifs.length > 0
+        ? prisma.order.findMany({
+            where: {
+              deletedAt: null,
+              status: { notIn: ['cancelled', 'CANCELLED', 'refunded', 'completed'] as any[] },
+              paymentStatus: { notIn: ['completed', 'refunded', 'cancelled'] },
+              createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+              ...(options.organizationId ? { organizationId: options.organizationId } : {}),
+            },
+            select: {
+              table: { select: { tableNumber: true } },
+              metadata: true,
+            },
+            take: 150,
+          })
+        : Promise.resolve([]),
+      billIdsToCheck.size > 0 || billNumbersToCheck.size > 0
+        ? prisma.bill.findMany({
+            where: {
+              AND: [
+                {
+                  OR: [
+                    ...(billIdsToCheck.size > 0 ? [{ id: { in: Array.from(billIdsToCheck) } }] : []),
+                    ...(billNumbersToCheck.size > 0 ? [{ billNumber: { in: Array.from(billNumbersToCheck) } }] : []),
+                  ],
+                },
+                {
+                  OR: [
+                    { deletedAt: { not: null } },
+                    { status: { in: ['PAID', 'CANCELLED'] } },
+                    { paymentStatus: { in: ['completed', 'refunded', 'cancelled'] } },
+                  ],
+                },
+              ],
+            },
+            select: { id: true, billNumber: true },
+          })
+        : Promise.resolve([]),
+    ])
+
+    for (const ord of deadOrders) {
+      if (ord.id) deadOrderKeys.add(ord.id.toLowerCase())
+      if (ord.orderNumber) deadOrderKeys.add(ord.orderNumber.toLowerCase())
+    }
+
+    if (billNotifs.length > 0) {
+      const activeTableKeys = new Set<string>()
+      for (const ord of activeTableOrders) {
+        const tbl = ord.table?.tableNumber || (ord.metadata as any)?.tableNumber
+        if (tbl) activeTableKeys.add(normalizeTableLookupKey(String(tbl)))
+      }
+      const deadBillIds = new Set(settledOrDeadBills.map((b) => b.id.toLowerCase()))
+      const deadBillNums = new Set(settledOrDeadBills.map((b) => b.billNumber.toLowerCase()))
+
+      for (const bn of billNotifs) {
+        const bnBillId = bn.metadata?.billId ? String(bn.metadata.billId).toLowerCase() : ''
+        const bnBillNum = bn.metadata?.billNumber ? String(bn.metadata.billNumber).toLowerCase() : ''
+        const bnTableKey = extractNotificationTableKey(bn)
+
+        const isDeadBill =
+          (bnBillId && deadBillIds.has(bnBillId)) ||
+          (bnBillNum && deadBillNums.has(bnBillNum))
+        const hasNoActiveOrderOnTable = Boolean(bnTableKey) && !activeTableKeys.has(bnTableKey)
+
+        if (isDeadBill || hasNoActiveOrderOnTable) {
+          orphanBillNotifIds.add(bn.id)
+        }
+      }
+    }
+
+    if (deadOrderKeys.size > 0 || orphanBillNotifIds.size > 0) {
+      notificationsStore = notificationsStore.filter(
+        (n) => !notificationMatchesOrderKeys(n, deadOrderKeys) && !orphanBillNotifIds.has(n.id)
+      )
+      const staleDbIds = dbNotifs
+        .filter(
+          (n) =>
+            UUID_REGEX.test(n.id) &&
+            (notificationMatchesOrderKeys(n, deadOrderKeys) || orphanBillNotifIds.has(n.id))
+        )
+        .map((n) => n.id)
+      if (staleDbIds.length > 0) {
+        prisma.notification
+          .updateMany({
+            where: { id: { in: staleDbIds }, deletedAt: null },
+            data: { deletedAt: new Date() },
+          })
+          .catch(() => {})
       }
     }
   } catch {
@@ -653,6 +921,7 @@ export async function getStaffNotificationsFeed(options: {
 
   const pushUnique = (n: AppNotification) => {
     if (!canSeeNewOrder && n.type === 'new_order') return
+    if (orphanBillNotifIds.has(n.id)) return
     if (deadOrderKeys.size > 0 && notificationMatchesOrderKeys(n, deadOrderKeys)) return
     if (seenIds.has(n.id)) return
     if (n.type === 'order_prepared' && n.metadata?.orderNumber) {

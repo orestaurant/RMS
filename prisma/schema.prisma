@@ -502,6 +502,8 @@ model RestaurantTable {
   @@unique([branchId, tableNumber], name: "idx_table_branch_number")
   @@index([branchId])
   @@index([status])
+  @@index([branchId, deletedAt])
+  @@index([organizationId, branchId, deletedAt])
 }
 
 model TableLayout {
@@ -584,6 +586,8 @@ model Reservation {
   @@index([customerId])
   @@index([status])
   @@index([reservationDate])
+  @@index([tableId, status])
+  @@index([branchId, reservationDate, deletedAt, status])
 }
 
 model ReservationPayment {
@@ -828,6 +832,10 @@ model Order {
   @@index([orderNumber])
   @@index([status])
   @@index([createdAt])
+  @@index([branchId, deletedAt, createdAt])
+  @@index([tableId, deletedAt, isBilled, createdAt])
+  @@index([deletedAt, status, createdAt])
+  @@index([customerId, deletedAt, createdAt])
 }
 
 model OrderItem {
@@ -1039,6 +1047,8 @@ model Bill {
   @@index([branchId])
   @@index([paymentStatus])
   @@index([createdAt])
+  @@index([tableId, paymentStatus])
+  @@index([branchId, deletedAt, status])
 }
 
 model BillItem {
@@ -1510,6 +1520,8 @@ model Notification {
 
   @@index([userId])
   @@index([isRead])
+  @@index([deletedAt, createdAt])
+  @@index([organizationId, deletedAt, createdAt])
 }
 
 model AuditLog {

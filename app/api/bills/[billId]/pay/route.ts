@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { addNotification } from '@/lib/notifications-store'
+import { addNotification, removeBillRequestNotifications } from '@/lib/notifications-store'
 import { logCommunication } from '@/lib/communication-ledger'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
@@ -198,6 +198,12 @@ export async function POST(
     ])
 
     invalidatePOSTablesCache()
+    removeBillRequestNotifications({
+      tableNumber: existing.table?.tableNumber || null,
+      billId: existing.id,
+      billNumber: existing.billNumber,
+      organizationId: existing.organizationId,
+    }).catch(() => {})
 
     // Sync customer totalSpent / totalOrders stats now that the bill is settled
     try {

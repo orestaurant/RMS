@@ -243,10 +243,11 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
             const ordId = n.metadata?.orderId ? String(n.metadata.orderId).toLowerCase() : ''
             const ordNum = n.metadata?.orderNumber ? String(n.metadata.orderNumber).toLowerCase() : ''
             const titleLower = (n.title || '').toLowerCase()
+            const bodyLower = (n.body || '').toLowerCase()
             if (ordId && keySet.has(ordId)) return false
             if (ordNum && keySet.has(ordNum)) return false
             for (const k of keySet) {
-              if (titleLower.includes(`#${k}`)) return false
+              if (titleLower.includes(`#${k}`) || bodyLower.includes(`#${k}`)) return false
             }
             return true
           })

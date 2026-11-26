@@ -17,44 +17,72 @@ import {
 import { getCustomerSession } from '@/lib/customer-auth'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 
+const STAFF_ROLES = new Set([
+  'SUPER_ADMIN',
+  'SUPERADMIN',
+  'ADMIN',
+  'MANAGER',
+  'RESTAURANT_OWNER',
+  'BRANCH_MANAGER',
+  'COUNTER_MANAGER',
+  'WAITER',
+  'CHEF',
+  'CASHIER',
+  'STAFF',
+  'DJ',
+  'VENDOR',
+  'INVENTORY_MANAGER',
+])
+
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<SidebarCounts>>> {
   try {
     const url = new URL(request.url)
     const branchIdParam = url.searchParams.get('branchId')
+    const queryCustomerId = url.searchParams.get('customerId') || url.searchParams.get('userId')
+    const queryRole = (url.searchParams.get('role') || '').toUpperCase().trim()
 
-    // Detect Customer identity
-    let customerId: string | null = null
-    const customerSession = await getCustomerSession(request)
-    if (customerSession?.customerId) {
-      customerId = customerSession.customerId
-    } else {
-      const adminCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
-      if (adminCookie) {
-        const payload = await verifyJWT(adminCookie)
-        if (payload?.userId) {
-          const cust = await prisma.customer.findFirst({
-            where: {
-              OR: [
-                { id: payload.userId },
-                { email: { equals: payload.email, mode: 'insensitive' as const } },
-              ],
-            },
-            select: { id: true },
-          })
-          if (cust) {
-            customerId = cust.id
+    // Fast role detection without querying Customer table on Staff requests
+    let customerId: string | null = queryRole === 'CUSTOMER' && queryCustomerId ? queryCustomerId : null
+    let isCustomer = queryRole === 'CUSTOMER'
+
+    if (!customerId && !isCustomer) {
+      const customerSession = await getCustomerSession(request)
+      if (customerSession?.customerId) {
+        customerId = customerSession.customerId
+        isCustomer = true
+      } else if (customerSession?.role === 'CUSTOMER') {
+        isCustomer = true
+      } else {
+        const adminCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
+        if (adminCookie) {
+          const payload = await verifyJWT(adminCookie)
+          const roleUpper = String(payload?.role || '').toUpperCase().trim()
+          if (payload?.userId && !STAFF_ROLES.has(roleUpper)) {
+            isCustomer = roleUpper === 'CUSTOMER'
+            const cust = await prisma.customer.findFirst({
+              where: {
+                OR: [
+                  { id: payload.userId },
+                  ...(payload.email
+                    ? [{ email: { equals: payload.email, mode: 'insensitive' as const } }]
+                    : []),
+                ],
+              },
+              select: { id: true },
+            })
+            if (cust) {
+              customerId = cust.id
+              isCustomer = true
+            }
           }
         }
       }
     }
 
-    const queryCustomerId = url.searchParams.get('customerId') || url.searchParams.get('userId')
-    const queryRole = (url.searchParams.get('role') || '').toUpperCase()
     if (!customerId && queryCustomerId) {
       customerId = queryCustomerId
+      isCustomer = true
     }
-
-    const isCustomer = Boolean(customerId || queryRole === 'CUSTOMER' || customerSession?.role === 'CUSTOMER')
 
     // Strict Customer counts isolation: only count active orders belonging to this customer
     if (isCustomer) {

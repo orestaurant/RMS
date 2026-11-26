@@ -11,6 +11,7 @@ import { addNotification } from '@/lib/notifications-store'
 import { logCommunication } from '@/lib/communication-ledger'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { normalizePhoneForStorage } from '@/lib/phone'
+import { invalidatePOSTablesCache } from '@/lib/pos-cache'
 
 const GENERIC_GUEST_NAMES = new Set(['dine-in guest', 'table guest', 'walk-in guest', 'guest', 'customer', ''])
 
@@ -955,7 +956,9 @@ export async function POST(request: NextRequest) {
           title: `🔔 Bill Requested — ${displayTable}`,
           body: `Guest at ${displayTable} requested their bill (₹${finalBill.grandTotal}).`,
           metadata: {
+            billId: finalBill.id,
             billNumber: finalBill.billNumber,
+            orderId: finalBill.orderId || orders?.[0]?.id || undefined,
             tableNumber: displayTable,
             amount: Number(finalBill.grandTotal),
           },
@@ -966,13 +969,17 @@ export async function POST(request: NextRequest) {
           title: `🧾 Invoice #${finalBill.billNumber} Generated`,
           body: `${displayTable} — ₹${finalBill.grandTotal}. Ready for customer settlement.`,
           metadata: {
+            billId: finalBill.id,
             billNumber: finalBill.billNumber,
+            orderId: finalBill.orderId || orders?.[0]?.id || undefined,
             tableNumber: displayTable,
             amount: Number(finalBill.grandTotal),
           },
         })
       }
     } catch {}
+
+    invalidatePOSTablesCache()
 
     return NextResponse.json(
       {

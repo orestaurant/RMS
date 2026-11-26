@@ -22,45 +22,102 @@ import { OrderStatusEnum } from '@prisma/client'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
+const STAFF_ROLES = new Set([
+  'SUPER_ADMIN',
+  'SUPERADMIN',
+  'ADMIN',
+  'MANAGER',
+  'RESTAURANT_OWNER',
+  'BRANCH_MANAGER',
+  'COUNTER_MANAGER',
+  'WAITER',
+  'CHEF',
+  'CASHIER',
+  'STAFF',
+  'DJ',
+  'VENDOR',
+  'INVENTORY_MANAGER',
+])
+
+const userToCustomerCache = new Map<string, string | null>()
+
+function filterOrdersByStatus(orders: any[], statusFilter: string) {
+  if (statusFilter === 'car_orders' || statusFilter === 'car') {
+    return orders.filter((o) =>
+      Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
+    )
+  }
+  if (statusFilter === 'active' || statusFilter === 'in_progress') {
+    return orders.filter((o) =>
+      ['pending', 'accepted', 'cooking', 'ready', 'preparing', 'confirmed'].includes(o.status)
+    )
+  }
+  if (statusFilter !== 'all') {
+    return orders.filter((o) => o.status === statusFilter)
+  }
+  return orders
+}
+
 export async function GET(request: NextRequest) {
   try {
     const branchIdParam = request.nextUrl.searchParams.get('branchId')
     const statusFilter = (request.nextUrl.searchParams.get('status') || 'all').toLowerCase()
+    const queryCustomerId = request.nextUrl.searchParams.get('customerId') || request.nextUrl.searchParams.get('userId')
+    const queryRole = (request.nextUrl.searchParams.get('role') || '').toUpperCase().trim()
 
-    // 0. Detect Customer Session for strictly isolated, user-specific Live Orders
+    // 0. Fast role & customer isolation without blocking DB lookups on staff requests
     let customerId: string | null = null
-    const customerSession = await getCustomerSession(request)
-    if (customerSession?.customerId) {
-      customerId = customerSession.customerId
-    } else {
+    let isCustomer = queryRole === 'CUSTOMER'
+
+    if (queryRole === 'CUSTOMER' && queryCustomerId) {
+      customerId = queryCustomerId
+    } else if (!queryRole || queryRole === 'CUSTOMER') {
+      const customerSession = await getCustomerSession(request)
+      if (customerSession?.customerId) {
+        customerId = customerSession.customerId
+        isCustomer = true
+      } else if (customerSession?.role === 'CUSTOMER') {
+        isCustomer = true
+      }
+    }
+
+    if (!customerId && !isCustomer) {
       const adminCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value
       if (adminCookie) {
         const payload = await verifyJWT(adminCookie)
+        const roleUpper = String(payload?.role || '').toUpperCase().trim()
         if (payload?.userId) {
-          const cust = await prisma.customer.findFirst({
-            where: {
-              OR: [
-                { id: payload.userId },
-                { email: { equals: payload.email, mode: 'insensitive' as const } },
-              ],
-            },
-            select: { id: true },
-          })
-          if (cust) {
-            customerId = cust.id
+          if (STAFF_ROLES.has(roleUpper)) {
+            // Staff/Admin verified from JWT — zero DB lookup needed
+            isCustomer = false
+          } else {
+            isCustomer = roleUpper === 'CUSTOMER'
+            if (userToCustomerCache.has(payload.userId)) {
+              customerId = userToCustomerCache.get(payload.userId) ?? null
+            } else {
+              const cust = await prisma.customer.findFirst({
+                where: {
+                  OR: [
+                    { id: payload.userId },
+                    ...(payload.email
+                      ? [{ email: { equals: payload.email, mode: 'insensitive' as const } }]
+                      : []),
+                  ],
+                },
+                select: { id: true },
+              })
+              customerId = cust?.id ?? null
+              userToCustomerCache.set(payload.userId, customerId)
+            }
           }
         }
       }
     }
 
-    const queryCustomerId = request.nextUrl.searchParams.get('customerId') || request.nextUrl.searchParams.get('userId')
-    const queryRole = (request.nextUrl.searchParams.get('role') || '').toUpperCase()
-
     if (!customerId && queryCustomerId) {
       customerId = queryCustomerId
+      isCustomer = true
     }
-
-    const isCustomer = Boolean(customerId || queryRole === 'CUSTOMER' || customerSession?.role === 'CUSTOMER')
 
     // If request is from a customer account but no customerId could be resolved,
     // immediately return zero live orders (never leak branch/staff orders)
@@ -78,21 +135,30 @@ export async function GET(request: NextRequest) {
     const isUuid = (val: string | null): boolean =>
       !!val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)
 
-    // 1. Resolve branch & customer-isolated cache key
+    // 1. Resolve shared branch/customer cache key (all status filters share the same branch snapshot!)
     const explicitBranchFilter = branchIdParam && isUuid(branchIdParam) && branchIdParam !== 'all' ? branchIdParam : null
     const cacheKey = isCustomer
-      ? `cust_${customerId}_${statusFilter}`
-      : `${explicitBranchFilter || 'all'}_${statusFilter}`
-    const cachedData = getLiveOrdersCache(cacheKey, isCustomer ? 1500 : 2500)
+      ? `cust_${customerId}`
+      : `staff_${explicitBranchFilter || 'all'}`
+    const cachedSnapshot = getLiveOrdersCache(cacheKey, isCustomer ? 2000 : 5000)
 
-    // 2. High-speed in-memory cache check (< 5ms response)
-    if (cachedData) {
-      return NextResponse.json(cachedData, {
-        headers: {
-          'Cache-Control': 'no-store, no-cache, must-revalidate',
-          'X-Orders-Cache': 'HIT',
-        },
-      })
+    // 2. High-speed in-memory cache check (< 1ms response, 0 DB calls)
+    if (cachedSnapshot) {
+      const filteredOrders = filterOrdersByStatus(cachedSnapshot.orders, statusFilter)
+      return NextResponse.json(
+        successResponse({
+          orders: filteredOrders,
+          activeCount: cachedSnapshot.orders.length,
+          counts: cachedSnapshot.counts,
+          stats: cachedSnapshot.stats,
+        }),
+        {
+          headers: {
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'X-Orders-Cache': 'HIT',
+          },
+        }
+      )
     }
 
     const now = Date.now()
@@ -190,25 +256,9 @@ export async function GET(request: NextRequest) {
               },
             ],
           })
-
-          // Background auto-link: backfill customerId on any waiter-placed orders on this table
-          if (activeTableIds.length > 0) {
-            prisma.order.updateMany({
-              where: {
-                tableId: { in: activeTableIds },
-                customerId: null,
-                createdAt: { gte: sessionCutoff },
-                deletedAt: null,
-              },
-              data: { customerId: customerId },
-            }).catch(() => {})
-          }
         }
 
         whereClause.OR = orConditions
-        if (statusFilter !== 'all') {
-          whereClause.status = statusFilter
-        }
       } else {
         // Staff / Admin: branch filter and active today filter
         if (explicitBranchFilter) {
@@ -264,9 +314,6 @@ export async function GET(request: NextRequest) {
           createdBy: {
             select: { id: true, name: true, firstName: true },
           },
-          customer: {
-            select: { id: true, name: true, firstName: true, lastName: true, phone: true },
-          },
         },
         orderBy: {
           createdAt: 'desc',
@@ -275,6 +322,20 @@ export async function GET(request: NextRequest) {
       })
 
       if (rawOrders && rawOrders.length > 0) {
+        if (isCustomer && customerId) {
+          const unlinkedIds = rawOrders
+            .filter((o) => !o.customerId)
+            .map((o) => o.id)
+          if (unlinkedIds.length > 0) {
+            prisma.order
+              .updateMany({
+                where: { id: { in: unlinkedIds }, customerId: null },
+                data: { customerId },
+              })
+              .catch(() => {})
+          }
+        }
+
         formattedOrders = rawOrders.map((order) => {
           const normalizedStatus = normalizeKdsStatus(order.status)
 
@@ -410,36 +471,31 @@ export async function GET(request: NextRequest) {
     const overdueCount = formattedOrders.filter((o) => (o.ticketTime || 0) > 20).length
 
     // Filter by tab/status if specified
-    let filteredOrders = formattedOrders
-    if (statusFilter === 'car_orders' || statusFilter === 'car') {
-      filteredOrders = formattedOrders.filter(
-        (o) => Boolean(o.vehicleNumber || o.landmarkNote || o.customerLat || o.isLocationLocked)
-      )
-    } else if (statusFilter === 'active' || statusFilter === 'in_progress') {
-      filteredOrders = formattedOrders.filter((o) =>
-        ['pending', 'accepted', 'cooking', 'ready', 'preparing', 'confirmed'].includes(o.status)
-      )
-    } else if (statusFilter !== 'all') {
-      filteredOrders = formattedOrders.filter((o) => o.status === statusFilter)
+    const filteredOrders = filterOrdersByStatus(formattedOrders, statusFilter)
+
+    const stats = {
+      activeCount: formattedOrders.length,
+      inProgressCount: counts.pending + counts.accepted + counts.cooking + counts.ready,
+      readyCount: counts.ready,
+      servedCount: counts.served,
+      urgentCount,
+      overdueCount,
+      carOrdersCount,
     }
+
+    // Store full unfiltered snapshot so all status tabs/pollers share one cache entry
+    setLiveOrdersCache(cacheKey, {
+      orders: formattedOrders,
+      counts,
+      stats,
+    })
 
     const responsePayload = successResponse({
       orders: filteredOrders,
       activeCount: formattedOrders.length,
       counts,
-      stats: {
-        activeCount: formattedOrders.length,
-        inProgressCount: counts.pending + counts.accepted + counts.cooking + counts.ready,
-        readyCount: counts.ready,
-        servedCount: counts.served,
-        urgentCount,
-        overdueCount,
-        carOrdersCount,
-      },
+      stats,
     })
-
-    // Store in live orders fast cache
-    setLiveOrdersCache(cacheKey, responsePayload)
 
     return NextResponse.json(responsePayload, {
       headers: {

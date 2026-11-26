@@ -14,6 +14,7 @@ import {
   invalidateLiveOrdersCache,
   normalizeKdsStatus,
 } from '@/lib/kds-utils'
+import { invalidatePOSTablesCache } from '@/lib/pos-cache'
 import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
 import { removeOrderNotifications } from '@/lib/notifications-store'
@@ -136,6 +137,7 @@ export async function PATCH(
       },
       include: {
         kitchenTickets: true,
+        table: { select: { tableNumber: true } },
       },
     })
 
@@ -215,10 +217,14 @@ export async function PATCH(
 
     // If order was cancelled, re-sync customer order stats & purge its notifications
     if (normalizedTarget === 'cancelled' || normalizedTarget === 'CANCELLED') {
+      const existingMeta = (existing.metadata as Record<string, any>) || {}
       await removeOrderNotifications({
         orderId: existing.id,
         orderNumber: existing.orderNumber,
         organizationId: existing.organizationId,
+        tableId: existing.tableId,
+        tableNumber: existing.table?.tableNumber || existingMeta.tableNumber || null,
+        billId: existing.billId,
       })
       if (existing.customerId) {
         syncCustomerOrderStats(existing.customerId).catch(() => {})
@@ -268,9 +274,10 @@ export async function PATCH(
       }
     }
 
-    // Invalidate KDS and Live Orders caches for instant reactive UI updates
+    // Invalidate KDS, Live Orders, and Tables caches for instant reactive UI updates
     invalidateKDSCache()
     invalidateLiveOrdersCache()
+    invalidatePOSTablesCache()
 
     return NextResponse.json(
       successResponse({

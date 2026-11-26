@@ -9,8 +9,16 @@ import { getMockAuthContext, extractAuthContext } from '@/api/middleware/auth'
 import { extractTenantContext } from '@/api/middleware/tenant'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { ValidationError } from '@/api/utils/errors'
-import { invalidatePOSTablesCache } from '@/lib/pos-cache'
-import { invalidateDashboardStatsCache } from '@/lib/dashboard-cache'
+import {
+  invalidatePOSTablesCache,
+  getTablesViewCache,
+  setTablesViewCache,
+} from '@/lib/pos-cache'
+import {
+  invalidateDashboardStatsCache,
+  getCachedBranchMeta,
+  setCachedBranchMeta,
+} from '@/lib/dashboard-cache'
 import { ACTIVE_ORDER_DB_STATUSES, getEffectiveTableStatus } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
@@ -26,75 +34,124 @@ export async function GET(request: NextRequest) {
     let branchId = requestedBranchId || (authContext.userId ? tenantContext.branchId : '')
     let organizationId = tenantContext.organizationId
 
-    if (requestedBranchId) {
+    // Fast in-memory branch metadata lookup to eliminate extra Neon round-trip on every poll
+    const cachedBranch = getCachedBranchMeta(requestedBranchId || branchId || null)
+    if (cachedBranch && (!requestedBranchId || cachedBranch.id === requestedBranchId)) {
+      branchId = cachedBranch.id
+      organizationId = cachedBranch.organizationId
+    } else if (requestedBranchId) {
       const branch = await prisma.branch.findUnique({
         where: { id: requestedBranchId },
-        select: { id: true, organizationId: true },
+        select: { id: true, organizationId: true, restaurantId: true },
       })
       if (branch) {
         branchId = branch.id
         organizationId = branch.organizationId
+        setCachedBranchMeta(branch)
       }
     } else if (!branchId) {
       const primaryBranch = await prisma.branch.findFirst({
         orderBy: { isPrimary: 'desc' },
-        select: { id: true, organizationId: true },
+        select: { id: true, organizationId: true, restaurantId: true },
       })
       if (primaryBranch) {
         branchId = primaryBranch.id
         organizationId = primaryBranch.organizationId
+        setCachedBranchMeta(primaryBranch)
       } else {
         branchId = tenantContext.branchId
       }
     }
 
-    const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
-    const tables = await prisma.restaurantTable.findMany({
-      where: {
-        organizationId,
-        branchId,
-        deletedAt: null,
-      },
-      include: {
-        orders: {
-          where: {
-            deletedAt: null,
-            isBilled: false,
-            status: { in: [...ACTIVE_ORDER_DB_STATUSES] as any[] },
-            paymentStatus: { notIn: ['completed', 'refunded', 'cancelled'] },
-            createdAt: { gte: sessionCutoff },
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-          select: {
-            id: true,
-            orderNumber: true,
-            status: true,
-            totalAmount: true,
-            createdAt: true,
-          },
+    const cacheKey = `${isPublicAvailability ? 'pub' : 'staff'}:${organizationId}:${branchId}`
+    const cachedTables = getTablesViewCache(cacheKey, 4000)
+    if (cachedTables) {
+      return NextResponse.json(cachedTables, {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          'X-Tables-Cache': 'HIT',
         },
-        reservations: isPublicAvailability
-          ? false
-          : {
-              where: {
-                status: { in: ['confirmed', 'pending', 'checked_in'] },
-              },
-              orderBy: { reservationTime: 'asc' },
-              take: 1,
-              select: {
-                id: true,
-                guestName: true,
-                numberOfGuests: true,
-                reservationTime: true,
-              },
+      })
+    }
+
+    const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
+    const [tables, requestedBills] = await Promise.all([
+      prisma.restaurantTable.findMany({
+        where: {
+          organizationId,
+          branchId,
+          deletedAt: null,
+        },
+        select: {
+          id: true,
+          tableNumber: true,
+          capacity: true,
+          section: true,
+          status: true,
+          metadata: true,
+          xPosition: true,
+          yPosition: true,
+          orders: {
+            where: {
+              deletedAt: null,
+              isBilled: false,
+              status: { in: [...ACTIVE_ORDER_DB_STATUSES] as any[] },
+              paymentStatus: { notIn: ['completed', 'refunded', 'cancelled'] },
+              createdAt: { gte: sessionCutoff },
             },
-      },
-      orderBy: [
-        { section: 'asc' },
-        { tableNumber: 'asc' },
-      ],
-    })
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              orderNumber: true,
+              status: true,
+              createdAt: true,
+            },
+          },
+          reservations: isPublicAvailability
+            ? false
+            : {
+                where: {
+                  status: { in: ['confirmed', 'pending', 'checked_in'] },
+                },
+                orderBy: { reservationTime: 'asc' },
+                take: 1,
+                select: {
+                  id: true,
+                  guestName: true,
+                  numberOfGuests: true,
+                  reservationTime: true,
+                },
+              },
+        },
+        orderBy: [
+          { section: 'asc' },
+          { tableNumber: 'asc' },
+        ],
+      }),
+      isPublicAvailability
+        ? Promise.resolve([])
+        : prisma.bill.findMany({
+            where: {
+              branchId,
+              deletedAt: null,
+              OR: [{ status: 'REQUESTED' }, { billStatus: 'requested' }],
+            },
+            select: {
+              tableId: true,
+              table: { select: { tableNumber: true } },
+            },
+            take: 50,
+          }),
+    ])
+
+    const requestedTableIds = new Set<string>()
+    const requestedTableNumbers = new Set<string>()
+    for (const b of requestedBills) {
+      if (b.tableId) requestedTableIds.add(b.tableId)
+      const num = String(b.table?.tableNumber || '').toLowerCase().trim().replace(/[^0-9]/g, '')
+      if (num) requestedTableNumbers.add(num)
+    }
 
     const formatted = tables.map((t) => {
       const activeOrder = t.orders[0]
@@ -119,6 +176,11 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      const cleanNum = String(t.tableNumber || '').toLowerCase().trim().replace(/[^0-9]/g, '')
+      const billRequested =
+        isOccupied &&
+        (requestedTableIds.has(t.id) || (Boolean(cleanNum) && requestedTableNumbers.has(cleanNum)))
+
       return {
         id: t.id,
         number: parseInt(t.tableNumber) || t.tableNumber,
@@ -136,6 +198,7 @@ export async function GET(request: NextRequest) {
           : undefined,
         guestCount: isOccupied ? (meta.guestCount || undefined) : undefined,
         order: (isOccupied && activeOrder) ? { id: activeOrder.orderNumber, status: activeOrder.status } : undefined,
+        billRequested,
         activeReservation: activeRes
           ? {
               guestName: activeRes.guestName,
@@ -157,12 +220,12 @@ export async function GET(request: NextRequest) {
     })
 
     const responsePayload = successResponse(formatted)
+    setTablesViewCache(cacheKey, responsePayload)
 
     return NextResponse.json(responsePayload, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0',
+        'X-Tables-Cache': 'MISS',
       },
     })
   } catch (error: any) {
@@ -208,6 +271,7 @@ export async function POST(request: NextRequest) {
             metadata: {},
           },
         })
+        invalidatePOSTablesCache()
         return NextResponse.json(successResponse(restored, 'Table created successfully'), { status: 201 })
       }
 

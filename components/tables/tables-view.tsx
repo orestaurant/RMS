@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react'
 import {
   Users,
   Clock,
@@ -156,7 +156,7 @@ const statusConfig: Record<
   },
 }
 
-function TableCard({
+const TableCard = memo(function TableCard({
   table,
   onGenerateQR,
   onShareQR,
@@ -519,7 +519,7 @@ function TableCard({
       </div>
     </div>
   )
-}
+})
 
 const statsItems: { key: TableStatus; label: string }[] = [
   { key: 'available', label: 'Available' },
@@ -528,15 +528,41 @@ const statsItems: { key: TableStatus; label: string }[] = [
   { key: 'cleaning', label: 'Cleaning' },
 ]
 
+const tablesViewClientCache: Record<string, TableData[]> = {}
+
+function getInitialCachedTables(branchKey: string): TableData[] {
+  if (tablesViewClientCache[branchKey]) return tablesViewClientCache[branchKey]
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = sessionStorage.getItem(`rms_tables_view_${branchKey}`)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) {
+          tablesViewClientCache[branchKey] = parsed
+          return parsed
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+  return []
+}
+
 export function TablesView() {
-  const { auth } = useAuthContext()
+  const { auth, loading: authLoading } = useAuthContext()
   const branchId = auth?.branchId
+  const cacheKey = branchId || 'default'
+  const initialTables = getInitialCachedTables(cacheKey)
+
   const restaurantName = auth?.restaurantName || 'RestoSphere'
   const isWaiter = (auth?.role || '').toLowerCase() === 'waiter'
   const role = auth?.role || 'WAITER'
 
-  const [tables, setTables] = useState<TableData[]>([])
-  const [loading, setLoading] = useState(true)
+  const [tables, setTables] = useState<TableData[]>(initialTables)
+  const [loading, setLoading] = useState(initialTables.length === 0)
+  const [refreshing, setRefreshing] = useState(false)
+  const hasTablesRef = useRef(initialTables.length > 0)
   const [error, setError] = useState<string | null>(null)
   const [section, setSection] = useState<string>('all')
   const [search, setSearch] = useState('')
@@ -578,7 +604,7 @@ export function TablesView() {
   const [isAssigning, setIsAssigning] = useState(false)
   const [waitersLoading, setWaitersLoading] = useState(false)
 
-  const handleOpenAssignWaiter = async (tbl: TableData) => {
+  const handleOpenAssignWaiter = useCallback(async (tbl: TableData) => {
     setAssignTableTarget(tbl)
     setSelectedWaiterId(tbl.waiterId || '')
     setWaitersLoading(true)
@@ -603,7 +629,7 @@ export function TablesView() {
     } finally {
       setWaitersLoading(false)
     }
-  }
+  }, [branchId])
 
   const handleSaveWaiterAssignment = async () => {
     if (!assignTableTarget) return
@@ -739,77 +765,59 @@ export function TablesView() {
     }
   }, [tables, tableLinkTick])
 
-  // Fetch real tables from database API + check for active bill requests
-  const fetchTables = useCallback(async () => {
+  // Fetch real tables + billRequested status in a single fast request (0ms cached paint, silent SWR)
+  const fetchTables = useCallback(async (isManualRefresh = false) => {
     try {
-      setLoading(true)
+      if (!hasTablesRef.current) {
+        setLoading(true)
+      } else if (isManualRefresh) {
+        setRefreshing(true)
+      }
       setError(null)
       const url = branchId ? `/api/tables?branchId=${encodeURIComponent(branchId)}` : '/api/tables'
-      const res = await fetch(url, {
-        cache: 'no-store',
-        headers: {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          Pragma: 'no-cache',
-        },
-      })
+      const res = await fetch(url, { cache: 'no-store' })
       const json = await res.json()
 
       if (!res.ok || !json.success) {
         throw new Error(json.message || 'Failed to fetch tables')
       }
 
-      // Check for any active requested bills
-      let requestedTableNumbers: Set<string> = new Set()
-      try {
-        const billsRes = await fetch('/api/bills?status=REQUESTED', {
-          cache: 'no-store',
-          headers: {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            Pragma: 'no-cache',
-          },
-        })
-        if (billsRes.ok) {
-          const billsJson = await billsRes.json()
-          if (billsJson.success && Array.isArray(billsJson.data?.bills)) {
-            requestedTableNumbers = new Set(
-              billsJson.data.bills.map((b: any) =>
-                String(b.tableNumber || '').toLowerCase().trim().replace(/[^0-9]/g, '')
-              )
-            )
-          }
+      const mappedTables: TableData[] = json.data || []
+      hasTablesRef.current = true
+      tablesViewClientCache[cacheKey] = mappedTables
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem(`rms_tables_view_${cacheKey}`, JSON.stringify(mappedTables))
+        } catch {
+          // Ignore storage quota errors
         }
-      } catch (bErr) {
-        console.warn('Could not query active requested bills:', bErr)
       }
-
-      const rawTables = json.data || []
-      const mappedTables: TableData[] = rawTables.map((t: any) => {
-        const cleanNum = String(t.tableNumber || t.number || '').toLowerCase().trim().replace(/[^0-9]/g, '')
-        const isReq = (t.status === 'occupied') && requestedTableNumbers.has(cleanNum)
-        return {
-          ...t,
-          billRequested: isReq,
-        }
-      })
-
       setTables(mappedTables)
     } catch (err: any) {
       console.error('Failed to load tables:', err)
-      setError(err.message || 'Unable to load live tables')
+      if (!hasTablesRef.current) {
+        setError(err.message || 'Unable to load live tables')
+      }
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
-  }, [branchId])
+  }, [branchId, cacheKey])
 
-  // Fetch live incoming customer order requests (without scanning QR)
+  // Fetch only pending incoming customer orders (shares branch server cache)
   const fetchPendingOrders = useCallback(async () => {
     try {
-      const res = await fetch('/api/orders/live')
+      const branchQuery = branchId ? `&branchId=${encodeURIComponent(branchId)}` : ''
+      const res = await fetch(`/api/orders/live?status=pending${branchQuery}`)
       if (res.ok) {
         const json = await res.json()
-        if (json.success && Array.isArray(json.data)) {
-          const pending = json.data.filter((o: any) => o.status === 'pending')
-          // If new order arrived, trigger haptic vibration and sound chime!
+        const ordersList = Array.isArray(json.data)
+          ? json.data
+          : Array.isArray(json.data?.orders)
+          ? json.data.orders
+          : []
+        if (json.success) {
+          const pending = ordersList.filter((o: any) => o.status === 'pending')
           if (pending.length > prevPendingCount.current) {
             triggerNotificationFeedback('order')
           }
@@ -817,21 +825,40 @@ export function TablesView() {
           setPendingOrders(pending)
         }
       }
-    } catch (e) {
+    } catch {
       // silent background sync
     }
-  }, [])
+  }, [branchId])
 
   useEffect(() => {
+    if (authLoading) return
     fetchTables()
     fetchPendingOrders()
-    const intervalTables = setInterval(fetchTables, 10000)
-    const intervalOrders = setInterval(fetchPendingOrders, 3500)
+    const intervalTables = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        fetchTables(false)
+      }
+    }, 10000)
+    const intervalOrders = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        fetchPendingOrders()
+      }
+    }, 5000)
+
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchTables(false)
+        fetchPendingOrders()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
       clearInterval(intervalTables)
       clearInterval(intervalOrders)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [fetchTables, fetchPendingOrders])
+  }, [authLoading, fetchTables, fetchPendingOrders])
 
   // Accept incoming customer order request
   const handleAcceptOrder = async (orderId: string, fullId?: string) => {
@@ -853,7 +880,7 @@ export function TablesView() {
   }
 
   // Update table status in database
-  const handleUpdateStatus = async (tableId: string, newStatus: TableStatus) => {
+  const handleUpdateStatus = useCallback(async (tableId: string, newStatus: TableStatus) => {
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
     try {
       setTables((prev) =>
@@ -888,7 +915,7 @@ export function TablesView() {
       console.error('Failed to update table status, reverting:', err)
       fetchTables()
     }
-  }
+  }, [fetchTables])
 
   // Handle Add Table form submit
   const handleAddTable = async (e: React.FormEvent) => {
@@ -957,13 +984,13 @@ export function TablesView() {
     }
   }
 
-  const handleOpenQR = (tableNum: string | number) => {
+  const handleOpenQR = useCallback((tableNum: string | number) => {
     setQrTable(tableNum)
     setQrOpen(true)
-  }
+  }, [])
 
   // Send Table / Order Booking QR (WhatsApp or Web Share trigger)
-  const handleShareBookingQR = (tableNum: string | number) => {
+  const handleShareBookingQR = useCallback((tableNum: string | number) => {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'https://restosphere.com'
     const link = `${origin}/menu?table=${encodeURIComponent(tableNum)}`
     const msg = encodeURIComponent(
@@ -981,32 +1008,46 @@ export function TablesView() {
     } else {
       window.open(`https://wa.me/?text=${msg}`, '_blank')
     }
-  }
+  }, [restaurantName])
+
+  const handleOpenMenuModal = useCallback((tbl: TableData) => setMenuTableTarget(tbl), [])
+  const handleOpenBillModal = useCallback((tbl: TableData) => setSettlementTarget(tbl), [])
+  const handleRequestDeleteTable = useCallback((tbl: TableData) => {
+    setDeleteError(null)
+    setDeleteTableTarget(tbl)
+  }, [])
 
   // Dynamic sections
-  const dynamicSections = Array.from(
-    new Set(tables.map((t) => t.section.toLowerCase()).filter(Boolean))
+  const dynamicSections = useMemo(
+    () => Array.from(new Set(tables.map((t) => t.section.toLowerCase()).filter(Boolean))),
+    [tables]
   )
 
   // Filter tables
-  const filtered = tables.filter((t) => {
-    const matchSection = section === 'all' || t.section.toLowerCase() === section.toLowerCase()
-    const matchStatus = statusFilter === 'all' || t.status === statusFilter
-    const matchSearch =
-      !search ||
-      String(t.tableNumber || t.number).toLowerCase().includes(search.toLowerCase()) ||
-      formatTableDisplay(t.tableNumber || t.number).toLowerCase().includes(search.toLowerCase()) ||
-      t.section.toLowerCase().includes(search.toLowerCase())
-    return matchSection && matchStatus && matchSearch
-  })
+  const filtered = useMemo(() => {
+    const searchLower = search.toLowerCase()
+    return tables.filter((t) => {
+      const matchSection = section === 'all' || t.section.toLowerCase() === section.toLowerCase()
+      const matchStatus = statusFilter === 'all' || t.status === statusFilter
+      const matchSearch =
+        !searchLower ||
+        String(t.tableNumber || t.number).toLowerCase().includes(searchLower) ||
+        formatTableDisplay(t.tableNumber || t.number).toLowerCase().includes(searchLower) ||
+        t.section.toLowerCase().includes(searchLower)
+      return matchSection && matchStatus && matchSearch
+    })
+  }, [tables, section, statusFilter, search])
 
   // Dynamic live counts from database
-  const counts = {
-    available: tables.filter((t) => t.status === 'available').length,
-    occupied: tables.filter((t) => t.status === 'occupied').length,
-    reserved: tables.filter((t) => t.status === 'reserved').length,
-    cleaning: tables.filter((t) => t.status === 'cleaning').length,
-  }
+  const counts = useMemo(
+    () => ({
+      available: tables.filter((t) => t.status === 'available').length,
+      occupied: tables.filter((t) => t.status === 'occupied').length,
+      reserved: tables.filter((t) => t.status === 'reserved').length,
+      cleaning: tables.filter((t) => t.status === 'cleaning').length,
+    }),
+    [tables]
+  )
 
   return (
     <main className="flex flex-col gap-6 p-4 sm:p-6">
@@ -1122,13 +1163,15 @@ export function TablesView() {
         </div>
       )}
 
-      {/* QR Code Generator Modal */}
-      <TableQRGenerator
-        isOpen={qrOpen}
-        onClose={() => setQrOpen(false)}
-        initialTable={qrTable}
-        restaurantName={restaurantName}
-      />
+      {/* QR Code Generator Modal (mounted lazily only when opened) */}
+      {qrOpen && (
+        <TableQRGenerator
+          isOpen={qrOpen}
+          onClose={() => setQrOpen(false)}
+          initialTable={qrTable}
+          restaurantName={restaurantName}
+        />
+      )}
 
       {/* Interactive Table Dish Menu Selector Modal */}
       {menuTableTarget && (
@@ -1350,14 +1393,14 @@ export function TablesView() {
             variant="outline"
             size="sm"
             onClick={() => {
-              fetchTables()
+              fetchTables(true)
               fetchPendingOrders()
             }}
-            disabled={loading}
+            disabled={loading || refreshing}
             className="h-8 gap-1.5"
             title="Refresh tables"
           >
-            <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+            <RefreshCw className={cn('size-3.5', (loading || refreshing) && 'animate-spin')} />
           </Button>
 
           <Button size="sm" onClick={() => setIsAddOpen(true)} className="h-8 gap-1.5">
@@ -1427,16 +1470,13 @@ export function TablesView() {
             <TableCard
               key={table.id}
               table={table}
-              onOpenMenu={(tbl) => setMenuTableTarget(tbl)}
-              onShareQR={(num) => handleShareBookingQR(num)}
+              onOpenMenu={handleOpenMenuModal}
+              onShareQR={handleShareBookingQR}
               onGenerateQR={handleOpenQR}
               onUpdateStatus={handleUpdateStatus}
-              onGenerateBill={(tbl) => setSettlementTarget(tbl)}
+              onGenerateBill={handleOpenBillModal}
               onAssignWaiter={handleOpenAssignWaiter}
-              onDelete={(tbl) => {
-                setDeleteError(null)
-                setDeleteTableTarget(tbl)
-              }}
+              onDelete={handleRequestDeleteTable}
             />
           ))}
         </div>

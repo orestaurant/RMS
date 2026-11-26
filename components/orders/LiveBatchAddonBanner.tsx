@@ -96,20 +96,40 @@ export function LiveBatchAddonBanner({
     }
   }, [])
 
-  // Fast polling every 2.5s for real-time synchronization
+  // Visibility-aware polling (faster when an active batch exists, slower when idle)
+  const hasAnyBatches = batches.length > 0
   useEffect(() => {
     fetchBatches()
-    const pollInterval = setInterval(fetchBatches, 2500)
-    return () => clearInterval(pollInterval)
-  }, [fetchBatches])
+    const intervalMs = hasAnyBatches ? 2500 : 5000
+    const pollInterval = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        fetchBatches()
+      }
+    }, intervalMs)
 
-  // High-frequency 100ms local tick for smooth countdown ring without server load
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchBatches()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      clearInterval(pollInterval)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [fetchBatches, hasAnyBatches])
+
+  // Only run 100ms countdown tick when at least one batch is in the 20s lock window
+  const hasLockWindowBatch = batches.some((b) => b.status === 'PREPARING_LOCK_WINDOW')
   useEffect(() => {
+    if (!hasLockWindowBatch) return
+    setNow(Date.now())
     const tick = setInterval(() => {
       setNow(Date.now())
     }, 100)
     return () => clearInterval(tick)
-  }, [])
+  }, [hasLockWindowBatch])
 
   // Filter for active batches in 20s lock window OR recently locked
   const activeBatches = batches.filter((b) => {
