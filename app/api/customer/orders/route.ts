@@ -205,6 +205,12 @@ export async function GET(request: NextRequest) {
           id: true,
           orderNumber: true,
           status: true,
+          subtotal: true,
+          discountAmount: true,
+          discountPercentage: true,
+          discountReason: true,
+          taxAmount: true,
+          serviceCharge: true,
           total: true,
           totalAmount: true,
           source: true,
@@ -214,6 +220,8 @@ export async function GET(request: NextRequest) {
           billId: true,
           tableId: true,
           customerId: true,
+          vehicleNumber: true,
+          notes: true,
           metadata: true,
           createdAt: true,
           updatedAt: true,
@@ -232,17 +240,136 @@ export async function GET(request: NextRequest) {
           table: {
             select: { tableNumber: true },
           },
+          restaurant: {
+            select: {
+              name: true,
+              address: true,
+              phone: true,
+              gstNumber: true,
+              fssaiNumber: true,
+            },
+          },
           branch: {
-            select: { name: true },
+            select: { name: true, address: true, phone: true },
           },
           customer: {
-            select: { id: true, email: true, name: true },
+            select: { id: true, email: true, name: true, phone: true },
+          },
+          payments: {
+            where: { deletedAt: null },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              amount: true,
+              paymentMethod: true,
+              paymentStatus: true,
+              transactionId: true,
+              referenceNumber: true,
+              createdAt: true,
+            },
           },
           bill: {
-            select: { id: true, billNumber: true, status: true, paymentStatus: true },
+            select: {
+              id: true,
+              billNumber: true,
+              status: true,
+              billStatus: true,
+              paymentStatus: true,
+              paymentMethod: true,
+              subtotal: true,
+              discountAmount: true,
+              discountPercentage: true,
+              discountReason: true,
+              taxAmount: true,
+              serviceCharge: true,
+              tipAmount: true,
+              grandTotal: true,
+              amountPaid: true,
+              paidAt: true,
+              settledAt: true,
+              createdAt: true,
+              customerName: true,
+              customerPhone: true,
+              metadata: true,
+              waiter: {
+                select: { name: true, firstName: true, lastName: true },
+              },
+              items: {
+                select: {
+                  id: true,
+                  itemName: true,
+                  quantity: true,
+                  basePrice: true,
+                  itemTotal: true,
+                },
+              },
+              payments: {
+                where: { deletedAt: null },
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                select: {
+                  id: true,
+                  amount: true,
+                  paymentMethod: true,
+                  paymentStatus: true,
+                  transactionId: true,
+                  referenceNumber: true,
+                  createdAt: true,
+                },
+              },
+            },
           },
           tableBill: {
-            select: { id: true, billNumber: true, status: true, paymentStatus: true },
+            select: {
+              id: true,
+              billNumber: true,
+              status: true,
+              billStatus: true,
+              paymentStatus: true,
+              paymentMethod: true,
+              subtotal: true,
+              discountAmount: true,
+              discountPercentage: true,
+              discountReason: true,
+              taxAmount: true,
+              serviceCharge: true,
+              tipAmount: true,
+              grandTotal: true,
+              amountPaid: true,
+              paidAt: true,
+              settledAt: true,
+              createdAt: true,
+              customerName: true,
+              customerPhone: true,
+              metadata: true,
+              waiter: {
+                select: { name: true, firstName: true, lastName: true },
+              },
+              items: {
+                select: {
+                  id: true,
+                  itemName: true,
+                  quantity: true,
+                  basePrice: true,
+                  itemTotal: true,
+                },
+              },
+              payments: {
+                where: { deletedAt: null },
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                select: {
+                  id: true,
+                  amount: true,
+                  paymentMethod: true,
+                  paymentStatus: true,
+                  transactionId: true,
+                  referenceNumber: true,
+                  createdAt: true,
+                },
+              },
+            },
           },
         },
         orderBy: {
@@ -299,6 +426,94 @@ export async function GET(request: NextRequest) {
       const finalStatus = rawStatus ? order.status : 'pending'
 
       const linkedBill = order.bill || order.tableBill
+      const orderMeta = (order.metadata as Record<string, any>) || {}
+      const billMeta = (linkedBill?.metadata as Record<string, any>) || {}
+
+      const orderItemsFormatted = order.items.map((item) => ({
+        id: item.id,
+        name: item.itemName || item.menuItem?.name || 'Menu Item',
+        quantity: item.quantity,
+        price: Number(item.basePrice || 0),
+        total: Number(item.itemTotal || 0),
+      }))
+
+      const billItemsFormatted =
+        linkedBill?.items && linkedBill.items.length > 0
+          ? linkedBill.items.map((item) => ({
+              id: item.id,
+              name: item.itemName || 'Menu Item',
+              quantity: item.quantity,
+              price: Number(item.basePrice || 0),
+              total: Number(item.itemTotal || 0),
+            }))
+          : orderItemsFormatted
+
+      const latestPayment =
+        (order.payments && order.payments[0]) ||
+        (linkedBill?.payments && linkedBill.payments[0]) ||
+        null
+
+      const orderPaySt = String(order.paymentStatus || '').toLowerCase()
+      const billSt = String(linkedBill?.status || '').toLowerCase()
+      const billSt2 = String(linkedBill?.billStatus || '').toLowerCase()
+      const billPaySt = String(linkedBill?.paymentStatus || '').toLowerCase()
+      const latestPaySt = String(latestPayment?.paymentStatus || '').toLowerCase()
+
+      const isPaid =
+        ['completed', 'paid', 'settled'].includes(orderPaySt) ||
+        ['paid', 'settled'].includes(billSt) ||
+        ['paid', 'settled'].includes(billSt2) ||
+        ['completed', 'paid', 'settled'].includes(billPaySt) ||
+        ['completed', 'paid', 'settled'].includes(latestPaySt)
+
+      const orderItemsSubtotal = orderItemsFormatted.reduce(
+        (sum, it) => sum + Number(it.total || it.price * it.quantity || 0),
+        0
+      )
+      const orderSubtotal = Number(order.subtotal || orderItemsSubtotal || 0)
+      const orderDiscount = Number(order.discountAmount || 0)
+      const orderTax = Number(order.taxAmount || 0)
+      const orderServiceCharge = Number(order.serviceCharge || 0)
+
+      const billSubtotal = linkedBill ? Number(linkedBill.subtotal || 0) : orderSubtotal
+      const billDiscount = linkedBill ? Number(linkedBill.discountAmount || 0) : orderDiscount
+      const billTax = linkedBill ? Number(linkedBill.taxAmount || 0) : orderTax
+      const billServiceCharge = linkedBill ? Number(linkedBill.serviceCharge || 0) : orderServiceCharge
+      const billTip = linkedBill ? Number(linkedBill.tipAmount || 0) : 0
+      const coverCharges = Number(billMeta.coverCharges || 0)
+      const nonPaymentPenalty = Number(billMeta.nonPaymentPenalty || 0)
+      const billGrandTotal = linkedBill
+        ? Number(
+            linkedBill.grandTotal ||
+              billSubtotal - billDiscount + billTax + billServiceCharge + billTip + coverCharges + nonPaymentPenalty
+          )
+        : totalVal
+
+      const isCombinedBill = Boolean(
+        linkedBill &&
+          Math.abs(billSubtotal - orderSubtotal) > 1 &&
+          billItemsFormatted.length > orderItemsFormatted.length
+      )
+
+      const waiterName = linkedBill?.waiter
+        ? linkedBill.waiter.name ||
+          `${linkedBill.waiter.firstName || ''} ${linkedBill.waiter.lastName || ''}`.trim() ||
+          null
+        : null
+
+      const paymentMethod =
+        linkedBill?.paymentMethod ||
+        latestPayment?.paymentMethod ||
+        orderMeta.paymentMethod ||
+        (isPaid ? 'ONLINE' : null)
+
+      const paidAt =
+        linkedBill?.paidAt ||
+        linkedBill?.settledAt ||
+        latestPayment?.createdAt ||
+        (isPaid ? order.updatedAt : null)
+
+      const resolvedTableNumber = order.table?.tableNumber || orderMeta.tableNumber || null
 
       return {
         id: order.id,
@@ -306,10 +521,17 @@ export async function GET(request: NextRequest) {
         status: finalStatus,
         total: totalVal,
         totalAmount: totalVal,
+        subtotal: orderSubtotal,
+        discountAmount: orderDiscount,
+        discountPercentage: Number(order.discountPercentage || 0),
+        discountReason: order.discountReason || null,
+        taxAmount: orderTax,
+        serviceCharge: orderServiceCharge,
         source: order.source || 'ONLINE',
         orderType: order.orderType,
-        paymentStatus: order.paymentStatus,
-        isBilled: Boolean(order.isBilled),
+        paymentStatus: isPaid ? 'completed' : order.paymentStatus,
+        isPaid,
+        isBilled: Boolean(order.isBilled || linkedBill),
         billId: linkedBill?.id || order.billId || null,
         billNumber: linkedBill?.billNumber || null,
         billStatus: linkedBill?.status || null,
@@ -319,15 +541,58 @@ export async function GET(request: NextRequest) {
         customerId: order.customerId || customerId,
         customerEmail: order.customer?.email || cleanEmail || null,
         tableId: order.tableId || null,
-        tableNumber: order.table?.tableNumber || (order.metadata as any)?.tableNumber || null,
+        tableNumber: resolvedTableNumber,
         branchName: order.branch?.name || 'Main Branch',
-        items: order.items.map((item) => ({
-          id: item.id,
-          name: item.itemName || item.menuItem?.name || 'Menu Item',
-          quantity: item.quantity,
-          price: Number(item.basePrice || 0),
-          total: Number(item.itemTotal || 0),
-        })),
+        items: orderItemsFormatted,
+        receipt: {
+          receiptNumber: linkedBill?.billNumber || `RCPT-${order.orderNumber}`,
+          billId: linkedBill?.id || order.billId || null,
+          orderNumber: order.orderNumber,
+          isPaid,
+          isCombinedBill,
+          paymentStatus: isPaid ? 'completed' : order.paymentStatus,
+          paymentMethod,
+          transactionId: latestPayment?.transactionId || null,
+          referenceNumber: latestPayment?.referenceNumber || null,
+          paidAt,
+          issuedAt: linkedBill?.createdAt || order.createdAt,
+          restaurantName: order.restaurant?.name || 'RestoSphere',
+          restaurantAddress: order.branch?.address || order.restaurant?.address || '',
+          restaurantPhone: order.branch?.phone || order.restaurant?.phone || '',
+          branchName: order.branch?.name || 'Main Branch',
+          gstNumber: order.restaurant?.gstNumber || null,
+          fssaiNumber: order.restaurant?.fssaiNumber || null,
+          customerName:
+            linkedBill?.customerName ||
+            order.customer?.name ||
+            customerRecord?.name ||
+            orderMeta.customerName ||
+            'Guest',
+          customerPhone:
+            linkedBill?.customerPhone ||
+            order.customer?.phone ||
+            orderMeta.customerPhone ||
+            '',
+          tableNumber: resolvedTableNumber,
+          vehicleNumber: order.vehicleNumber || orderMeta.vehicleNumber || null,
+          orderType: order.orderType,
+          source: order.source || 'ONLINE',
+          waiterName,
+          subtotal: isCombinedBill ? orderSubtotal : billSubtotal,
+          discountAmount: isCombinedBill ? orderDiscount : billDiscount,
+          discountPercentage: Number(
+            (!isCombinedBill && linkedBill?.discountPercentage) || order.discountPercentage || 0
+          ),
+          discountReason: (!isCombinedBill && linkedBill?.discountReason) || order.discountReason || null,
+          taxAmount: isCombinedBill ? orderTax : billTax,
+          serviceCharge: isCombinedBill ? orderServiceCharge : billServiceCharge,
+          coverCharges: isCombinedBill ? 0 : coverCharges,
+          nonPaymentPenalty: isCombinedBill ? 0 : nonPaymentPenalty,
+          tipAmount: isCombinedBill ? 0 : billTip,
+          grandTotal: isCombinedBill ? totalVal : billGrandTotal,
+          billGrandTotal,
+          items: isCombinedBill ? orderItemsFormatted : billItemsFormatted,
+        },
       }
     })
 

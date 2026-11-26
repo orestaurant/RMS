@@ -713,6 +713,27 @@ export function KitchenDisplay() {
   const [search, setSearch] = useState('')
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const applyOrderLink = (orderKey?: string | null) => {
+      if (!orderKey) return
+      setActiveStation('All')
+      setUpcomingFilter('all')
+      setSearch(orderKey.replace(/^#/, ''))
+    }
+    const params = new URLSearchParams(window.location.search)
+    applyOrderLink(params.get('order'))
+
+    const onNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.pathname === '/kitchen' && detail?.orderKey) {
+        applyOrderLink(detail.orderKey)
+      }
+    }
+    window.addEventListener('rms:notification-navigate', onNav)
+    return () => window.removeEventListener('rms:notification-navigate', onNav)
+  }, [])
   const [lastSync, setLastSync] = useState<Date>(new Date())
   const prevIncomingCountRef = useRef<number>(0)
   // Track recent optimistic updates to prevent race-condition rollbacks from stale server polling

@@ -60,6 +60,7 @@ import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import { triggerNotificationFeedback } from '@/lib/sound-vibrate'
 import { checkPermission } from '@/lib/rolesAndPermission'
+import { normalizeTableKey } from '@/lib/notification-links'
 
 export function formatTableDisplay(tableNumber: string | number, isVip?: boolean) {
   let s = String(tableNumber || '').trim()
@@ -685,6 +686,58 @@ export function TablesView() {
 
   // Bill Settlement Modal state
   const [settlementTarget, setSettlementTarget] = useState<TableData | null>(null)
+  const [tableLinkTick, setTableLinkTick] = useState(0)
+  const pendingTableLinkRef = useRef<{ table?: string; openBill?: boolean } | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const tableParam = params.get('table')
+    const openBill = params.get('openBill') === '1'
+    if (tableParam) {
+      pendingTableLinkRef.current = { table: tableParam, openBill }
+      setSection('all')
+      setStatusFilter('all')
+      setTableLinkTick((t) => t + 1)
+    }
+
+    const onNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.pathname === '/tables' && detail?.tableNumber) {
+        pendingTableLinkRef.current = {
+          table: detail.tableNumber,
+          openBill: Boolean(detail.openModal),
+        }
+        setSection('all')
+        setStatusFilter('all')
+        setTableLinkTick((t) => t + 1)
+      }
+    }
+    window.addEventListener('rms:notification-navigate', onNav)
+    return () => window.removeEventListener('rms:notification-navigate', onNav)
+  }, [])
+
+  useEffect(() => {
+    const req = pendingTableLinkRef.current
+    if (!req?.table || tables.length === 0) return
+
+    const targetKey = normalizeTableKey(req.table)
+    const match = tables.find((t) => {
+      const k1 = normalizeTableKey(t.tableNumber)
+      const k2 = normalizeTableKey(t.number)
+      return (targetKey && (k1 === targetKey || k2 === targetKey)) ||
+        String(t.tableNumber || '').toLowerCase().includes(req.table!.toLowerCase())
+    })
+
+    if (match) {
+      pendingTableLinkRef.current = null
+      if (req.openBill) {
+        setSettlementTarget(match)
+      } else {
+        setSearch(String(match.tableNumber || match.number))
+      }
+    }
+  }, [tables, tableLinkTick])
 
   // Fetch real tables from database API + check for active bill requests
   const fetchTables = useCallback(async () => {

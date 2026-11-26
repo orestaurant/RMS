@@ -243,15 +243,15 @@ export function CustomerTopSearch({
               }}
               placeholder="Search dishes (e.g. Biryani, Pizza)..."
               className={cn(
-                'pl-8 sm:pl-9 pr-14 sm:pr-20 h-8 sm:h-9 text-xs sm:text-sm rounded-full border-border/80 bg-muted/40 hover:bg-muted/60 focus:bg-background transition-all shadow-2xs focus-visible:ring-1 focus-visible:ring-primary',
-                (isFocused || isDropdownOpen) && 'bg-background border-primary/50 ring-1 ring-primary/20'
+                'pl-8 sm:pl-9 pr-14 sm:pr-20 h-8 sm:h-9 text-xs sm:text-sm rounded-full border-border/80 bg-muted/40 hover:bg-muted/60 focus:bg-background transition-all shadow-2xs focus-visible:ring-1 focus-visible:ring-[#E23744]',
+                (isFocused || isDropdownOpen) && 'bg-background border-[#E23744]/50 ring-1 ring-[#E23744]/20'
               )}
             />
 
             {/* Right actions: Clear / Loading / Find button */}
             <div className="absolute right-1 sm:right-1.5 flex items-center gap-1">
               {isSearching ? (
-                <RefreshCw className="size-3.5 text-primary animate-spin mr-1" />
+                <RefreshCw className="size-3.5 text-[#E23744] animate-spin mr-1" />
               ) : searchQuery ? (
                 <button
                   type="button"
@@ -267,7 +267,7 @@ export function CustomerTopSearch({
               <Button
                 type="submit"
                 size="sm"
-                className="h-6 sm:h-7 px-2 sm:px-2.5 text-[10px] sm:text-xs font-semibold rounded-full bg-primary text-primary-foreground hover:bg-primary/90 shadow-2xs cursor-pointer"
+                className="h-6 sm:h-7 px-2.5 sm:px-3 text-[10px] sm:text-xs font-bold rounded-full bg-[#E23744] text-white hover:bg-[#CB202D] shadow-2xs cursor-pointer"
               >
                 <span>Find</span>
               </Button>

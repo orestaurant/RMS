@@ -13,9 +13,7 @@ export default function CustomerDashboardPage() {
       >
         <CustomerTopSearch />
       </TopNavbar>
-      <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">
-        <CustomerDashboardView />
-      </div>
+      <CustomerDashboardView />
     </>
   )
 }

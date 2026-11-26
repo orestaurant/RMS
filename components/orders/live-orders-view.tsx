@@ -153,6 +153,8 @@ const priorityConfig = {
 function OrderRow({
   order,
   isCustomer = false,
+  isHighlighted = false,
+  externalOpenSignal = 0,
   onOrderDeleted,
   onOrderUpdated,
   onAcceptOrder,
@@ -161,6 +163,8 @@ function OrderRow({
 }: {
   order: LiveOrder
   isCustomer?: boolean
+  isHighlighted?: boolean
+  externalOpenSignal?: number
   onOrderDeleted?: (id: string) => void
   onOrderUpdated?: (order: LiveOrder) => void
   onAcceptOrder?: (orderId: string, fullId?: string) => void
@@ -173,6 +177,13 @@ function OrderRow({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [copiedLink, setCopiedLink] = useState(false)
+
+  useEffect(() => {
+    if (externalOpenSignal > 0) {
+      setExpanded(true)
+      setDetailsOpen(true)
+    }
+  }, [externalOpenSignal])
 
   const [draftLocation, setDraftLocation] = useState<CustomerLocationData>({
     isLocationLocked: order.isLocationLocked,
@@ -250,10 +261,12 @@ function OrderRow({
 
   return (
     <div
+      id={`order-row-${order.id}`}
       className={cn(
         'border-b border-border last:border-0 border-l-2 transition-colors',
         cfg.row,
-        expanded ? 'bg-accent/30' : 'hover:bg-muted/30'
+        expanded ? 'bg-accent/30' : 'hover:bg-muted/30',
+        isHighlighted && 'ring-2 ring-inset ring-[#E23744] bg-[#E23744]/[0.06]'
       )}
     >
       {/* Main row */}
@@ -978,6 +991,74 @@ export function LiveOrdersView() {
   })
   const [loading, setLoading] = useState(true)
   const isInitialLoadRef = useRef(true)
+  const [highlightedOrderId, setHighlightedOrderId] = useState<string | null>(null)
+  const [openSignalMap, setOpenSignalMap] = useState<Record<string, number>>({})
+  const [orderLinkTick, setOrderLinkTick] = useState(0)
+  const pendingOrderLinkRef = useRef<{ orderKey: string; open?: boolean } | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const orderParam = params.get('order')
+    const openParam = params.get('open') === '1'
+    if (orderParam) {
+      pendingOrderLinkRef.current = { orderKey: orderParam, open: openParam }
+      setTab('all')
+      setFilterMode('all')
+      setUrgentOnly(false)
+      setOrderLinkTick((t) => t + 1)
+    }
+
+    const onNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.pathname === '/orders' && detail?.orderKey) {
+        pendingOrderLinkRef.current = {
+          orderKey: detail.orderKey,
+          open: Boolean(detail.openModal ?? true),
+        }
+        setTab('all')
+        setFilterMode('all')
+        setUrgentOnly(false)
+        setOrderLinkTick((t) => t + 1)
+      }
+    }
+    window.addEventListener('rms:notification-navigate', onNav)
+    return () => window.removeEventListener('rms:notification-navigate', onNav)
+  }, [])
+
+  useEffect(() => {
+    const req = pendingOrderLinkRef.current
+    if (!req?.orderKey || orders.length === 0) return
+
+    const keyLower = req.orderKey.replace(/^#/, '').trim().toLowerCase()
+    const match = orders.find((o) => {
+      const idLow = String(o.id || '').replace(/^#/, '').trim().toLowerCase()
+      const fullLow = String(o.fullId || '').trim().toLowerCase()
+      return idLow === keyLower || fullLow === keyLower || idLow.includes(keyLower)
+    })
+
+    if (match) {
+      pendingOrderLinkRef.current = null
+      setHighlightedOrderId(match.id)
+      if (req.open) {
+        setOpenSignalMap((prev) => ({
+          ...prev,
+          [match.id]: (prev[match.id] || 0) + 1,
+        }))
+      }
+      if (typeof document !== 'undefined') {
+        requestAnimationFrame(() => {
+          document.getElementById(`order-row-${match.id}`)?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+          })
+        })
+      }
+      setTimeout(() => {
+        setHighlightedOrderId((curr) => (curr === match.id ? null : curr))
+      }, 4500)
+    }
+  }, [orders, orderLinkTick])
 
   // Fetch live orders directly from PostgreSQL via API (with background non-blocking refresh)
   const fetchLiveOrders = useCallback(async (isManualRefresh = false) => {
@@ -1707,6 +1788,8 @@ export function LiveOrdersView() {
                   key={order.id}
                   order={order}
                   isCustomer={isCustomer}
+                  isHighlighted={highlightedOrderId === order.id}
+                  externalOpenSignal={openSignalMap[order.id] || 0}
                   onOrderDeleted={handleOrderDeleted}
                   onOrderUpdated={handleOrderUpdated}
                   onAcceptOrder={handleAcceptOrder}

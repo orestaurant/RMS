@@ -180,9 +180,13 @@ export function MenuManagement() {
   const [recipeLoading, setRecipeLoading] = useState(false)
   const [recipeSaving, setRecipeSaving] = useState(false)
 
-  // Add Category form state
+  // Add / Manage Category form state
   const [catName, setCatName] = useState('')
   const [catDescription, setCatDescription] = useState('')
+  const [deletingCatId, setDeletingCatId] = useState<string | null>(null)
+  const [confirmDeleteCatId, setConfirmDeleteCatId] = useState<string | null>(null)
+  const [reassignTargetCatId, setReassignTargetCatId] = useState<string>('')
+  const [catError, setCatError] = useState<string | null>(null)
 
   // Fetch live categories and items in parallel from fast cached backend APIs
   const loadMenuData = useCallback(async (showLoading = true) => {
@@ -480,11 +484,12 @@ export function MenuManagement() {
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!catName.trim()) {
-      alert('Category name is required')
+      setCatError('Category name is required')
       return
     }
 
     setSaving(true)
+    setCatError(null)
     try {
       const res = await fetch('/api/menu/categories', {
         method: 'POST',
@@ -504,13 +509,82 @@ export function MenuManagement() {
       setAddCatOpen(false)
       setCatName('')
       setCatDescription('')
+      setCatError(null)
 
       setFeedback({ type: 'success', message: `Category "${json.data.name}" created!` })
       setTimeout(() => setFeedback(null), 3000)
     } catch (err: any) {
-      alert(err.message || 'Error creating category')
+      setCatError(err.message || 'Error creating category')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Handle Delete Category (supports empty delete, reassigning items, or force deleting with items)
+  const handleDeleteCategory = async (
+    cat: MenuCategory,
+    options?: { force?: boolean; reassignTo?: string }
+  ) => {
+    setDeletingCatId(cat.id)
+    setCatError(null)
+    try {
+      const params = new URLSearchParams()
+      if (options?.force) params.set('force', 'true')
+      if (options?.reassignTo) params.set('reassignTo', options.reassignTo)
+      const qs = params.toString()
+
+      const res = await fetch(
+        `/api/menu/categories/${encodeURIComponent(cat.id)}${qs ? `?${qs}` : ''}`,
+        { method: 'DELETE' }
+      )
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to delete category')
+      }
+
+      const remaining = categories.filter((c) => c.id !== cat.id)
+      setCategories(remaining)
+      setConfirmDeleteCatId(null)
+      setReassignTargetCatId('')
+
+      if (options?.force) {
+        setItems((prev) =>
+          prev.filter(
+            (i) => i.categoryId !== cat.id && i.category.toLowerCase() !== cat.name.toLowerCase()
+          )
+        )
+      } else if (options?.reassignTo) {
+        const targetCat = remaining.find((c) => c.id === options.reassignTo)
+        setItems((prev) =>
+          prev.map((i) =>
+            i.categoryId === cat.id || i.category.toLowerCase() === cat.name.toLowerCase()
+              ? {
+                  ...i,
+                  categoryId: options.reassignTo!,
+                  category: targetCat?.name || i.category,
+                }
+              : i
+          )
+        )
+      }
+
+      if (
+        selectedCategory === cat.id ||
+        selectedCategory.toLowerCase() === cat.name.toLowerCase()
+      ) {
+        setSelectedCategory('all')
+      }
+      if (categoryId === cat.id) {
+        setCategoryId(remaining[0]?.id || '')
+      }
+
+      setFeedback({ type: 'success', message: json.message || `Category "${cat.name}" deleted!` })
+      setTimeout(() => setFeedback(null), 3500)
+      loadMenuData(false)
+    } catch (err: any) {
+      setCatError(err.message || 'Error deleting category')
+    } finally {
+      setDeletingCatId(null)
     }
   }
 
@@ -1453,67 +1527,247 @@ export function MenuManagement() {
         </DialogContent>
       </Dialog>
 
-      {/* ─── ADD CATEGORY DIALOG ─────────────────────────────────── */}
-      <Dialog open={addCatOpen} onOpenChange={setAddCatOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Add Menu Category</DialogTitle>
+      {/* ─── ADD / MANAGE CATEGORY DIALOG ────────────────────────── */}
+      <Dialog
+        open={addCatOpen}
+        onOpenChange={(open) => {
+          setAddCatOpen(open)
+          if (!open) {
+            setCatError(null)
+            setConfirmDeleteCatId(null)
+            setReassignTargetCatId('')
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md max-h-[88vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
+            <DialogTitle>Manage Menu Categories</DialogTitle>
             <DialogDescription>
-              Create a new category to group related dishes (e.g. Starters, Breads, Drinks).
+              Create a new category or delete existing categories from your menu.
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleCreateCategory} className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="cat-name" className="text-xs font-medium">
-                Category Name *
-              </Label>
-              <Input
-                id="cat-name"
-                value={catName}
-                onChange={(e) => setCatName(e.target.value)}
-                placeholder="e.g. Beverages, Desserts"
-                required
-                className="h-9 text-sm"
-              />
-            </div>
+          <div className="flex-1 overflow-y-auto pr-1 space-y-4">
+            {catError && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                <span>{catError}</span>
+              </div>
+            )}
 
-            <div className="space-y-1.5">
-              <Label htmlFor="cat-desc" className="text-xs font-medium">
-                Description <span className="text-muted-foreground font-normal">(Optional)</span>
-              </Label>
-              <Textarea
-                id="cat-desc"
-                value={catDescription}
-                onChange={(e) => setCatDescription(e.target.value)}
-                placeholder="Refreshing soft drinks, mocktails and fresh juices"
-                rows={2}
-                className="text-xs resize-none"
-              />
-            </div>
+            <form onSubmit={handleCreateCategory} className="space-y-3.5 py-1">
+              <div className="space-y-1.5">
+                <Label htmlFor="cat-name" className="text-xs font-medium">
+                  Category Name *
+                </Label>
+                <Input
+                  id="cat-name"
+                  value={catName}
+                  onChange={(e) => setCatName(e.target.value)}
+                  placeholder="e.g. Beverages, Desserts"
+                  required
+                  className="h-9 text-sm"
+                />
+              </div>
 
-            <DialogFooter className="pt-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setAddCatOpen(false)}
-                disabled={saving}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" size="sm" disabled={saving}>
-                {saving ? (
-                  <>
-                    <Loader2 className="size-3.5 animate-spin mr-1.5" />
-                    Creating...
-                  </>
-                ) : (
-                  'Create Category'
-                )}
-              </Button>
-            </DialogFooter>
-          </form>
+              <div className="space-y-1.5">
+                <Label htmlFor="cat-desc" className="text-xs font-medium">
+                  Description <span className="text-muted-foreground font-normal">(Optional)</span>
+                </Label>
+                <Textarea
+                  id="cat-desc"
+                  value={catDescription}
+                  onChange={(e) => setCatDescription(e.target.value)}
+                  placeholder="Refreshing soft drinks, mocktails and fresh juices"
+                  rows={2}
+                  className="text-xs resize-none"
+                />
+              </div>
+
+              <DialogFooter className="pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAddCatOpen(false)}
+                  disabled={saving}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" disabled={saving}>
+                  {saving ? (
+                    <>
+                      <Loader2 className="size-3.5 animate-spin mr-1.5" />
+                      Creating...
+                    </>
+                  ) : (
+                    'Create Category'
+                  )}
+                </Button>
+              </DialogFooter>
+            </form>
+
+            {/* Existing Categories List with Delete Option */}
+            {categories.length > 0 && (
+              <div className="border-t border-border/70 pt-3.5 space-y-2.5">
+                <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <span>Existing Categories ({categories.length})</span>
+                  <span className="font-normal normal-case text-right">Click trash to delete</span>
+                </div>
+
+                <div className="space-y-2">
+                {categories.map((cat) => {
+                  const count = items.filter(
+                    (i) => i.categoryId === cat.id || i.category.toLowerCase() === cat.name.toLowerCase()
+                  ).length
+                  const isConfirming = confirmDeleteCatId === cat.id
+                  const isDeleting = deletingCatId === cat.id
+                  const otherCategories = categories.filter((c) => c.id !== cat.id)
+
+                  return (
+                    <div
+                      key={cat.id}
+                      className="rounded-xl border border-border/70 bg-muted/25 p-3 text-xs space-y-2.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-foreground truncate">{cat.name}</span>
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] h-4.5 px-1.5 font-mono text-muted-foreground"
+                            >
+                              {count} {count === 1 ? 'item' : 'items'}
+                            </Badge>
+                          </div>
+                          {cat.description && (
+                            <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+                              {cat.description}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          {isConfirming && count === 0 ? (
+                            <>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                disabled={isDeleting}
+                                onClick={() => handleDeleteCategory(cat)}
+                                className="h-7 px-2.5 text-[11px] font-bold cursor-pointer"
+                              >
+                                {isDeleting ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  'Confirm'
+                                )}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                disabled={isDeleting}
+                                onClick={() => setConfirmDeleteCatId(null)}
+                                className="size-7 cursor-pointer"
+                                title="Cancel delete"
+                              >
+                                <X className="size-3.5" />
+                              </Button>
+                            </>
+                          ) : !isConfirming ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              disabled={Boolean(deletingCatId)}
+                              onClick={() => {
+                                setCatError(null)
+                                setConfirmDeleteCatId(cat.id)
+                                setReassignTargetCatId(otherCategories[0]?.id || '')
+                              }}
+                              className="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                              title={`Delete ${cat.name}`}
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              disabled={isDeleting}
+                              onClick={() => setConfirmDeleteCatId(null)}
+                              className="size-7 cursor-pointer"
+                              title="Cancel"
+                            >
+                              <X className="size-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Safe inline options when deleting a category that still has items */}
+                      {isConfirming && count > 0 && (
+                        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 space-y-2">
+                          <p className="text-[11px] font-medium text-foreground">
+                            <strong>{cat.name}</strong> has {count} active {count === 1 ? 'dish' : 'dishes'}. Move dishes to another category or delete all:
+                          </p>
+
+                          {otherCategories.length > 0 && (
+                            <div className="flex items-center gap-1.5">
+                              <select
+                                value={reassignTargetCatId}
+                                onChange={(e) => setReassignTargetCatId(e.target.value)}
+                                disabled={isDeleting}
+                                className="flex-1 h-7 rounded-md border border-input bg-background px-2 text-[11px] font-medium"
+                              >
+                                {otherCategories.map((oc) => (
+                                  <option key={oc.id} value={oc.id}>
+                                    Move to: {oc.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={isDeleting || !reassignTargetCatId}
+                                onClick={() =>
+                                  handleDeleteCategory(cat, { reassignTo: reassignTargetCatId })
+                                }
+                                className="h-7 px-2.5 text-[11px] font-semibold shrink-0 cursor-pointer"
+                              >
+                                {isDeleting ? <Loader2 className="size-3 animate-spin" /> : 'Move & Delete'}
+                              </Button>
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              disabled={isDeleting}
+                              onClick={() => handleDeleteCategory(cat, { force: true })}
+                              className="h-7 px-2.5 text-[11px] font-bold cursor-pointer"
+                            >
+                              {isDeleting ? (
+                                <Loader2 className="size-3 animate-spin mr-1" />
+                              ) : null}
+                              Delete Category &amp; {count} {count === 1 ? 'Item' : 'Items'}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                </div>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
       {/* ─── RECIPE (BOM) DIALOG ──────────────────────────────────── */}

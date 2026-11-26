@@ -1,10 +1,15 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useTheme } from '@/hooks/useTheme'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import { triggerNotificationFeedback } from '@/lib/sound-vibrate'
+import {
+  resolveNotificationTarget,
+  type NotificationCategory,
+  type NotificationTarget,
+} from '@/lib/notification-links'
 import {
   Bell,
   Moon,
@@ -12,8 +17,14 @@ import {
   Flame,
   Receipt,
   AlertTriangle,
-  Check,
   CheckCheck,
+  UtensilsCrossed,
+  Music,
+  CheckCircle2,
+  CalendarDays,
+  ChefHat,
+  ArrowUpRight,
+  Sparkles,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -23,10 +34,8 @@ import { CommandPalette } from '@/components/ui/command-palette'
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
-  DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
@@ -44,13 +53,93 @@ interface NotificationItem {
   time: string
   read: boolean
   createdAt?: string
+  metadata?: {
+    orderId?: string
+    orderNumber?: string
+    tableNumber?: string
+    billNumber?: string
+    billId?: string
+    amount?: number
+    customerId?: string | null
+    itemsSummary?: string | null
+    materialName?: string
+    sku?: string
+    actionUrl?: string
+  }
 }
 
 const NEW_ORDER_ROLES = new Set(['WAITER', 'ADMIN', 'SUPER_ADMIN', 'SUPERADMIN', 'MANAGER'])
 
+const categoryStyleMap: Record<
+  NotificationCategory,
+  {
+    Icon: React.ElementType
+    iconWrap: string
+    badge: string
+    unreadRow: string
+  }
+> = {
+  ready: {
+    Icon: Flame,
+    iconWrap: 'bg-emerald-500/15 text-emerald-500 ring-1 ring-emerald-500/25',
+    badge: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
+    unreadRow: 'bg-emerald-500/[0.06] border-l-2 border-l-emerald-500',
+  },
+  order: {
+    Icon: UtensilsCrossed,
+    iconWrap: 'bg-[#E23744]/15 text-[#E23744] dark:text-rose-400 ring-1 ring-[#E23744]/25',
+    badge: 'bg-[#E23744]/15 text-[#E23744] dark:text-rose-400 border-[#E23744]/30',
+    unreadRow: 'bg-[#E23744]/[0.06] border-l-2 border-l-[#E23744]',
+  },
+  bill: {
+    Icon: Receipt,
+    iconWrap: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/25',
+    badge: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30',
+    unreadRow: 'bg-amber-500/[0.06] border-l-2 border-l-amber-500',
+  },
+  payment: {
+    Icon: CheckCircle2,
+    iconWrap: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/25',
+    badge: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
+    unreadRow: 'bg-emerald-500/[0.06] border-l-2 border-l-emerald-500',
+  },
+  kitchen: {
+    Icon: ChefHat,
+    iconWrap: 'bg-orange-500/15 text-orange-500 ring-1 ring-orange-500/25',
+    badge: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30',
+    unreadRow: 'bg-orange-500/[0.06] border-l-2 border-l-orange-500',
+  },
+  dj: {
+    Icon: Music,
+    iconWrap: 'bg-pink-500/15 text-pink-500 ring-1 ring-pink-500/25',
+    badge: 'bg-pink-500/15 text-pink-600 dark:text-pink-400 border-pink-500/30',
+    unreadRow: 'bg-pink-500/[0.06] border-l-2 border-l-pink-500',
+  },
+  inventory: {
+    Icon: AlertTriangle,
+    iconWrap: 'bg-orange-500/15 text-orange-500 ring-1 ring-orange-500/25',
+    badge: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30',
+    unreadRow: 'bg-orange-500/[0.06] border-l-2 border-l-orange-500',
+  },
+  reservation: {
+    Icon: CalendarDays,
+    iconWrap: 'bg-sky-500/15 text-sky-500 ring-1 ring-sky-500/25',
+    badge: 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30',
+    unreadRow: 'bg-sky-500/[0.06] border-l-2 border-l-sky-500',
+  },
+  alert: {
+    Icon: Sparkles,
+    iconWrap: 'bg-primary/15 text-primary ring-1 ring-primary/25',
+    badge: 'bg-primary/15 text-primary border-primary/30',
+    unreadRow: 'bg-primary/[0.06] border-l-2 border-l-primary',
+  },
+}
+
 export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
   const [commandOpen, setCommandOpen] = useState(false)
+  const [notifOpen, setNotifOpen] = useState(false)
   const pathname = usePathname()
+  const router = useRouter()
   const { theme, toggleTheme } = useTheme()
   const { auth, loading: authLoading } = useAuthContext()
   const roleUpper = String(auth?.role || '').toUpperCase()
@@ -163,27 +252,37 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'mark_read', id: 'all' }),
       })
-    } catch (e) {
-      console.warn(e)
+    } catch (err) {
+      console.warn(err)
     }
   }
 
-  const handleNotificationClick = async (notifId: string | number) => {
-    setLiveNotifications((prev) =>
-      prev.map((n) => (n.id === notifId ? { ...n, read: true } : n))
-    )
-    setUnreadCount((c) => Math.max(0, c - 1))
-    try {
-      await fetch('/api/notifications', {
+  const handleNotificationClick = (notif: NotificationItem, target: NotificationTarget) => {
+    // 1. Optimistic instant UI state update (0ms)
+    if (!notif.read) {
+      setLiveNotifications((prev) =>
+        prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n))
+      )
+      setUnreadCount((c) => Math.max(0, c - 1))
+
+      // Non-blocking mark-read call that survives route transitions
+      fetch('/api/notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'mark_read', id: notifId }),
-      })
-    } catch (e) {
-      console.warn(e)
+        body: JSON.stringify({ action: 'mark_read', id: notif.id }),
+        keepalive: true,
+      }).catch(() => {})
     }
-  }
 
+    // 2. Close popover cleanly
+    setNotifOpen(false)
+
+    // 3. Dispatch instant in-page event (0ms if user is already on target route) + navigate
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('rms:notification-navigate', { detail: target }))
+    }
+    router.push(target.href)
+  }
 
   return (
     <>
@@ -216,109 +315,160 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
         )}
 
         {/* Live Notifications Bell */}
-        <DropdownMenu>
+        <DropdownMenu open={notifOpen} onOpenChange={setNotifOpen}>
           <DropdownMenuTrigger
             render={
-              <Button variant="ghost" size="icon" className="relative size-8" />
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  'relative size-8.5 rounded-full transition-colors cursor-pointer',
+                  unreadCount > 0 ? 'bg-[#E23744]/10 hover:bg-[#E23744]/15' : 'hover:bg-muted'
+                )}
+                aria-label="Open notifications"
+              />
             }
           >
-            <Bell className={cn('size-4', unreadCount > 0 && 'text-primary animate-pulse')} />
+            <Bell
+              className={cn(
+                'size-4 transition-transform',
+                unreadCount > 0 ? 'text-[#E23744] dark:text-rose-400' : 'text-muted-foreground'
+              )}
+            />
             {unreadCount > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground animate-in zoom-in">
-                {unreadCount}
+              <span className="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-[#E23744] text-[10px] font-extrabold text-white shadow-sm ring-2 ring-background animate-in zoom-in">
+                {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-80 sm:w-96 p-0 overflow-hidden shadow-2xl">
-            <div className="p-3 bg-muted/30 border-b border-border flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Bell className="size-4 text-primary" />
-                <span className="text-xs font-bold">
-                  {isCustomer ? 'Dining & Order Updates' : 'Live Kitchen & Table Alerts'}
-                </span>
-                {unreadCount > 0 && (
-                  <Badge variant="secondary" className="text-[10px] h-4 px-1.5 bg-primary/15 text-primary">
-                    {unreadCount} new
-                  </Badge>
-                )}
+          <DropdownMenuContent
+            align="end"
+            className="w-[340px] sm:w-[410px] p-0 overflow-hidden rounded-2xl border-border/80 bg-card/95 backdrop-blur-xl shadow-2xl"
+          >
+            {/* Header */}
+            <div className="px-4 py-3 bg-gradient-to-r from-[#E23744]/[0.08] via-muted/40 to-amber-500/[0.06] border-b border-border/70 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="size-7 rounded-xl bg-[#E23744]/15 text-[#E23744] dark:text-rose-400 flex items-center justify-center shrink-0">
+                  <Bell className="size-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-extrabold tracking-tight text-foreground truncate">
+                      {isCustomer ? 'Dining & Order Updates' : 'Live Kitchen & Table Alerts'}
+                    </span>
+                    {unreadCount > 0 && (
+                      <Badge className="text-[10px] h-4.5 px-1.5 bg-[#E23744] text-white border-0 font-bold">
+                        {unreadCount} new
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Click any alert to open it directly
+                  </p>
+                </div>
               </div>
               {unreadCount > 0 && (
                 <button
+                  type="button"
                   onClick={handleMarkAllRead}
-                  className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 font-semibold"
+                  className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 font-semibold px-2 py-1 rounded-lg hover:bg-background/70 transition-colors cursor-pointer shrink-0"
                 >
-                  <CheckCheck className="size-3 text-primary" />
+                  <CheckCheck className="size-3 text-[#24963F] dark:text-emerald-400" />
                   Mark all read
                 </button>
               )}
             </div>
 
-            <div className="max-h-80 overflow-y-auto divide-y divide-border/60">
+            {/* Notification List */}
+            <div className="max-h-[380px] overflow-y-auto divide-y divide-border/50">
               {liveNotifications.length > 0 ? (
                 liveNotifications.map((n) => {
-                  const isFoodPrepared = n.type === 'order_prepared' || n.title.toLowerCase().includes('prepared')
+                  const target = resolveNotificationTarget(n, { isCustomer, roleUpper })
+                  const style = categoryStyleMap[target.category] || categoryStyleMap.alert
+                  const CatIcon = style.Icon
+
                   return (
-                    <div
+                    <button
                       key={n.id}
-                      onClick={() => handleNotificationClick(n.id)}
+                      type="button"
+                      onClick={() => handleNotificationClick(n, target)}
                       className={cn(
-                        'flex items-start gap-3 p-3 transition-colors cursor-pointer hover:bg-muted/50',
-                        !n.read && 'bg-primary/5',
-                        isFoodPrepared && !n.read && 'bg-success/10 border-l-2 border-l-success'
+                        'group w-full text-left flex items-start gap-3 px-4 py-3 transition-all cursor-pointer hover:bg-muted/60',
+                        !n.read ? style.unreadRow : 'opacity-85 hover:opacity-100'
                       )}
                     >
                       <div
                         className={cn(
-                          'size-8 rounded-lg flex items-center justify-center shrink-0 text-xs mt-0.5',
-                          isFoodPrepared
-                            ? 'bg-success/20 text-success'
-                            : n.type === 'new_order'
-                            ? 'bg-primary/20 text-primary'
-                            : 'bg-muted text-muted-foreground'
+                          'size-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 transition-transform duration-150 group-hover:scale-105',
+                          style.iconWrap
                         )}
                       >
-                        {isFoodPrepared ? <Flame className="size-4" /> : <Receipt className="size-4" />}
+                        <CatIcon className="size-4" />
                       </div>
 
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1">
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-start justify-between gap-2">
                           <span
                             className={cn(
-                              'text-xs leading-tight truncate',
-                              !n.read ? 'font-bold text-foreground' : 'font-medium text-muted-foreground'
+                              'text-xs leading-snug line-clamp-1',
+                              !n.read ? 'font-bold text-foreground' : 'font-semibold text-foreground/80'
                             )}
                           >
                             {n.title}
                           </span>
-                          <span className="text-[10px] text-muted-foreground shrink-0 font-mono">
+                          <span className="text-[10px] text-muted-foreground shrink-0 font-mono pt-0.5">
                             {n.time}
                           </span>
                         </div>
-                        <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">
+
+                        <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
                           {n.body}
                         </p>
+
+                        <div className="flex items-center justify-between pt-0.5">
+                          <Badge
+                            variant="outline"
+                            className={cn('text-[9px] h-4 px-1.5 font-bold uppercase tracking-wider', style.badge)}
+                          >
+                            {target.badgeText}
+                          </Badge>
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-[#E23744] dark:text-rose-400 opacity-75 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all">
+                            <span>{target.label}</span>
+                            <ArrowUpRight className="size-3" />
+                          </span>
+                        </div>
                       </div>
 
-                      {!n.read && <span className="size-1.5 rounded-full bg-primary shrink-0 mt-2" />}
-                    </div>
+                      {!n.read && (
+                        <span className="size-2 rounded-full bg-[#E23744] shrink-0 mt-1.5 ring-2 ring-[#E23744]/20" />
+                      )}
+                    </button>
                   )
                 })
               ) : (
-                <div className="p-6 text-center text-xs text-muted-foreground">
-                  {isCustomer
-                    ? 'No notifications yet. Updates about your food preparation and dining orders will appear here.'
-                    : 'No notifications yet. Food prepared and new order alerts will appear here.'}
+                <div className="py-10 px-6 text-center space-y-2">
+                  <div className="size-10 rounded-2xl bg-muted/70 text-muted-foreground mx-auto flex items-center justify-center">
+                    <Bell className="size-4.5 opacity-60" />
+                  </div>
+                  <p className="text-xs font-semibold text-foreground">All caught up!</p>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    {isCustomer
+                      ? 'Updates about your food preparation and dining orders will appear here.'
+                      : 'Food prepared, pending bill requests, and new order alerts will appear here.'}
+                  </p>
                 </div>
               )}
             </div>
 
             <DropdownMenuSeparator className="m-0" />
-            <div className="p-2 bg-muted/20 text-center">
-              <span className="text-[10px] text-muted-foreground font-mono">
+            <div className="px-4 py-2 bg-muted/30 flex items-center justify-between text-[10px] text-muted-foreground font-mono">
+              <span className="flex items-center gap-1.5">
+                <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 {isCustomer
-                  ? 'Real-Time Dining Updates Active'
-                  : 'Real-Time RestoSphere Dispatcher Active'}
+                  ? 'Real-Time Dining Updates'
+                  : 'Real-Time RestoSphere Dispatcher'}
               </span>
+              <span>Live 5s Sync</span>
             </div>
           </DropdownMenuContent>
         </DropdownMenu>

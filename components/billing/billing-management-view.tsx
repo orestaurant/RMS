@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { normalizeTableKey } from '@/lib/notification-links'
 import {
   Receipt,
   IndianRupee,
@@ -106,6 +107,8 @@ export function BillingManagementView() {
   // Selected Bill for Settle / View Modal
   const [selectedBill, setSelectedBill] = useState<BillRecord | null>(null)
   const [printableBill, setPrintableBill] = useState<BillRecord | null>(null)
+  const [billLinkTick, setBillLinkTick] = useState(0)
+  const pendingBillLinkRef = useRef<{ bill?: string; table?: string; open?: boolean } | null>(null)
 
   // Delete bill state
   const [billToDelete, setBillToDelete] = useState<BillRecord | null>(null)
@@ -204,6 +207,65 @@ export function BillingManagementView() {
     const timer = setInterval(fetchBills, 12000)
     return () => clearInterval(timer)
   }, [fetchBills])
+
+  // Deep-link handler from TopNavbar notifications (?bill=...&table=...&open=1)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const billParam = params.get('bill')
+    const tableParam = params.get('table')
+    const openParam = params.get('open') === '1'
+    if (billParam || tableParam) {
+      pendingBillLinkRef.current = {
+        bill: billParam || undefined,
+        table: tableParam || undefined,
+        open: openParam,
+      }
+      setStatusFilter('all')
+      setMethodFilter('all')
+      setBillLinkTick((t) => t + 1)
+    }
+
+    const onNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.pathname === '/billing') {
+        pendingBillLinkRef.current = {
+          bill: detail.billNumber,
+          table: detail.tableNumber,
+          open: Boolean(detail.openModal ?? true),
+        }
+        setStatusFilter('all')
+        setMethodFilter('all')
+        setBillLinkTick((t) => t + 1)
+      }
+    }
+    window.addEventListener('rms:notification-navigate', onNav)
+    return () => window.removeEventListener('rms:notification-navigate', onNav)
+  }, [])
+
+  useEffect(() => {
+    const req = pendingBillLinkRef.current
+    if (!req || bills.length === 0) return
+
+    const targetBillNum = (req.bill || '').replace(/^#/, '').trim().toLowerCase()
+    const targetTableKey = normalizeTableKey(req.table)
+
+    const match = bills.find((b) => {
+      if (targetBillNum && (b.billNumber || '').toLowerCase() === targetBillNum) return true
+      if (targetTableKey && normalizeTableKey(b.tableNumber) === targetTableKey) return true
+      return false
+    })
+
+    if (match) {
+      pendingBillLinkRef.current = null
+      if (req.open) {
+        setSelectedBill(match)
+      }
+      if (req.bill) {
+        setSearch(req.bill)
+      }
+    }
+  }, [bills, billLinkTick])
 
   // Filtered bills
   const filteredBills = bills.filter((b) => {

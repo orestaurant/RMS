@@ -22,9 +22,13 @@ export interface AppNotification {
     orderNumber?: string
     tableNumber?: string
     billNumber?: string
+    billId?: string
     amount?: number
     customerId?: string | null
     itemsSummary?: string | null
+    materialName?: string
+    sku?: string
+    actionUrl?: string
   }
 }
 
@@ -411,9 +415,13 @@ function mapDbNotification(notif: any): AppNotification {
       orderNumber: dataObj.orderNumber,
       tableNumber: dataObj.tableNumber,
       billNumber: dataObj.billNumber,
+      billId: dataObj.billId,
       amount: dataObj.amount,
       customerId: dataObj.customerId ?? null,
       itemsSummary: dataObj.itemsSummary ?? null,
+      materialName: dataObj.materialName,
+      sku: dataObj.sku,
+      actionUrl: dataObj.actionUrl,
     },
   }
 }
