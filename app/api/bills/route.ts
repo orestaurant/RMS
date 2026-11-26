@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { addNotification } from '@/lib/notifications-store'
+import { normalizePhoneForStorage } from '@/lib/phone'
 
 // Real bills store fallback
 let memoryBills: any[] = []
@@ -116,7 +117,12 @@ export async function GET(request: NextRequest) {
             tableId: b.tableId,
             tableNumber: b.table?.tableNumber || 'Table 1',
             customerName: b.customerName || b.customer?.name || 'Walk-in Guest',
-            customerPhone: b.customerPhone || b.customer?.phone || '',
+            customerPhone:
+              b.customerPhone ||
+              b.customer?.phone ||
+              b.customer?.mobile ||
+              (b.order?.metadata as Record<string, any> | null)?.customerPhone ||
+              '',
             subtotal,
             discountAmount: discount,
             taxAmount: tax,
@@ -256,7 +262,11 @@ export async function GET(request: NextRequest) {
           tableId: ord.tableId,
           tableNumber: tableDisplay,
           customerName: ord.customer?.name || (ord.vehicleNumber ? `Guest (${ord.vehicleNumber})` : 'Walk-in Guest'),
-          customerPhone: ord.customer?.phone || '',
+          customerPhone:
+            ord.customer?.phone ||
+            ord.customer?.mobile ||
+            (ord.metadata as Record<string, any> | null)?.customerPhone ||
+            '',
           subtotal: Math.round(calculatedSubtotal * 100) / 100,
           discountAmount: Number(ord.discountAmount || 0),
           taxAmount: Math.round(taxAmount * 100) / 100,
@@ -318,6 +328,7 @@ export async function GET(request: NextRequest) {
           b.billNumber.toLowerCase().includes(q) ||
           (b.tableNumber && b.tableNumber.toLowerCase().includes(q)) ||
           (b.customerName || '').toLowerCase().includes(q) ||
+          (b.customerPhone || '').toLowerCase().includes(q) ||
           (b.orderNumber || '').toLowerCase().includes(q) ||
           (b.waiterName || '').toLowerCase().includes(q)
       )
@@ -434,7 +445,7 @@ export async function POST(request: NextRequest) {
       orderNumber,
       tableNumber: tableNumber || 'Table 1',
       customerName: customerName || 'Dining Guest',
-      customerPhone: customerPhone || '+91 98765 00000',
+      customerPhone: normalizePhoneForStorage(customerPhone) || '',
       subtotal: calculatedSubtotal,
       discountAmount,
       taxAmount: totalTax,

@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -33,18 +33,20 @@ import {
   Car,
   AlertTriangle,
   ShieldCheck,
-  BellRing,
   Sparkles,
   Crown,
   DollarSign,
   Plus,
   Minus,
   Trash2,
+  Phone,
+  RefreshCw,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthContext } from '@/hooks/useAuthContext'
 import { checkPermission } from '@/lib/rolesAndPermission'
 import { triggerNotificationFeedback } from '@/lib/sound-vibrate'
+import { buildWhatsAppUrl, formatPhoneForDisplay, isValidWhatsAppPhone } from '@/lib/phone'
 
 interface BillSettlementModalProps {
   open: boolean
@@ -108,7 +110,10 @@ export function BillSettlementModal({
   // Communication state
   const [customerPhone, setCustomerPhone] = useState<string>('')
   const [customerName, setCustomerName] = useState<string>('')
+  const [savingContact, setSavingContact] = useState(false)
   const [actionNotice, setActionNotice] = useState<string | null>(null)
+  const phoneInputRef = useRef<HTMLInputElement>(null)
+  const savedServerPhoneRef = useRef<string>('')
 
   // Permission checks
   const canApplyDiscount = checkPermission(role, 'canApplyDiscount', { isManagerLoggedIn: true })
@@ -140,21 +145,28 @@ export function BillSettlementModal({
       const b = json.data
       setBill(b)
 
-      if (b.discountAmount > 0) setDiscountInput(String(b.discountAmount))
-      if (b.tipAmount > 0) setTipInput(String(b.tipAmount))
-      if (b.customerPhone) setCustomerPhone(b.customerPhone)
-      if (b.customerName) setCustomerName(b.customerName)
+      setDiscountInput(b.discountAmount > 0 ? String(b.discountAmount) : '')
+      setTipInput(b.tipAmount > 0 ? String(b.tipAmount) : '')
+
+      const serverPhone = String(b.customerPhone || '').trim()
+      savedServerPhoneRef.current = serverPhone
+      setCustomerPhone(serverPhone)
+      setCustomerName(String(b.customerName || '').trim())
 
       const meta = b.metadata || {}
-      if (meta.coverCharges) setCoverChargeInput(String(meta.coverCharges))
-      if (meta.nonPaymentPenalty) setPenaltyInput(String(meta.nonPaymentPenalty))
+      setCoverChargeInput(meta.coverCharges ? String(meta.coverCharges) : '')
+      setPenaltyInput(meta.nonPaymentPenalty ? String(meta.nonPaymentPenalty) : '')
       if (meta.partyThrower) {
         setIsPartyThrowerEnabled(true)
         setPartyThrowerName(meta.partyThrower.name || '')
         setPartyThrowerPhone(meta.partyThrower.phone || '')
+      } else {
+        setIsPartyThrowerEnabled(false)
+        setPartyThrowerName('')
+        setPartyThrowerPhone('')
       }
-      if (meta.highwayPaymentVerified) setHighwayPaymentVerified(true)
-      if (meta.reviewDiscountApplied) setReviewDiscountApplied(true)
+      setHighwayPaymentVerified(Boolean(meta.highwayPaymentVerified))
+      setReviewDiscountApplied(Boolean(meta.reviewDiscountApplied))
     } catch (err: any) {
       console.error('Error in BillSettlementModal:', err)
       setError(err.message || 'Unable to load bill for this table.')
@@ -166,7 +178,12 @@ export function BillSettlementModal({
   useEffect(() => {
     if (open) {
       setPaySuccess(false)
+      setSettledMethod('')
       setActionNotice(null)
+      setError(null)
+      setCustomerPhone('')
+      setCustomerName('')
+      savedServerPhoneRef.current = ''
       loadBill()
     }
   }, [open, loadBill])
@@ -240,44 +257,112 @@ export function BillSettlementModal({
     setTimeout(() => setActionNotice(null), 4000)
   }
 
-  // Ask for Review (WhatsApp trigger)
-  const handleAskForReview = () => {
-    const cleanPhone = (customerPhone || partyThrowerPhone).replace(/[^0-9]/g, '')
-    const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone || '919876543210'
-    const feedbackUrl = typeof window !== 'undefined' ? `${window.location.origin}/customer/feedback?table=${tableNumber || '1'}` : 'https://g.page/r/review?restosphere'
-    const reviewMsg = encodeURIComponent(
-      `Hello ${customerName || partyThrowerName || 'valued guest'}! Thank you for dining with us at RestoSphere (Table ${tableNumber}). We hope you loved your food and service! Please verify your dining experience & claim your 10% meal discount: ${feedbackUrl}`
-    )
-    window.open(`https://wa.me/${targetPhone}?text=${reviewMsg}`, '_blank')
-    setActionNotice('Review request dispatched to guest!')
+  // Persist customer phone & name on the bill
+  const handleSaveCustomerContact = async (silent = false) => {
+    if (!bill?.id) return
+    const trimmedPhone = customerPhone.trim()
+    const trimmedName = customerName.trim()
+    try {
+      if (!silent) setSavingContact(true)
+      const res = await fetch(`/api/bills/${bill.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName: trimmedName || undefined,
+          customerPhone: trimmedPhone,
+        }),
+      })
+      const json = await res.json().catch(() => null)
+      if (res.ok && json?.success) {
+        savedServerPhoneRef.current = trimmedPhone
+        setBill((prev: any) =>
+          prev
+            ? {
+                ...prev,
+                customerPhone: trimmedPhone || null,
+                customerName: trimmedName || prev.customerName,
+              }
+            : prev
+        )
+        if (!silent) {
+          setActionNotice(
+            trimmedPhone
+              ? `Saved customer WhatsApp number (${formatPhoneForDisplay(trimmedPhone)}).`
+              : 'Customer contact updated.'
+          )
+          setTimeout(() => setActionNotice(null), 3500)
+        }
+      } else if (!silent) {
+        setError(json?.message || 'Failed to save customer contact.')
+      }
+    } catch (err: any) {
+      if (!silent) setError(err.message || 'Failed to save customer contact.')
+    } finally {
+      if (!silent) setSavingContact(false)
+    }
+  }
+
+  // Unified WhatsApp dispatcher (never falls back to dummy numbers)
+  const dispatchWhatsAppMessage = (params: {
+    message: string
+    recipient: string
+    noticeLabel: string
+    event: 'bill_invoice' | 'payment_receipt'
+  }) => {
+    const rawPhone =
+      isPartyThrowerEnabled && partyThrowerPhone.trim()
+        ? partyThrowerPhone.trim()
+        : customerPhone.trim() || partyThrowerPhone.trim()
+
+    const waUrl = buildWhatsAppUrl(rawPhone, params.message)
+    if (!waUrl) {
+      setError(
+        'Please enter a valid customer WhatsApp phone number (e.g. 9876543210 or +91 98765 43210) before sending on WhatsApp.'
+      )
+      phoneInputRef.current?.focus()
+      return
+    }
+
+    setError(null)
+    window.open(waUrl, '_blank', 'noopener,noreferrer')
+
+    // Persist edited phone on bill if needed (non-blocking)
+    if (bill?.id && customerPhone.trim() && customerPhone.trim() !== savedServerPhoneRef.current) {
+      handleSaveCustomerContact(true)
+    }
+
+    // Log WhatsApp dispatch in communication ledger (non-blocking)
+    fetch('/api/communication/ledger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipientName: params.recipient,
+        recipientPhone: formatPhoneForDisplay(rawPhone),
+        channel: 'whatsapp',
+        event: params.event,
+        orderNumber: bill?.billNumber,
+        tableNumber: `Table ${tableNumber}`,
+        message: params.message,
+        status: 'sent',
+        cost: 0.15,
+      }),
+    }).catch(() => {})
+
+    setActionNotice(`${params.noticeLabel} (${formatPhoneForDisplay(rawPhone)})`)
     setTimeout(() => setActionNotice(null), 4000)
   }
 
   // Send Bill (WhatsApp trigger)
   const handleSendBill = () => {
-    const cleanPhone = (isPartyThrowerEnabled && partyThrowerPhone ? partyThrowerPhone : customerPhone).replace(/[^0-9]/g, '')
-    const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone || '919876543210'
     const recipient = isPartyThrowerEnabled && partyThrowerName ? partyThrowerName : customerName || 'Guest'
+    const message = `Hello ${recipient}! Your bill for RestoSphere Table ${tableNumber} is ready:\nInvoice #${bill?.billNumber || 'BILL'}\nSubtotal: ₹${subtotal.toFixed(2)}\nTax: ₹${taxAmount.toFixed(2)}${currentDiscount > 0 ? `\nDiscount: -₹${currentDiscount.toFixed(2)}` : ''}${currentCover > 0 ? `\nCover Charges: ₹${currentCover.toFixed(2)}` : ''}${currentPenalty > 0 ? `\nPenalty Fee: ₹${currentPenalty.toFixed(2)}` : ''}${currentTip > 0 ? `\nServer Tip: ₹${currentTip.toFixed(2)}` : ''}\nGrand Total: ₹${grandTotal.toFixed(2)}.\nPay via UPI: upi://pay?pa=restosphere@okhdfcbank&pn=RestoSphere&am=${grandTotal.toFixed(2)}&cu=INR`
 
-    const message = encodeURIComponent(
-      `Hello ${recipient}! Your bill for RestoSphere Table ${tableNumber} is ready:\nInvoice #${bill?.billNumber || 'BILL'}\nSubtotal: ₹${subtotal.toFixed(2)}\nTax: ₹${taxAmount.toFixed(2)}${currentDiscount > 0 ? `\nDiscount: -₹${currentDiscount.toFixed(2)}` : ''}${currentCover > 0 ? `\nCover Charges: ₹${currentCover.toFixed(2)}` : ''}${currentPenalty > 0 ? `\nPenalty Fee: ₹${currentPenalty.toFixed(2)}` : ''}${currentTip > 0 ? `\nServer Tip: ₹${currentTip.toFixed(2)}` : ''}\nGrand Total: ₹${grandTotal.toFixed(2)}.\nPay via UPI: upi://pay?pa=restosphere@okhdfcbank&pn=RestoSphere&am=${grandTotal.toFixed(2)}&cu=INR`
-    )
-    window.open(`https://wa.me/${targetPhone}?text=${message}`, '_blank')
-    setActionNotice(`Invoice sent to ${recipient} via WhatsApp!`)
-    setTimeout(() => setActionNotice(null), 4000)
-  }
-
-  // Ask for Pending Bill (Payment Reminder trigger)
-  const handleAskForPendingBill = () => {
-    const cleanPhone = (isPartyThrowerEnabled && partyThrowerPhone ? partyThrowerPhone : customerPhone).replace(/[^0-9]/g, '')
-    const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone || '919876543210'
-
-    const message = encodeURIComponent(
-      `Friendly Payment Reminder from RestoSphere:\nYour pending bill for Table ${tableNumber} (Invoice #${bill?.billNumber || ''}) is ₹${grandTotal.toFixed(2)}. Please complete the payment at the table counter or via UPI: upi://pay?pa=restosphere@okhdfcbank&pn=RestoSphere&am=${grandTotal.toFixed(2)}&cu=INR. Thank you!`
-    )
-    window.open(`https://wa.me/${targetPhone}?text=${message}`, '_blank')
-    setActionNotice('Payment reminder dispatched!')
-    setTimeout(() => setActionNotice(null), 4000)
+    dispatchWhatsAppMessage({
+      message,
+      recipient,
+      noticeLabel: `Bill sent on WhatsApp to ${recipient}`,
+      event: 'bill_invoice',
+    })
   }
 
   // Verify Highway Customer Payment
@@ -461,6 +546,16 @@ export function BillSettlementModal({
                 <Printer className="size-4" />
                 Print Receipt
               </Button>
+              {isValidWhatsAppPhone(isPartyThrowerEnabled && partyThrowerPhone ? partyThrowerPhone : customerPhone) && (
+                <Button
+                  variant="outline"
+                  className="flex-1 h-11 rounded-xl font-bold text-xs gap-1.5 text-emerald-600 border-emerald-500/30 hover:bg-emerald-500/10"
+                  onClick={handleSendBill}
+                >
+                  <Share2 className="size-4" />
+                  Send on WhatsApp
+                </Button>
+              )}
               <Button
                 className="flex-1 h-11 rounded-xl font-bold text-xs"
                 onClick={() => onOpenChange(false)}
@@ -496,6 +591,72 @@ export function BillSettlementModal({
               </TabsList>
 
               <TabsContent value="standard" className="space-y-4 mt-3">
+                {/* Customer Contact (Synced from Customer Digital Bill / Order / Profile) */}
+                <div className="p-3 rounded-xl border border-border bg-muted/20 space-y-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="font-bold text-foreground flex items-center gap-1.5">
+                      <Phone className="size-3.5 text-emerald-500" />
+                      Customer WhatsApp Details
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      {isValidWhatsAppPhone(customerPhone) ? (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold"
+                        >
+                          {formatPhoneForDisplay(customerPhone)}
+                        </Badge>
+                      ) : (
+                        <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                          No number yet
+                        </span>
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={loadBill}
+                        className="size-6 rounded-md text-muted-foreground hover:text-foreground"
+                        title="Refresh latest customer number"
+                      >
+                        <RefreshCw className="size-3" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      placeholder="Customer Name"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      className="h-8 text-xs bg-card flex-1"
+                    />
+                    <Input
+                      ref={phoneInputRef}
+                      type="tel"
+                      inputMode="tel"
+                      placeholder="WhatsApp Phone (+91 98XXXXXXXX)"
+                      value={customerPhone}
+                      onChange={(e) => {
+                        setCustomerPhone(e.target.value)
+                        if (error) setError(null)
+                      }}
+                      className="h-8 text-xs bg-card flex-1"
+                    />
+                    {customerPhone.trim() !== savedServerPhoneRef.current && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={savingContact}
+                        onClick={() => handleSaveCustomerContact(false)}
+                        className="h-8 px-2.5 text-xs font-bold shrink-0"
+                      >
+                        {savingContact ? <Loader2 className="size-3 animate-spin" /> : 'Save'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
                 {/* Party Thrower Designation */}
                 <div className="p-3 rounded-xl border border-primary/20 bg-primary/5 space-y-2 text-xs">
                   <div className="flex items-center justify-between">
@@ -695,24 +856,6 @@ export function BillSettlementModal({
                   >
                     <Share2 className="size-3.5" />
                     Send Bill via WhatsApp
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAskForPendingBill}
-                    className="h-9 font-semibold text-amber-600 border-amber-500/30 hover:bg-amber-500/10 gap-1.5"
-                  >
-                    <BellRing className="size-3.5" />
-                    Ask for Pending Bill
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAskForReview}
-                    className="h-9 font-semibold text-primary border-primary/30 hover:bg-primary/10 gap-1.5"
-                  >
-                    <Star className="size-3.5" />
-                    Ask for Review
                   </Button>
                   <Button
                     variant="outline"

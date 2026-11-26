@@ -33,6 +33,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { formatPhoneForDisplay, isValidWhatsAppPhone } from '@/lib/phone'
 import { CustomerSplitBillModal } from './customer-split-bill-modal'
 
 interface CustomerBillModalProps {
@@ -41,6 +42,8 @@ interface CustomerBillModalProps {
   tableNumber: string | number
   tableOrders: any[]
   selectedOrderId?: string | null
+  defaultCustomerPhone?: string
+  defaultCustomerName?: string
   onSuccess?: () => void
 }
 
@@ -50,6 +53,8 @@ export function CustomerBillModal({
   tableNumber,
   tableOrders,
   selectedOrderId,
+  defaultCustomerPhone = '',
+  defaultCustomerName = '',
   onSuccess,
 }: CustomerBillModalProps) {
   const [loading, setLoading] = useState(false)
@@ -73,6 +78,11 @@ export function CustomerBillModal({
   // Guest details
   const [customerName, setCustomerName] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
+  const [phoneSaveStatus, setPhoneSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const customerNameRef = React.useRef('')
+  const customerPhoneRef = React.useRef('')
+  const lastSavedPhoneRef = React.useRef('')
+  const phoneSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Split bill modal state
   const [showSplitModal, setShowSplitModal] = useState(false)
@@ -146,6 +156,36 @@ export function CustomerBillModal({
 
   const pendingTipRef = React.useRef<number | null>(null)
 
+  const syncCustomerPhoneToBill = useCallback(
+    async (phoneVal: string, targetBillId?: string) => {
+      const clean = phoneVal.trim()
+      const activeBillId = targetBillId || bill?.id
+      if (!activeBillId || clean === lastSavedPhoneRef.current) return
+
+      try {
+        setPhoneSaveStatus('saving')
+        const res = await fetch(`/api/bills/${activeBillId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customerPhone: clean,
+            ...(customerNameRef.current.trim() ? { customerName: customerNameRef.current.trim() } : {}),
+          }),
+        })
+        const json = await res.json().catch(() => null)
+        if (!res.ok || !json?.success) {
+          throw new Error(json?.message || 'Could not save WhatsApp number')
+        }
+        lastSavedPhoneRef.current = clean
+        setBill((prev: any) => (prev ? { ...prev, customerPhone: clean || null } : prev))
+        setPhoneSaveStatus(clean ? 'saved' : 'idle')
+      } catch {
+        setPhoneSaveStatus('error')
+      }
+    },
+    [bill?.id]
+  )
+
   // Fetch or generate active bill for this table session
   const loadBill = useCallback(
     async (asCustomerRequest = false) => {
@@ -155,6 +195,8 @@ export function CustomerBillModal({
           setLoading(true)
         }
         setError(null)
+        const currentName = customerNameRef.current.trim()
+        const currentPhone = customerPhoneRef.current.trim()
         const res = await fetch('/api/bills/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -162,8 +204,8 @@ export function CustomerBillModal({
             orderId: selectedOrderId || undefined,
             tableNumber: String(tableNumber || ''),
             source: asCustomerRequest ? 'customer' : 'waiter',
-            customerName: customerName.trim() || undefined,
-            customerPhone: customerPhone.trim() || undefined,
+            customerName: currentName || undefined,
+            customerPhone: currentPhone || undefined,
           }),
         })
 
@@ -174,6 +216,20 @@ export function CustomerBillModal({
 
         setBill(json.data)
         setPartyThrower(json.data.partyThrower || json.data.metadata?.partyThrower || null)
+
+        const serverPhone = String(json.data.customerPhone || '').trim()
+        if (serverPhone) {
+          lastSavedPhoneRef.current = serverPhone
+          if (!customerPhoneRef.current.trim()) {
+            customerPhoneRef.current = serverPhone
+            setCustomerPhone(serverPhone)
+            setPhoneSaveStatus('saved')
+          } else if (customerPhoneRef.current.trim() !== serverPhone) {
+            await syncCustomerPhoneToBill(customerPhoneRef.current.trim(), json.data.id)
+          }
+        } else if (customerPhoneRef.current.trim()) {
+          await syncCustomerPhoneToBill(customerPhoneRef.current.trim(), json.data.id)
+        }
 
         // If user already tapped a tip optimistically, sync with server immediately
         if (pendingTipRef.current !== null && pendingTipRef.current !== json.data.tipAmount) {
@@ -194,7 +250,7 @@ export function CustomerBillModal({
         setLoading(false)
       }
     },
-    [tableNumber, selectedOrderId, customerName, customerPhone, tableOrders?.length]
+    [tableNumber, selectedOrderId, tableOrders?.length, syncCustomerPhoneToBill]
   )
 
   useEffect(() => {
@@ -202,9 +258,53 @@ export function CustomerBillModal({
       setPaySuccess(false)
       setPhysicalRequested(false)
       setShowUpiQr(false)
+      setPhoneSaveStatus('idle')
+
+      const storedPhone =
+        defaultCustomerPhone.trim() ||
+        (typeof window !== 'undefined' ? localStorage.getItem('rms_customer_phone') || '' : '').trim()
+      const storedName =
+        defaultCustomerName.trim() ||
+        (typeof window !== 'undefined' ? localStorage.getItem('rms_customer_name') || '' : '').trim()
+
+      customerPhoneRef.current = storedPhone
+      customerNameRef.current = storedName
+      lastSavedPhoneRef.current = ''
+      setCustomerPhone(storedPhone)
+      setCustomerName(storedName)
+
       loadBill(false)
     }
-  }, [open, loadBill])
+
+    return () => {
+      if (phoneSaveTimerRef.current) {
+        clearTimeout(phoneSaveTimerRef.current)
+      }
+    }
+  }, [open, defaultCustomerPhone, defaultCustomerName, loadBill])
+
+  const handleCustomerPhoneChange = (val: string) => {
+    setCustomerPhone(val)
+    customerPhoneRef.current = val
+    setPhoneSaveStatus('idle')
+
+    try {
+      if (val.trim()) {
+        localStorage.setItem('rms_customer_phone', val.trim())
+      } else {
+        localStorage.removeItem('rms_customer_phone')
+      }
+    } catch {}
+
+    if (phoneSaveTimerRef.current) {
+      clearTimeout(phoneSaveTimerRef.current)
+    }
+    if (bill?.id) {
+      phoneSaveTimerRef.current = setTimeout(() => {
+        syncCustomerPhoneToBill(val, bill.id)
+      }, 450)
+    }
+  }
 
   // Low-latency server sync for tip
   const applyTipToServer = async (amount: number, billId: string) => {
@@ -844,17 +944,64 @@ export function CustomerBillModal({
 
             {/* Optional Customer Phone for Digital WhatsApp Invoice */}
             <div className="p-3 rounded-2xl bg-muted/30 border border-border space-y-2">
-              <label className="text-[11px] font-bold text-muted-foreground flex items-center gap-1.5">
-                <Send className="size-3 text-primary" />
-                WhatsApp E-Invoice (Optional)
-              </label>
-              <Input
-                type="tel"
-                placeholder="+91 Phone number for receipt"
-                value={customerPhone}
-                onChange={(e) => setCustomerPhone(e.target.value)}
-                className="h-9 text-xs rounded-xl bg-card"
-              />
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[11px] font-bold text-muted-foreground flex items-center gap-1.5">
+                  <Send className="size-3 text-primary" />
+                  WhatsApp E-Invoice (Optional)
+                </label>
+                {phoneSaveStatus === 'saving' && (
+                  <span className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1">
+                    <Loader2 className="size-2.5 animate-spin" />
+                    Saving...
+                  </span>
+                )}
+                {phoneSaveStatus === 'saved' && isValidWhatsAppPhone(customerPhone) && (
+                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                    ✓ Saved ({formatPhoneForDisplay(customerPhone)})
+                  </span>
+                )}
+                {phoneSaveStatus === 'error' && (
+                  <span className="text-[10px] font-semibold text-destructive">
+                    Save failed
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="+91 98XXXXXXXX for WhatsApp bill"
+                  value={customerPhone}
+                  onChange={(e) => handleCustomerPhoneChange(e.target.value)}
+                  onBlur={() => {
+                    if (bill?.id && customerPhone.trim() !== lastSavedPhoneRef.current) {
+                      syncCustomerPhoneToBill(customerPhone, bill.id)
+                    }
+                  }}
+                  className="h-9 text-xs rounded-xl bg-card flex-1"
+                />
+                {bill?.id && customerPhone.trim() !== lastSavedPhoneRef.current && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={phoneSaveStatus === 'saving'}
+                    onClick={() => syncCustomerPhoneToBill(customerPhone, bill.id)}
+                    className="h-9 px-3 rounded-xl text-xs font-bold shrink-0 cursor-pointer"
+                  >
+                    Save
+                  </Button>
+                )}
+              </div>
+              {customerPhone.trim() && !isValidWhatsAppPhone(customerPhone) ? (
+                <p className="text-[10px] text-amber-600 dark:text-amber-400">
+                  Enter a valid 10-digit mobile number (or include country code like +91).
+                </p>
+              ) : isValidWhatsAppPhone(customerPhone) ? (
+                <p className="text-[10px] text-muted-foreground">
+                  Waiter &amp; Admin can send your bill directly to this WhatsApp number.
+                </p>
+              ) : null}
             </div>
 
             {/* Pricing Summary */}

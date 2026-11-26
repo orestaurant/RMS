@@ -10,6 +10,8 @@ import { addNotification } from '@/lib/notifications-store'
 import { logCommunication } from '@/lib/communication-ledger'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
+import { invalidatePOSTablesCache } from '@/lib/pos-cache'
+import { normalizePhoneForStorage } from '@/lib/phone'
 
 export async function POST(
   request: NextRequest,
@@ -121,7 +123,7 @@ export async function POST(
           balanceDue: 0,
           paidAt: now,
           settledAt: now,
-          customerPhone: customerPhone || existing.customerPhone,
+          customerPhone: normalizePhoneForStorage(customerPhone) || existing.customerPhone,
           customerName: customerName || existing.customerName,
           metadata: {
             ...prevMeta,
@@ -181,18 +183,21 @@ export async function POST(
           ]
         : []),
 
-      // 4. Reset table status to 'available'
+      // 4. Reset table status to 'available' and clear occupied metadata
       ...(existing.tableId
         ? [
             prisma.restaurantTable.update({
               where: { id: existing.tableId },
               data: {
                 status: 'available',
+                metadata: {},
               },
             }),
           ]
         : []),
     ])
+
+    invalidatePOSTablesCache()
 
     // Sync customer totalSpent / totalOrders stats now that the bill is settled
     try {
@@ -248,7 +253,7 @@ export async function POST(
 
     try {
       // 1. Digital Bill / Payment confirmation to Customer
-      const finalCustomerPhone = customerPhone || existing.customerPhone
+      const finalCustomerPhone = normalizePhoneForStorage(customerPhone) || existing.customerPhone
       if (finalCustomerPhone) {
         logCommunication({
           recipientName: customerName || existing.customerName || 'Valued Guest',

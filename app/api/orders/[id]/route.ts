@@ -6,6 +6,7 @@ import { syncCustomerOrderStats } from '@/lib/customer-stats'
 import {
   notifyOrderPrepared,
   markOrderPreparedNotificationsRead,
+  removeOrderNotifications,
 } from '@/lib/notifications-store'
 
 const isUuid = (val: string) =>
@@ -265,32 +266,55 @@ export async function DELETE(
     removeFallbackOrder(id)
     updateFallbackOrder(id, { status: 'cancelled' })
 
-    // 2. Try soft-deleting in Prisma DB if available
+    // 2. Soft-delete in Prisma DB and remove any associated order notifications in parallel
+    let deletedOrderId = id
+    let deletedOrderNumber = id
+    let deletedOrgId: string | null = null
+
     try {
       const whereClause = isUuid(id) ? { OR: [{ id }, { orderNumber: id }] } : { orderNumber: id }
       const existing = await prisma.order.findFirst({
         where: whereClause,
-        include: {
-          table: { select: { tableNumber: true } },
-          items: { select: { itemName: true, quantity: true } },
+        select: {
+          id: true,
+          orderNumber: true,
+          organizationId: true,
+          customerId: true,
         },
       })
 
       if (existing) {
-        await prisma.order.update({
-          where: { id: existing.id },
-          data: {
-            deletedAt: new Date(),
-            status: 'cancelled',
-          },
-        })
+        deletedOrderId = existing.id
+        deletedOrderNumber = existing.orderNumber
+        deletedOrgId = existing.organizationId
 
-        if (existing.customerId) {
-          await syncCustomerOrderStats(existing.customerId)
-        }
+        await Promise.all([
+          prisma.order.update({
+            where: { id: existing.id },
+            data: {
+              deletedAt: new Date(),
+              status: 'cancelled',
+            },
+          }),
+          removeOrderNotifications({
+            orderId: existing.id,
+            orderNumber: existing.orderNumber,
+            organizationId: existing.organizationId,
+          }),
+          existing.customerId
+            ? syncCustomerOrderStats(existing.customerId)
+            : Promise.resolve(),
+        ])
+      } else {
+        await removeOrderNotifications({ orderId: id, orderNumber: id })
       }
     } catch (dbErr) {
       console.warn('Prisma order delete notice:', dbErr)
+      await removeOrderNotifications({
+        orderId: deletedOrderId,
+        orderNumber: deletedOrderNumber,
+        organizationId: deletedOrgId,
+      })
     }
 
     invalidateLiveOrdersCache()

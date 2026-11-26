@@ -10,6 +10,81 @@ import prisma from '@/lib/prisma'
 import { addNotification } from '@/lib/notifications-store'
 import { logCommunication } from '@/lib/communication-ledger'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
+import { normalizePhoneForStorage } from '@/lib/phone'
+
+const GENERIC_GUEST_NAMES = new Set(['dine-in guest', 'table guest', 'walk-in guest', 'guest', 'customer', ''])
+
+function pickCustomerName(candidates: Array<string | null | undefined>, fallback = 'Dine-In Guest'): string {
+  for (const raw of candidates) {
+    const clean = typeof raw === 'string' ? raw.trim() : ''
+    if (clean && !GENERIC_GUEST_NAMES.has(clean.toLowerCase())) {
+      return clean.slice(0, 100)
+    }
+  }
+  for (const raw of candidates) {
+    const clean = typeof raw === 'string' ? raw.trim() : ''
+    if (clean) return clean.slice(0, 100)
+  }
+  return fallback
+}
+
+function resolveBillCustomerContact(params: {
+  reqPhone?: string | null
+  reqName?: string | null
+  existingBill?: any
+  orders?: any[]
+  fallbackName?: string
+}): { customerId: string | null; customerName: string; customerPhone: string | null } {
+  const { reqPhone, reqName, existingBill, orders = [], fallbackName = 'Dine-In Guest' } = params
+
+  const explicitPhone = normalizePhoneForStorage(reqPhone)
+  const orderPhones: Array<string | null | undefined> = []
+  const orderNames: Array<string | null | undefined> = []
+  let resolvedCustomerId: string | null = existingBill?.customerId || null
+
+  const inspectOrder = (ord: any) => {
+    if (!ord) return
+    if (!resolvedCustomerId && ord.customerId) resolvedCustomerId = ord.customerId
+    const meta = (ord.metadata as Record<string, any>) || {}
+    orderPhones.push(ord.customer?.phone, ord.customer?.mobile, meta.customerPhone)
+    const custFullName = ord.customer?.name || `${ord.customer?.firstName || ''} ${ord.customer?.lastName || ''}`.trim()
+    orderNames.push(custFullName, meta.customerName)
+  }
+
+  if (existingBill?.order) inspectOrder(existingBill.order)
+  if (Array.isArray(existingBill?.orders)) {
+    for (const o of existingBill.orders) inspectOrder(o)
+  }
+  for (const o of orders) inspectOrder(o)
+
+  const phoneCandidates = [
+    explicitPhone,
+    existingBill?.customerPhone,
+    existingBill?.customer?.phone,
+    existingBill?.customer?.mobile,
+    ...orderPhones,
+  ]
+
+  let resolvedPhone: string | null = null
+  for (const candidate of phoneCandidates) {
+    const normalized = normalizePhoneForStorage(candidate)
+    if (normalized) {
+      resolvedPhone = normalized
+      break
+    }
+  }
+
+  const existingCustName =
+    existingBill?.customer?.name ||
+    `${existingBill?.customer?.firstName || ''} ${existingBill?.customer?.lastName || ''}`.trim()
+
+  const resolvedName = pickCustomerName(
+    [reqName, existingBill?.customerName, existingCustName, ...orderNames],
+    fallbackName
+  )
+
+  return { customerId: resolvedCustomerId, customerName: resolvedName, customerPhone: resolvedPhone }
+}
 
 // High-speed in-memory cache for table metadata and restaurant tax rate (< 0.01ms lookup)
 interface CachedTableMeta {
@@ -56,6 +131,26 @@ export async function POST(request: NextRequest) {
           include: {
             items: true,
             table: true,
+            customer: {
+              select: { id: true, name: true, firstName: true, lastName: true, phone: true, mobile: true },
+            },
+            order: {
+              select: {
+                customerId: true,
+                metadata: true,
+                customer: { select: { id: true, name: true, firstName: true, lastName: true, phone: true, mobile: true } },
+              },
+            },
+            orders: {
+              where: { deletedAt: null },
+              orderBy: { createdAt: 'desc' },
+              take: 5,
+              select: {
+                customerId: true,
+                metadata: true,
+                customer: { select: { id: true, name: true, firstName: true, lastName: true, phone: true, mobile: true } },
+              },
+            },
             waiter: {
               select: { id: true, name: true, firstName: true, lastName: true },
             },
@@ -63,11 +158,37 @@ export async function POST(request: NextRequest) {
           },
         })
         if (directBill && directBill.items && directBill.items.length > 0) {
+          const contact = resolveBillCustomerContact({
+            reqPhone: customerPhone,
+            reqName: customerName,
+            existingBill: directBill,
+          })
+          const needsContactUpdate =
+            (contact.customerPhone && contact.customerPhone !== directBill.customerPhone) ||
+            (contact.customerName && contact.customerName !== directBill.customerName) ||
+            (contact.customerId && !directBill.customerId)
+
+          if (needsContactUpdate) {
+            await prisma.bill
+              .update({
+                where: { id: directBill.id },
+                data: {
+                  customerPhone: contact.customerPhone,
+                  customerName: contact.customerName,
+                  ...(contact.customerId && !directBill.customerId ? { customerId: contact.customerId } : {}),
+                },
+              })
+              .catch(() => {})
+          }
+
           return NextResponse.json({
             success: true,
             message: 'Active bill retrieved successfully.',
             data: {
               ...directBill,
+              customerPhone: contact.customerPhone,
+              customerName: contact.customerName,
+              customerId: contact.customerId || directBill.customerId,
               subtotal: Number(directBill.subtotal),
               taxAmount: Number(directBill.taxAmount),
               discountAmount: Number(directBill.discountAmount),
@@ -159,11 +280,38 @@ export async function POST(request: NextRequest) {
           (targetOrder.tableBill && targetOrder.tableBill.items && targetOrder.tableBill.items.length > 0 ? targetOrder.tableBill : null)
 
         if (activeOrderBill) {
+          const contact = resolveBillCustomerContact({
+            reqPhone: customerPhone,
+            reqName: customerName,
+            existingBill: activeOrderBill,
+            orders: [targetOrder],
+          })
+          const needsContactUpdate =
+            (contact.customerPhone && contact.customerPhone !== activeOrderBill.customerPhone) ||
+            (contact.customerName && contact.customerName !== activeOrderBill.customerName) ||
+            (contact.customerId && !activeOrderBill.customerId)
+
+          if (needsContactUpdate) {
+            await prisma.bill
+              .update({
+                where: { id: activeOrderBill.id },
+                data: {
+                  customerPhone: contact.customerPhone,
+                  customerName: contact.customerName,
+                  ...(contact.customerId && !activeOrderBill.customerId ? { customerId: contact.customerId } : {}),
+                },
+              })
+              .catch(() => {})
+          }
+
           return NextResponse.json({
             success: true,
             message: 'Active bill retrieved successfully.',
             data: {
               ...activeOrderBill,
+              customerPhone: contact.customerPhone,
+              customerName: contact.customerName,
+              customerId: contact.customerId || activeOrderBill.customerId,
               subtotal: Number(activeOrderBill.subtotal),
               taxAmount: Number(activeOrderBill.taxAmount),
               discountAmount: Number(activeOrderBill.discountAmount),
@@ -229,6 +377,17 @@ export async function POST(request: NextRequest) {
         })
 
         if (!createdBill) {
+          const contact = resolveBillCustomerContact({
+            reqPhone: customerPhone,
+            reqName: customerName,
+            orders: [targetOrder],
+            fallbackName: targetOrder.table?.tableNumber
+              ? `Table ${targetOrder.table.tableNumber}`
+              : targetOrder.vehicleNumber
+              ? `Guest (${targetOrder.vehicleNumber})`
+              : 'Dine-In Guest',
+          })
+
           createdBill = await prisma.bill.create({
             data: {
               billNumber,
@@ -237,12 +396,10 @@ export async function POST(request: NextRequest) {
               branchId: resolvedBranchId,
               organizationId: resolvedOrgId,
               tableId: resolvedTableId,
+              customerId: contact.customerId,
               waiterId: isUuid(assignedWaiterId) ? assignedWaiterId : null,
-              customerName:
-                customerName ||
-                targetOrder.customer?.name ||
-                (targetOrder.table?.tableNumber ? `Table ${targetOrder.table.tableNumber}` : (targetOrder.vehicleNumber ? `Guest (${targetOrder.vehicleNumber})` : 'Dine-In Guest')),
-              customerPhone: customerPhone || targetOrder.customer?.phone || null,
+              customerName: contact.customerName,
+              customerPhone: contact.customerPhone,
               subtotal: calculatedSubtotal,
               discountAmount,
               taxAmount: totalTax,
@@ -422,9 +579,21 @@ export async function POST(request: NextRequest) {
         },
         select: {
           id: true,
+          customerId: true,
+          metadata: true,
           discountAmount: true,
           servedById: true,
           createdById: true,
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              firstName: true,
+              lastName: true,
+              phone: true,
+              mobile: true,
+            },
+          },
           items: {
             select: {
               itemName: true,
@@ -446,6 +615,33 @@ export async function POST(request: NextRequest) {
         include: {
           tip: true,
           items: true,
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              firstName: true,
+              lastName: true,
+              phone: true,
+              mobile: true,
+            },
+          },
+          order: {
+            select: {
+              customerId: true,
+              metadata: true,
+              customer: { select: { id: true, name: true, firstName: true, lastName: true, phone: true, mobile: true } },
+            },
+          },
+          orders: {
+            where: { deletedAt: null },
+            orderBy: { createdAt: 'desc' },
+            take: 5,
+            select: {
+              customerId: true,
+              metadata: true,
+              customer: { select: { id: true, name: true, firstName: true, lastName: true, phone: true, mobile: true } },
+            },
+          },
           waiter: {
             select: {
               id: true,
@@ -463,6 +659,9 @@ export async function POST(request: NextRequest) {
     if (orders.length === 0 && targetOrder && targetOrder.items && targetOrder.items.length > 0) {
       orders.push({
         id: targetOrder.id,
+        customerId: targetOrder.customerId,
+        metadata: targetOrder.metadata,
+        customer: targetOrder.customer,
         discountAmount: targetOrder.discountAmount,
         servedById: targetOrder.servedById,
         createdById: targetOrder.createdById,
@@ -476,19 +675,48 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Fast Path: If existing bill is already active and no new unbilled orders exist, return IMMEDIATELY!
+    const resolvedContact = resolveBillCustomerContact({
+      reqPhone: customerPhone,
+      reqName: customerName,
+      existingBill,
+      orders,
+    })
+
+    // Fast Path: If existing bill is already active and no new unbilled orders exist, sync contact/status & return!
     if (existingBill && orders.length === 0) {
+      const fastUpdateData: Record<string, any> = {}
       if (isCustomerRequest && existingBill.status !== 'REQUESTED') {
-        prisma.bill.update({
-          where: { id: existingBill.id },
-          data: { status: 'REQUESTED', billStatus: 'requested' },
-        }).catch(() => {})
+        fastUpdateData.status = 'REQUESTED'
+        fastUpdateData.billStatus = 'requested'
       }
+      if (resolvedContact.customerPhone && resolvedContact.customerPhone !== existingBill.customerPhone) {
+        fastUpdateData.customerPhone = resolvedContact.customerPhone
+      }
+      if (resolvedContact.customerName && resolvedContact.customerName !== existingBill.customerName) {
+        fastUpdateData.customerName = resolvedContact.customerName
+      }
+      if (resolvedContact.customerId && !existingBill.customerId) {
+        fastUpdateData.customerId = resolvedContact.customerId
+      }
+
+      if (Object.keys(fastUpdateData).length > 0) {
+        await prisma.bill
+          .update({
+            where: { id: existingBill.id },
+            data: fastUpdateData,
+          })
+          .catch(() => {})
+      }
+
       return NextResponse.json({
         success: true,
         message: 'Active bill retrieved successfully.',
         data: {
           ...existingBill,
+          ...fastUpdateData,
+          customerPhone: resolvedContact.customerPhone,
+          customerName: resolvedContact.customerName,
+          customerId: resolvedContact.customerId || existingBill.customerId,
           subtotal: Number(existingBill.subtotal),
           taxAmount: Number(existingBill.taxAmount),
           discountAmount: Number(existingBill.discountAmount),
@@ -620,8 +848,9 @@ export async function POST(request: NextRequest) {
             status: newStatus,
             billStatus: newBillStatus,
             waiterId: (assignedWaiterId && isUuid(assignedWaiterId)) ? assignedWaiterId : existingBill.waiterId,
-            customerName: customerName || existingBill.customerName,
-            customerPhone: customerPhone || existingBill.customerPhone,
+            customerId: resolvedContact.customerId || existingBill.customerId,
+            customerName: resolvedContact.customerName,
+            customerPhone: resolvedContact.customerPhone,
           },
           include: {
             items: true,
@@ -667,9 +896,10 @@ export async function POST(request: NextRequest) {
           branchId: resolvedBranchId,
           organizationId: resolvedOrgId,
           tableId: table.id,
+          customerId: resolvedContact.customerId,
           waiterId: isUuid(assignedWaiterId) ? assignedWaiterId : null,
-          customerName: customerName || 'Dine-In Guest',
-          customerPhone: customerPhone || null,
+          customerName: resolvedContact.customerName,
+          customerPhone: resolvedContact.customerPhone,
           subtotal: calculatedSubtotal,
           discountAmount,
           taxAmount: totalTax,

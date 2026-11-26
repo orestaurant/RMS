@@ -230,14 +230,46 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
         fetchLiveNotifications()
       }
     }
+    const handleOrderDeleted = (e: Event) => {
+      const detail = (e as CustomEvent<{ orderId?: string; fullId?: string }>).detail
+      const keys = [detail?.orderId, detail?.fullId]
+        .map((v) => (v ? String(v).trim().toLowerCase() : ''))
+        .filter(Boolean)
+
+      if (keys.length > 0) {
+        const keySet = new Set(keys)
+        setLiveNotifications((prev) => {
+          const filtered = prev.filter((n) => {
+            const ordId = n.metadata?.orderId ? String(n.metadata.orderId).toLowerCase() : ''
+            const ordNum = n.metadata?.orderNumber ? String(n.metadata.orderNumber).toLowerCase() : ''
+            const titleLower = (n.title || '').toLowerCase()
+            if (ordId && keySet.has(ordId)) return false
+            if (ordNum && keySet.has(ordNum)) return false
+            for (const k of keySet) {
+              if (titleLower.includes(`#${k}`)) return false
+            }
+            return true
+          })
+          setUnreadCount(filtered.filter((n) => !n.read).length)
+          return filtered
+        })
+      }
+      fetchLiveNotifications()
+    }
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', handleVisibility)
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('rms:order-deleted', handleOrderDeleted)
     }
 
     return () => {
       clearInterval(interval)
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', handleVisibility)
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('rms:order-deleted', handleOrderDeleted)
       }
     }
   }, [authLoading, fetchLiveNotifications])
@@ -315,7 +347,15 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
         )}
 
         {/* Live Notifications Bell */}
-        <DropdownMenu open={notifOpen} onOpenChange={setNotifOpen}>
+        <DropdownMenu
+          open={notifOpen}
+          onOpenChange={(open) => {
+            setNotifOpen(open)
+            if (open) {
+              fetchLiveNotifications()
+            }
+          }}
+        >
           <DropdownMenuTrigger
             render={
               <Button

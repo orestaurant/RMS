@@ -7,6 +7,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { removeFallbackOrder, updateFallbackOrder, invalidateLiveOrdersCache, invalidateKDSCache } from '@/lib/kds-utils'
 import { removeMemoryBill } from '@/app/api/bills/route'
+import { removeOrderNotifications } from '@/lib/notifications-store'
+import { normalizePhoneForStorage } from '@/lib/phone'
 
 export async function GET(
   request: NextRequest,
@@ -20,13 +22,25 @@ export async function GET(
       include: {
         items: true,
         table: true,
+        customer: {
+          select: { id: true, name: true, firstName: true, lastName: true, phone: true, mobile: true },
+        },
+        order: {
+          select: {
+            metadata: true,
+            customer: { select: { name: true, firstName: true, phone: true, mobile: true } },
+          },
+        },
         waiter: {
           select: { id: true, name: true, firstName: true, lastName: true, phone: true },
         },
         tip: true,
         orders: {
+          where: { deletedAt: null },
+          orderBy: { createdAt: 'desc' },
           include: {
             items: true,
+            customer: { select: { name: true, firstName: true, phone: true, mobile: true } },
           },
         },
       },
@@ -45,6 +59,24 @@ export async function GET(
     const nonPaymentPenalty = Number(meta.nonPaymentPenalty || 0)
     const grandTotal = Number(bill.grandTotal || subtotal + taxAmount - discountAmount + tipAmount + coverCharges + nonPaymentPenalty)
 
+    const fallbackOrder = bill.orders?.[0] || bill.order
+    const resolvedCustomerPhone =
+      bill.customerPhone ||
+      bill.customer?.phone ||
+      bill.customer?.mobile ||
+      fallbackOrder?.customer?.phone ||
+      fallbackOrder?.customer?.mobile ||
+      ((fallbackOrder?.metadata as Record<string, any> | null)?.customerPhone as string | undefined) ||
+      ''
+    const resolvedCustomerName =
+      bill.customerName ||
+      bill.customer?.name ||
+      bill.customer?.firstName ||
+      fallbackOrder?.customer?.name ||
+      fallbackOrder?.customer?.firstName ||
+      ((fallbackOrder?.metadata as Record<string, any> | null)?.customerName as string | undefined) ||
+      'Guest'
+
     return NextResponse.json({
       success: true,
       data: {
@@ -56,8 +88,8 @@ export async function GET(
         paymentMethod: bill.paymentMethod || 'CASH',
         tableId: bill.tableId,
         tableNumber: bill.table?.tableNumber || 'Table',
-        customerName: bill.customerName || 'Guest',
-        customerPhone: bill.customerPhone || '',
+        customerName: resolvedCustomerName,
+        customerPhone: resolvedCustomerPhone,
         subtotal,
         taxAmount,
         discountAmount,
@@ -130,8 +162,53 @@ export async function PATCH(
       return NextResponse.json({ success: false, message: 'Bill not found' }, { status: 404 })
     }
 
-    if (existing.status === 'PAID') {
+    const isContactOnlyUpdate =
+      discountAmount === undefined &&
+      reqTip === undefined &&
+      coverCharges === undefined &&
+      nonPaymentPenalty === undefined &&
+      partyThrower === undefined &&
+      splits === undefined &&
+      highwayPaymentVerified === undefined &&
+      (customerPhone !== undefined || customerName !== undefined)
+
+    if (existing.status === 'PAID' && !isContactOnlyUpdate) {
       return NextResponse.json({ success: false, message: 'Cannot edit a paid bill' }, { status: 400 })
+    }
+
+    const cleanPhone = customerPhone !== undefined ? normalizePhoneForStorage(customerPhone) : undefined
+    const cleanName =
+      customerName !== undefined
+        ? (typeof customerName === 'string' && customerName.trim() ? customerName.trim().slice(0, 100) : null)
+        : undefined
+
+    if (isContactOnlyUpdate) {
+      const updated = await prisma.bill.update({
+        where: { id: billId },
+        data: {
+          ...(cleanName !== undefined ? { customerName: cleanName } : {}),
+          ...(cleanPhone !== undefined ? { customerPhone: cleanPhone } : {}),
+        },
+        include: {
+          items: true,
+          table: true,
+          waiter: true,
+          tip: true,
+        },
+      })
+
+      return NextResponse.json({
+        success: true,
+        message: 'Customer contact updated successfully',
+        data: {
+          ...updated,
+          subtotal: Number(updated.subtotal),
+          taxAmount: Number(updated.taxAmount),
+          discountAmount: Number(updated.discountAmount),
+          tipAmount: Number(updated.tipAmount),
+          grandTotal: Number(updated.grandTotal),
+        },
+      })
     }
 
     const prevMeta = (existing.metadata as any) || {}
@@ -158,8 +235,8 @@ export async function PATCH(
         taxAmount,
         grandTotal,
         totalAmount: grandTotal,
-        ...(customerName !== undefined ? { customerName } : {}),
-        ...(customerPhone !== undefined ? { customerPhone } : {}),
+        ...(cleanName !== undefined ? { customerName: cleanName } : {}),
+        ...(cleanPhone !== undefined ? { customerPhone: cleanPhone } : {}),
         metadata: {
           ...prevMeta,
           coverCharges: finalCover,
@@ -251,17 +328,23 @@ export async function DELETE(
         })
         billDeleted = true
 
-        // Soft-delete linked order if present
+        // Soft-delete linked order & its notifications if present
         if (existingBill.orderId) {
           try {
-            await prisma.order.update({
-              where: { id: existingBill.orderId },
-              data: {
-                deletedAt: new Date(),
-                status: 'cancelled',
-                isBilled: false,
-              },
-            })
+            await Promise.all([
+              prisma.order.update({
+                where: { id: existingBill.orderId },
+                data: {
+                  deletedAt: new Date(),
+                  status: 'cancelled',
+                  isBilled: false,
+                },
+              }),
+              removeOrderNotifications({
+                orderId: existingBill.orderId,
+                organizationId: existingBill.organizationId,
+              }),
+            ])
             orderDeleted = true
           } catch (ordErr) {
             console.warn('Prisma order link update note:', ordErr)
@@ -310,13 +393,20 @@ export async function DELETE(
         })
 
         if (existingOrder) {
-          await prisma.order.update({
-            where: { id: existingOrder.id },
-            data: {
-              deletedAt: new Date(),
-              status: 'cancelled',
-            },
-          })
+          await Promise.all([
+            prisma.order.update({
+              where: { id: existingOrder.id },
+              data: {
+                deletedAt: new Date(),
+                status: 'cancelled',
+              },
+            }),
+            removeOrderNotifications({
+              orderId: existingOrder.id,
+              orderNumber: existingOrder.orderNumber,
+              organizationId: existingOrder.organizationId,
+            }),
+          ])
           orderDeleted = true
 
           const associatedBillId = existingOrder.billId || existingOrder.bill?.id

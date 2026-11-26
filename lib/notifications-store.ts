@@ -71,6 +71,37 @@ export function formatTimeAgo(dateInput: Date | string): string {
   return date.toLocaleDateString()
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function extractTitleOrderRef(title?: string | null): string | null {
+  if (!title) return null
+  const match = title.match(/#([A-Z0-9]+-[A-Z0-9-]+|[A-Z0-9]{4,})/i)
+  return match?.[1] ? match[1].trim() : null
+}
+
+function notificationMatchesOrderKeys(
+  notif: AppNotification,
+  keysLower: Set<string>
+): boolean {
+  if (keysLower.size === 0) return false
+  const ordId = notif.metadata?.orderId ? String(notif.metadata.orderId).trim().toLowerCase() : ''
+  if (ordId && keysLower.has(ordId)) return true
+
+  const ordNum = notif.metadata?.orderNumber
+    ? String(notif.metadata.orderNumber).trim().toLowerCase()
+    : ''
+  if (ordNum && keysLower.has(ordNum)) return true
+
+  const titleRef = extractTitleOrderRef(notif.title)?.toLowerCase()
+  if (titleRef && keysLower.has(titleRef)) return true
+
+  const titleLower = (notif.title || '').toLowerCase()
+  for (const key of keysLower) {
+    if (titleLower.includes(`#${key}`)) return true
+  }
+  return false
+}
+
 export function invalidateNotificationCache(organizationId?: string | null): void {
   if (!organizationId) {
     staffFeedCache.clear()
@@ -351,6 +382,57 @@ export async function markOrderPreparedNotificationsRead(
 }
 
 /**
+ * Removes all notifications (new_order, order_prepared, etc.) associated with a deleted or cancelled order
+ * across the in-memory store, deduplication cache, feed cache, and PostgreSQL.
+ */
+export async function removeOrderNotifications(params: {
+  orderId?: string | null
+  orderNumber?: string | null
+  organizationId?: string | null
+}): Promise<void> {
+  const rawKeys = [params.orderId, params.orderNumber]
+    .map((v) => (v ? String(v).trim() : ''))
+    .filter(Boolean)
+  if (rawKeys.length === 0) return
+
+  const uniqueKeys = Array.from(new Set(rawKeys))
+  const keysLower = new Set(uniqueKeys.map((k) => k.toLowerCase()))
+
+  notificationsStore = notificationsStore.filter((n) => !notificationMatchesOrderKeys(n, keysLower))
+  for (const dedupKey of recentReadyDedup.keys()) {
+    const [, dedupOrd] = dedupKey.split(':')
+    if (dedupOrd && keysLower.has(dedupOrd.toLowerCase())) {
+      recentReadyDedup.delete(dedupKey)
+    }
+  }
+  invalidateNotificationCache(params.organizationId)
+
+  const orClauses: any[] = []
+  for (const key of uniqueKeys) {
+    orClauses.push({ data: { path: ['orderNumber'], equals: key } })
+    orClauses.push({ data: { path: ['orderId'], equals: key } })
+    orClauses.push({ title: { contains: `#${key}`, mode: 'insensitive' } })
+  }
+
+  try {
+    await prisma.notification.updateMany({
+      where: {
+        deletedAt: null,
+        ...(params.organizationId ? { organizationId: params.organizationId } : {}),
+        OR: orClauses,
+      },
+      data: {
+        deletedAt: new Date(),
+      },
+    })
+  } catch {
+    // Best-effort DB sync
+  }
+
+  invalidateNotificationCache(params.organizationId)
+}
+
+/**
  * Marks one or all notifications as read across memory and PostgreSQL.
  */
 export async function markNotificationsReadInDb(
@@ -504,12 +586,74 @@ export async function getStaffNotificationsFeed(options: {
       n.organizationId === options.organizationId
   )
 
+  // Self-healing orphan check: drop any notifications whose linked order was deleted or cancelled
+  const deadOrderKeys = new Set<string>()
+  try {
+    const refIds = new Set<string>()
+    const refNumbers = new Set<string>()
+    for (const n of [...dbNotifs, ...storeNotifs]) {
+      const ordId = n.metadata?.orderId ? String(n.metadata.orderId).trim() : ''
+      const ordNum = n.metadata?.orderNumber ? String(n.metadata.orderNumber).trim() : ''
+      const titleRef = extractTitleOrderRef(n.title)
+      if (ordId && UUID_REGEX.test(ordId)) refIds.add(ordId)
+      if (ordNum) refNumbers.add(ordNum)
+      if (titleRef) refNumbers.add(titleRef)
+    }
+
+    if (refIds.size > 0 || refNumbers.size > 0) {
+      const deadOrders = await prisma.order.findMany({
+        where: {
+          AND: [
+            {
+              OR: [
+                ...(refIds.size > 0 ? [{ id: { in: Array.from(refIds) } }] : []),
+                ...(refNumbers.size > 0 ? [{ orderNumber: { in: Array.from(refNumbers) } }] : []),
+              ],
+            },
+            {
+              OR: [
+                { deletedAt: { not: null } },
+                { status: { in: ['cancelled', 'CANCELLED'] as any[] } },
+              ],
+            },
+          ],
+        },
+        select: { id: true, orderNumber: true },
+      })
+
+      for (const ord of deadOrders) {
+        if (ord.id) deadOrderKeys.add(ord.id.toLowerCase())
+        if (ord.orderNumber) deadOrderKeys.add(ord.orderNumber.toLowerCase())
+      }
+
+      if (deadOrderKeys.size > 0) {
+        notificationsStore = notificationsStore.filter(
+          (n) => !notificationMatchesOrderKeys(n, deadOrderKeys)
+        )
+        const staleDbIds = dbNotifs
+          .filter((n) => UUID_REGEX.test(n.id) && notificationMatchesOrderKeys(n, deadOrderKeys))
+          .map((n) => n.id)
+        if (staleDbIds.length > 0) {
+          prisma.notification
+            .updateMany({
+              where: { id: { in: staleDbIds }, deletedAt: null },
+              data: { deletedAt: new Date() },
+            })
+            .catch(() => {})
+        }
+      }
+    }
+  } catch {
+    // Non-blocking orphan check
+  }
+
   const merged: AppNotification[] = []
   const seenIds = new Set<string>()
   const seenReadyOrders = new Set<string>()
 
   const pushUnique = (n: AppNotification) => {
     if (!canSeeNewOrder && n.type === 'new_order') return
+    if (deadOrderKeys.size > 0 && notificationMatchesOrderKeys(n, deadOrderKeys)) return
     if (seenIds.has(n.id)) return
     if (n.type === 'order_prepared' && n.metadata?.orderNumber) {
       const ordKey = n.metadata.orderNumber.toLowerCase()
@@ -571,7 +715,15 @@ export async function getStaffNotificationsFeed(options: {
   const fallbackReady = getRealTimeLiveOrders().filter((lo: any) => lo.status === 'ready')
   for (const lo of fallbackReady) {
     const ordNum = String(lo.id || lo.fullId || '').trim()
-    if (!ordNum || seenReadyOrders.has(ordNum.toLowerCase())) continue
+    const fullIdLower = lo.fullId ? String(lo.fullId).trim().toLowerCase() : ''
+    if (
+      !ordNum ||
+      seenReadyOrders.has(ordNum.toLowerCase()) ||
+      deadOrderKeys.has(ordNum.toLowerCase()) ||
+      (fullIdLower && deadOrderKeys.has(fullIdLower))
+    ) {
+      continue
+    }
     const itemsSummary =
       Array.isArray(lo.items) && lo.items.length > 0
         ? lo.items.map((i: any) => `${i.quantity}× ${i.name}`).join(', ')
@@ -622,6 +774,7 @@ export async function getCustomerNotificationsFeed(options: {
     where: {
       customerId: options.customerId,
       deletedAt: null,
+      status: { notIn: ['cancelled', 'CANCELLED'] as any[] },
     },
     select: {
       id: true,

@@ -3,7 +3,7 @@ import prisma from '@/lib/prisma'
 import {
   getCachedCategories,
   setCachedCategories,
-  invalidateAllMenuCaches,
+  addCachedCategory,
   CachedCategory,
 } from '@/lib/menu-cache'
 
@@ -175,12 +175,21 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    invalidateAllMenuCaches()
+    const formattedCategory: CachedCategory = {
+      id: category.id,
+      name: category.name,
+      description: category.description || '',
+      displayOrder: category.displayOrder,
+      isActive: category.isActive,
+      status: category.status,
+      itemCount: 0,
+    }
+    addCachedCategory(formattedCategory)
 
     return NextResponse.json({
       success: true,
       message: 'Category created successfully',
-      data: category,
+      data: formattedCategory,
     })
   } catch (error: any) {
     console.error('Error creating category:', error)

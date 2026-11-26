@@ -16,6 +16,7 @@ import {
 } from '@/lib/kds-utils'
 import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
+import { removeOrderNotifications } from '@/lib/notifications-store'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 
 // Valid status transitions state machine
@@ -143,6 +144,9 @@ export async function PATCH(
       const kdsStatus = normalizeKdsStatus(normalizedTarget)
       if (kdsStatus === 'served' || normalizedTarget === 'cancelled') {
         removeFallbackOrder(id)
+        if (normalizedTarget === 'cancelled') {
+          await removeOrderNotifications({ orderId: id, orderNumber: id })
+        }
       } else {
         updateFallbackOrder(id, {
           status: kdsStatus,
@@ -209,9 +213,16 @@ export async function PATCH(
       data: updateData,
     })
 
-    // If order was cancelled, re-sync customer order stats
-    if ((normalizedTarget === 'cancelled' || normalizedTarget === 'CANCELLED') && existing.customerId) {
-      syncCustomerOrderStats(existing.customerId).catch(() => {})
+    // If order was cancelled, re-sync customer order stats & purge its notifications
+    if (normalizedTarget === 'cancelled' || normalizedTarget === 'CANCELLED') {
+      await removeOrderNotifications({
+        orderId: existing.id,
+        orderNumber: existing.orderNumber,
+        organizationId: existing.organizationId,
+      })
+      if (existing.customerId) {
+        syncCustomerOrderStats(existing.customerId).catch(() => {})
+      }
     }
 
     // Update any linked KitchenTickets if present

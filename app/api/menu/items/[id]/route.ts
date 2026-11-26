@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma'
 import {
   invalidateAllMenuCaches,
   updateCachedItemAvailability,
+  updateCachedMenuItem,
   removeCachedMenuItem,
 } from '@/lib/menu-cache'
 
@@ -70,17 +71,6 @@ export async function PATCH(
       )
     }
 
-    const existing = await prisma.menuItem.findUnique({
-      where: { id, deletedAt: null },
-    })
-
-    if (!existing) {
-      return NextResponse.json(
-        { success: false, message: 'Menu item not found' },
-        { status: 404 }
-      )
-    }
-
     const data: any = {}
 
     if (body.name !== undefined) data.name = String(body.name).trim()
@@ -107,37 +97,49 @@ export async function PATCH(
       data.imageUrl = imgVal ? String(imgVal).trim() : null
     }
 
-    const updated = await prisma.menuItem.update({
-      where: { id },
-      data,
-      include: { category: true },
-    })
+    let updated: any
+    try {
+      updated = await prisma.menuItem.update({
+        where: { id, deletedAt: null },
+        data,
+        include: { category: { select: { name: true } } },
+      })
+    } catch (prismaErr: any) {
+      if (prismaErr?.code === 'P2025') {
+        return NextResponse.json(
+          { success: false, message: 'Menu item not found' },
+          { status: 404 }
+        )
+      }
+      throw prismaErr
+    }
+
+    const formatted = {
+      id: updated.id,
+      name: updated.name,
+      description: updated.description || '',
+      categoryId: updated.categoryId,
+      category: updated.category?.name || 'Uncategorized',
+      price: Number(updated.basePrice),
+      costPrice: updated.costPrice ? Number(updated.costPrice) : undefined,
+      image: updated.imageUrl || '',
+      isVeg: updated.isVegetarian,
+      isVegan: updated.isVegan,
+      isSpicy: updated.isSpicy,
+      isAvailable: updated.isAvailable,
+      prepTime: updated.preparationTimeMinutes || 15,
+    }
 
     if (body.isAvailable !== undefined && Object.keys(data).length === 1) {
       updateCachedItemAvailability(id, Boolean(body.isAvailable))
     } else {
-      removeCachedMenuItem(id)
-    invalidateAllMenuCaches()
+      updateCachedMenuItem(formatted)
     }
 
     return NextResponse.json({
       success: true,
       message: 'Menu item updated successfully',
-      data: {
-        id: updated.id,
-        name: updated.name,
-        description: updated.description || '',
-        categoryId: updated.categoryId,
-        category: updated.category?.name || 'Uncategorized',
-        price: Number(updated.basePrice),
-        costPrice: updated.costPrice ? Number(updated.costPrice) : undefined,
-        image: updated.imageUrl || '',
-        isVeg: updated.isVegetarian,
-        isVegan: updated.isVegan,
-        isSpicy: updated.isSpicy,
-        isAvailable: updated.isAvailable,
-        prepTime: updated.preparationTimeMinutes || 15,
-      },
+      data: formatted,
     })
   } catch (error: any) {
     console.error('Error updating menu item:', error)

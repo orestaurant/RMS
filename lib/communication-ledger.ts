@@ -3,6 +3,8 @@
  * Tracks WhatsApp, SMS, and Call logs, plus order preparation alerts
  */
 
+import { formatWhatsAppNumber } from '@/lib/phone'
+
 export interface CommunicationLog {
   id: string
   recipientName: string
@@ -108,7 +110,7 @@ export function triggerOrderPreparedAlert(order: {
   customerPhone?: string
 }) {
   const customerName = order.customerName || `Guest (${order.tableNumber})`
-  const customerPhone = order.customerPhone || '+91 98765 00000'
+  const customerPhone = order.customerPhone?.trim() || 'Not provided'
 
   // Log WhatsApp alert
   const wa = logCommunication({
@@ -148,7 +150,7 @@ export function generateWhatsAppBillLink(
   totalAmount: number,
   tableNumber: string
 ): string {
-  const cleanPhone = phone.replace(/[^0-9]/g, '')
+  const waDigits = formatWhatsAppNumber(phone)
   const message = encodeURIComponent(
     `🧾 *Spice Garden Restaurant - E-Bill*\n\n` +
     `Invoice: *${billNumber}*\n` +
@@ -157,6 +159,6 @@ export function generateWhatsAppBillLink(
     `Pay instantly via UPI QR or at the counter.\n` +
     `Thank you for dining with us! Visit again. 🍽️`
   )
-  return `https://wa.me/${cleanPhone ? (cleanPhone.startsWith('91') ? cleanPhone : `91${cleanPhone}`) : ''}?text=${message}`
+  return `https://wa.me/${waDigits || ''}?text=${message}`
 }
 

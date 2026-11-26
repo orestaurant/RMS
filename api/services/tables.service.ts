@@ -3,8 +3,228 @@
  * Handles table-related queries
  */
 
+import { Prisma, PrismaClient } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { TenantContext } from '@/api/middleware/tenant'
+import {
+  ACTIVE_ORDER_DB_STATUSES,
+  buildTableNumberVariants,
+  findMatchingTable,
+  formatUnavailableTableMessage,
+  getEffectiveTableStatus,
+} from '@/lib/utils'
+
+type DbClient = PrismaClient | Prisma.TransactionClient
+
+export interface ResolvedTableRecord {
+  id: string
+  tableNumber: string
+  status: string
+  metadata: Prisma.JsonValue
+}
+
+export class TableBookingConflictError extends Error {
+  readonly statusCode: number
+  readonly code: string
+  readonly tableStatus: string
+  readonly tableNumber: string
+
+  constructor(
+    message: string,
+    options: {
+      statusCode?: number
+      code?: string
+      tableStatus: string
+      tableNumber: string
+    }
+  ) {
+    super(message)
+    this.name = 'TableBookingConflictError'
+    this.statusCode = options.statusCode ?? 409
+    this.code = options.code ?? 'TABLE_OCCUPIED'
+    this.tableStatus = options.tableStatus
+    this.tableNumber = options.tableNumber
+  }
+}
+
+/**
+ * Resolves a RestaurantTable by ID or tableNumber (supporting variants like "6", "T6", "Table 6").
+ */
+export async function resolveDineInTable(
+  db: DbClient,
+  params: {
+    branchId: string
+    tableId?: string | null
+    tableNumber?: string | null
+  }
+): Promise<ResolvedTableRecord | null> {
+  const { branchId, tableId, tableNumber } = params
+
+  if (tableId) {
+    const byId = await db.restaurantTable.findFirst({
+      where: { id: tableId, deletedAt: null },
+      select: { id: true, tableNumber: true, status: true, metadata: true },
+    })
+    if (byId) return byId
+  }
+
+  const cleanTable = tableNumber ? String(tableNumber).trim() : ''
+  if (!cleanTable) return null
+
+  const variants = buildTableNumberVariants(cleanTable)
+  if (variants.length === 0) return null
+
+  const candidates = await db.restaurantTable.findMany({
+    where: {
+      branchId,
+      deletedAt: null,
+      OR: variants.map((variant) => ({
+        tableNumber: { equals: variant, mode: 'insensitive' },
+      })),
+    },
+    select: { id: true, tableNumber: true, status: true, metadata: true },
+  })
+
+  if (candidates.length === 0) return null
+  return findMatchingTable(candidates, cleanTable, tableId) || candidates[0]
+}
+
+/**
+ * Checks whether a table currently has any active unbilled order in the current dining session.
+ */
+export async function hasActiveTableOrder(db: DbClient, tableId: string): Promise<boolean> {
+  const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
+
+  const existingActiveOrder = await db.order.findFirst({
+    where: {
+      tableId,
+      deletedAt: null,
+      createdAt: { gte: sessionCutoff },
+      isBilled: false,
+      status: { in: [...ACTIVE_ORDER_DB_STATUSES] as any[] },
+      paymentStatus: { notIn: ['completed', 'refunded', 'cancelled'] },
+      NOT: [
+        { bill: { status: 'PAID' } },
+        { bill: { paymentStatus: 'completed' } },
+        { tableBill: { status: 'PAID' } },
+        { tableBill: { paymentStatus: 'completed' } },
+      ],
+    },
+    select: { id: true },
+  })
+
+  return Boolean(existingActiveOrder)
+}
+
+/**
+ * Validates table availability and atomically transitions it from 'available' -> 'occupied'
+ * inside the caller's Prisma transaction for customer dine-in orders.
+ */
+export async function validateAndClaimDineInTable(
+  tx: Prisma.TransactionClient,
+  params: {
+    table: ResolvedTableRecord
+    isStaffPosOrder: boolean
+  }
+): Promise<void> {
+  const { table, isStaffPosOrder } = params
+  const existingMeta =
+    table.metadata && typeof table.metadata === 'object'
+      ? ({ ...(table.metadata as Record<string, any>) } as Record<string, any>)
+      : {}
+  const effectiveStatus = getEffectiveTableStatus(table.status, existingMeta)
+  const occupiedSinceTime =
+    existingMeta.occupiedSince ||
+    new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+
+  if (isStaffPosOrder) {
+    if (effectiveStatus !== 'occupied') {
+      delete existingMeta.customStatus
+      await tx.restaurantTable.update({
+        where: { id: table.id },
+        data: {
+          status: 'occupied',
+          metadata: {
+            ...existingMeta,
+            occupiedSince: occupiedSinceTime,
+          },
+        },
+      })
+    }
+    return
+  }
+
+  if (effectiveStatus !== 'available') {
+    throw new TableBookingConflictError(
+      formatUnavailableTableMessage(table.tableNumber, effectiveStatus),
+      {
+        statusCode: 409,
+        code: effectiveStatus === 'occupied' ? 'TABLE_OCCUPIED' : 'TABLE_UNAVAILABLE',
+        tableStatus: effectiveStatus,
+        tableNumber: table.tableNumber,
+      }
+    )
+  }
+
+  const activeOrderExists = await hasActiveTableOrder(tx, table.id)
+  if (activeOrderExists) {
+    await tx.restaurantTable
+      .updateMany({
+        where: { id: table.id, status: 'available', deletedAt: null },
+        data: {
+          status: 'occupied',
+          metadata: {
+            ...existingMeta,
+            occupiedSince: occupiedSinceTime,
+          },
+        },
+      })
+      .catch(() => {})
+
+    throw new TableBookingConflictError(
+      formatUnavailableTableMessage(table.tableNumber, 'occupied'),
+      {
+        statusCode: 409,
+        code: 'TABLE_OCCUPIED',
+        tableStatus: 'occupied',
+        tableNumber: table.tableNumber,
+      }
+    )
+  }
+
+  delete existingMeta.customStatus
+  const claimed = await tx.restaurantTable.updateMany({
+    where: {
+      id: table.id,
+      deletedAt: null,
+      status: 'available',
+    },
+    data: {
+      status: 'occupied',
+      metadata: {
+        ...existingMeta,
+        occupiedSince: occupiedSinceTime,
+      },
+    },
+  })
+
+  if (claimed.count === 0) {
+    const latest = await tx.restaurantTable.findUnique({
+      where: { id: table.id },
+      select: { status: true, metadata: true },
+    })
+    const latestStatus = getEffectiveTableStatus(latest?.status, latest?.metadata)
+    throw new TableBookingConflictError(
+      formatUnavailableTableMessage(table.tableNumber, latestStatus),
+      {
+        statusCode: 409,
+        code: latestStatus === 'occupied' ? 'TABLE_OCCUPIED' : 'TABLE_UNAVAILABLE',
+        tableStatus: latestStatus,
+        tableNumber: table.tableNumber,
+      }
+    )
+  }
+}
 
 export interface TableInfo {
   id: string

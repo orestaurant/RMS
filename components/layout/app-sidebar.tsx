@@ -22,7 +22,6 @@ import {
   Boxes,
   Truck,
   Globe,
-  Star,
   Disc3,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -213,12 +212,6 @@ export function AppSidebar() {
               label: 'Digital Menu',
               href: '/menu',
               icon: UtensilsCrossed,
-            },
-            {
-              label: 'Review & 10% Off',
-              href: '/customer/feedback',
-              icon: Star,
-              badge: '10% OFF',
             },
           ],
         },

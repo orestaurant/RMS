@@ -18,12 +18,21 @@ import {
   getCachedBranchMeta,
   setCachedBranchMeta,
 } from '@/lib/dashboard-cache'
+import { invalidatePOSTablesCache } from '@/lib/pos-cache'
 import { getCustomerSession } from '@/lib/customer-auth'
+import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { isCustomerFirstOrder } from '@/lib/customer-stats'
 import { createPersistentNotification } from '@/lib/notifications-store'
+import { normalizePhoneForStorage } from '@/lib/phone'
+import { buildTableNumberVariants, getEffectiveTableStatus, formatUnavailableTableMessage } from '@/lib/utils'
+import {
+  resolveDineInTable,
+  validateAndClaimDineInTable,
+  TableBookingConflictError,
+  type ResolvedTableRecord,
+} from '@/api/services/tables.service'
 
-// High-speed in-memory caches to eliminate redundant Neon DB round-trips over Singapore link
-const inMemoryTableCache = new Map<string, { id: string; tableNumber: string }>()
+// High-speed in-memory cache to eliminate redundant Neon DB menu lookups
 const inMemoryMenuItemCache = new Map<string, { id: string; name: string; basePrice: number; isAvailable: boolean; categoryName?: string; cachedAt: number }>()
 const MENU_ITEM_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 
@@ -45,18 +54,7 @@ export async function GET(request: NextRequest) {
 
     let tableVariants: string[] = []
     if (tableNumber) {
-      const cleanTable = String(tableNumber).trim()
-      const cleanNum = cleanTable.replace(/[^0-9]/g, '')
-      tableVariants = Array.from(
-        new Set([
-          cleanTable,
-          cleanNum,
-          `Table ${cleanTable}`,
-          `Table ${cleanNum}`,
-          `T${cleanNum}`,
-          cleanTable.toLowerCase(),
-        ])
-      ).filter(Boolean)
+      tableVariants = buildTableNumberVariants(String(tableNumber))
 
       where.OR = [
         { table: { tableNumber: { in: tableVariants } } },
@@ -294,9 +292,18 @@ export async function POST(request: NextRequest) {
       locationCapturedAt = null,
     } = body
 
-    // Auto-link logged-in customer account if order was placed during customer session
-    const customerSession = await getCustomerSession(request)
+    // Determine caller identity: only verified staff POS requests can add orders to already occupied tables
+    const adminSessionToken = request.cookies.get(SESSION_COOKIE_NAME)?.value
+    const [customerSession, staffSession] = await Promise.all([
+      getCustomerSession(request),
+      adminSessionToken ? verifyJWT(adminSessionToken) : Promise.resolve(null),
+    ])
     const resolvedCustomerId = customerId || customerSession?.customerId || null
+    const isAuthenticatedStaff = Boolean(
+      staffSession?.userId && String(staffSession.role || '').toUpperCase() !== 'CUSTOMER'
+    )
+    const isStaffPosOrder =
+      isAuthenticatedStaff && (body.source === 'TABLE_POS' || body.source === 'POS')
 
     const requestedStatus = body.status || body.requestedStatus || 'pending'
 
@@ -308,6 +315,7 @@ export async function POST(request: NextRequest) {
     const parsedVehicle = vehicleNumber ? String(vehicleNumber).trim().toUpperCase() : null
     const parsedLandmark = landmarkNote ? String(landmarkNote).trim() : null
     const parsedLocked = Boolean(isLocationLocked)
+    const normalizedCustomerPhone = normalizePhoneForStorage(body.customerPhone)
 
     let branchId = body.branchId
 
@@ -416,41 +424,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 4. Resolve Table & 5. Fetch Menu Items concurrently (with high-speed memory caching)
-    let tableId = providedTableId || null
+    // 4. Resolve Table (fresh DB check for occupancy) & 5. Fetch Menu Items concurrently
+    let tableId: string | null = providedTableId || null
     let finalTableNumber = resolvedTableNumber || '1'
 
-    let tablePromise: Promise<any> | null = null
-
-    if (isDineIn) {
-      if (tableId && !resolvedTableNumber) {
-        const cached = inMemoryTableCache.get(`${branchId}:id:${tableId}`)
-        if (cached) {
-          finalTableNumber = cached.tableNumber
-        } else {
-          tablePromise = prisma.restaurantTable.findUnique({
-            where: { id: tableId },
-            select: { id: true, tableNumber: true },
-          })
-        }
-      } else if (resolvedTableNumber && !tableId) {
-        const tableCacheKey = `${branchId}:${resolvedTableNumber}`
-        const cached = inMemoryTableCache.get(tableCacheKey)
-        if (cached) {
-          tableId = cached.id
-          finalTableNumber = cached.tableNumber
-        } else {
-          tablePromise = prisma.restaurantTable.findFirst({
-            where: {
-              branchId,
-              tableNumber: resolvedTableNumber,
-              deletedAt: null,
-            },
-            select: { id: true, tableNumber: true },
-          })
-        }
-      }
-    }
+    const tablePromise: Promise<ResolvedTableRecord | null> = isDineIn
+      ? resolveDineInTable(prisma, {
+          branchId,
+          tableId,
+          tableNumber: resolvedTableNumber,
+        })
+      : Promise.resolve(null)
 
     // Helper regex to validate UUID format
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -480,9 +464,9 @@ export async function POST(request: NextRequest) {
         })
       : Promise.resolve([])
 
-    // Run table lookup & missing menu items lookup in parallel!
+    // Run table lookup & missing menu items lookup in parallel
     const [resolvedTableData, freshMenuItems] = await Promise.all([
-      tablePromise || Promise.resolve(null),
+      tablePromise,
       menuItemsPromise,
     ])
 
@@ -500,41 +484,72 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Update in-memory table cache or create table if missing
-    if (resolvedTableData) {
-      tableId = resolvedTableData.id
-      finalTableNumber = resolvedTableData.tableNumber
-      inMemoryTableCache.set(`${branchId}:${finalTableNumber}`, resolvedTableData)
-      inMemoryTableCache.set(`${branchId}:id:${tableId}`, resolvedTableData)
-    } else if (isDineIn && resolvedTableNumber && !tableId) {
-      try {
-        const newTable = await prisma.restaurantTable.create({
-          data: {
-            branchId,
-            restaurantId,
-            organizationId,
-            tableNumber: resolvedTableNumber,
-            capacity: 4,
-            section: 'dining',
-            status: 'occupied',
-          },
-          select: { id: true, tableNumber: true },
-        })
-        tableId = newTable.id
-        finalTableNumber = newTable.tableNumber
-        inMemoryTableCache.set(`${branchId}:${finalTableNumber}`, newTable)
-        inMemoryTableCache.set(`${branchId}:id:${tableId}`, newTable)
-      } catch (tblErr) {
-        console.warn('Could not create table record:', tblErr)
-      }
-    }
+    let claimedTableRecord: ResolvedTableRecord | null = resolvedTableData
 
-    // Mark table occupied non-blockingly
-    if (tableId) {
-      prisma.restaurantTable.update({
-        where: { id: tableId },
-        data: { status: 'occupied' },
-      }).catch(() => {})
+    if (claimedTableRecord) {
+      tableId = claimedTableRecord.id
+      finalTableNumber = claimedTableRecord.tableNumber
+
+      // Fast-fail for customer orders if table is already occupied or unavailable
+      if (isDineIn && !isStaffPosOrder) {
+        const effectiveStatus = getEffectiveTableStatus(
+          claimedTableRecord.status,
+          claimedTableRecord.metadata
+        )
+        if (effectiveStatus !== 'available') {
+          return NextResponse.json(
+            {
+              success: false,
+              code: effectiveStatus === 'occupied' ? 'TABLE_OCCUPIED' : 'TABLE_UNAVAILABLE',
+              tableStatus: effectiveStatus,
+              tableNumber: claimedTableRecord.tableNumber,
+              message: formatUnavailableTableMessage(
+                claimedTableRecord.tableNumber,
+                effectiveStatus
+              ),
+            },
+            { status: 409 }
+          )
+        }
+      }
+    } else if (isDineIn) {
+      const branchTableCount = await prisma.restaurantTable.count({
+        where: { branchId, deletedAt: null },
+      })
+
+      // Reject unknown tables when the branch already has configured tables (prevents bypassing occupied checks)
+      if (!isStaffPosOrder && branchTableCount > 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: 'TABLE_NOT_FOUND',
+            message: `Table "${resolvedTableNumber || providedTableId}" was not found. Please select an available table.`,
+          },
+          { status: 404 }
+        )
+      }
+
+      if (resolvedTableNumber && !tableId) {
+        try {
+          const newTable = await prisma.restaurantTable.create({
+            data: {
+              branchId,
+              restaurantId,
+              organizationId,
+              tableNumber: resolvedTableNumber,
+              capacity: 4,
+              section: 'dining',
+              status: 'available',
+            },
+            select: { id: true, tableNumber: true, status: true, metadata: true },
+          })
+          claimedTableRecord = newTable
+          tableId = newTable.id
+          finalTableNumber = newTable.tableNumber
+        } catch (tblErr) {
+          console.warn('Could not create table record:', tblErr)
+        }
+      }
     }
 
     // Check item availability
@@ -772,72 +787,82 @@ export async function POST(request: NextRequest) {
     // 8. Newly placed orders must start as 'pending' so they appear in KDS 'Incoming' queue
     const finalStatus = 'pending'
 
-    // 9. Persist Order in database
-    const order = await prisma.order.create({
-      data: {
-        organizationId,
-        branchId,
-        restaurantId,
-        orderNumber,
-        orderType: isDineIn ? 'dine_in' : 'takeaway',
-        status: finalStatus as any,
-        paymentStatus: 'pending',
-        tableId,
-        customerId: effectiveCustomerId,
-        subtotal: new Prisma.Decimal(calculatedSubtotal),
-        discountAmount: new Prisma.Decimal(discountAmount),
-        discountPercentage: new Prisma.Decimal(discountPercentage),
-        discountReason: discountReason,
-        taxAmount: new Prisma.Decimal(taxAmount),
-        totalAmount: new Prisma.Decimal(finalTotal),
-        total: new Prisma.Decimal(finalTotal),
-        notes: notes || null,
-        source: body.source || 'QR_MENU',
-        isLocationLocked: parsedLocked,
-        vehicleNumber: parsedVehicle,
-        landmarkNote: parsedLandmark,
-        customerLat: parsedLat,
-        customerLng: parsedLng,
-        locationAccuracy: parsedAccuracy,
-        locationCapturedAt: parsedCapturedAt,
-        metadata: {
-          tableNumber: finalTableNumber,
-          customerName: body.customerName || (parsedVehicle ? `Car Guest (${parsedVehicleName ? `${parsedVehicleName} - ` : ''}${parsedVehicle})` : parsedVehicleName ? `Car Guest (${parsedVehicleName})` : 'Table Guest'),
-          placedVia: body.source === 'POS' ? 'POS_TERMINAL' : 'QR_SELF_ORDER',
-          subtotal: calculatedSubtotal,
-          discountAmount,
-          discountPercentage,
-          discountReason,
-          couponCode,
-          taxAmount,
+    // 9. Atomically claim table & persist Order in database
+    const order = await prisma.$transaction(async (tx) => {
+      if (isDineIn && claimedTableRecord) {
+        await validateAndClaimDineInTable(tx, {
+          table: claimedTableRecord,
+          isStaffPosOrder,
+        })
+      }
+
+      return tx.order.create({
+        data: {
+          organizationId,
+          branchId,
+          restaurantId,
+          orderNumber,
+          orderType: isDineIn ? 'dine_in' : 'takeaway',
+          status: finalStatus as any,
+          paymentStatus: 'pending',
+          tableId,
+          customerId: effectiveCustomerId,
+          subtotal: new Prisma.Decimal(calculatedSubtotal),
+          discountAmount: new Prisma.Decimal(discountAmount),
+          discountPercentage: new Prisma.Decimal(discountPercentage),
+          discountReason: discountReason,
+          taxAmount: new Prisma.Decimal(taxAmount),
+          totalAmount: new Prisma.Decimal(finalTotal),
+          total: new Prisma.Decimal(finalTotal),
+          notes: notes || null,
+          source: body.source || 'QR_MENU',
           isLocationLocked: parsedLocked,
-          vehicleName: parsedVehicleName,
           vehicleNumber: parsedVehicle,
           landmarkNote: parsedLandmark,
           customerLat: parsedLat,
           customerLng: parsedLng,
           locationAccuracy: parsedAccuracy,
-          locationCapturedAt: parsedCapturedAt ? parsedCapturedAt.toISOString() : null,
+          locationCapturedAt: parsedCapturedAt,
+          metadata: {
+            tableNumber: finalTableNumber,
+            customerName: body.customerName || (parsedVehicle ? `Car Guest (${parsedVehicleName ? `${parsedVehicleName} - ` : ''}${parsedVehicle})` : parsedVehicleName ? `Car Guest (${parsedVehicleName})` : 'Table Guest'),
+            ...(normalizedCustomerPhone ? { customerPhone: normalizedCustomerPhone } : {}),
+            placedVia: body.source === 'POS' ? 'POS_TERMINAL' : 'QR_SELF_ORDER',
+            subtotal: calculatedSubtotal,
+            discountAmount,
+            discountPercentage,
+            discountReason,
+            couponCode,
+            taxAmount,
+            isLocationLocked: parsedLocked,
+            vehicleName: parsedVehicleName,
+            vehicleNumber: parsedVehicle,
+            landmarkNote: parsedLandmark,
+            customerLat: parsedLat,
+            customerLng: parsedLng,
+            locationAccuracy: parsedAccuracy,
+            locationCapturedAt: parsedCapturedAt ? parsedCapturedAt.toISOString() : null,
+          },
+          items: {
+            create: orderItemsCreateData,
+          },
         },
-        items: {
-          create: orderItemsCreateData,
+        select: {
+          id: true,
+          orderNumber: true,
+          status: true,
+          totalAmount: true,
+          discountAmount: true,
+          createdAt: true,
+          isLocationLocked: true,
+          vehicleNumber: true,
+          landmarkNote: true,
+          customerLat: true,
+          customerLng: true,
+          locationAccuracy: true,
+          locationCapturedAt: true,
         },
-      },
-      select: {
-        id: true,
-        orderNumber: true,
-        status: true,
-        totalAmount: true,
-        discountAmount: true,
-        createdAt: true,
-        isLocationLocked: true,
-        vehicleNumber: true,
-        landmarkNote: true,
-        customerLat: true,
-        customerLng: true,
-        locationAccuracy: true,
-        locationCapturedAt: true,
-      },
+      })
     })
 
     // Persist customer order stats & review coupon claim before returning so subsequent checks see updated state
@@ -876,8 +901,9 @@ export async function POST(request: NextRequest) {
       await Promise.allSettled(postOrderUpdates)
     }
 
-    // Invalidate dashboard stats cache, KDS cache, and live orders cache immediately
+    // Invalidate dashboard stats cache, POS tables cache, KDS cache, and live orders cache immediately
     invalidateDashboardStatsCache(branchId)
+    invalidatePOSTablesCache()
     invalidateKDSCache()
     invalidateLiveOrdersCache()
 
@@ -972,6 +998,18 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     )
   } catch (error: any) {
+    if (error instanceof TableBookingConflictError) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: error.code,
+          tableStatus: error.tableStatus,
+          tableNumber: error.tableNumber,
+          message: error.message,
+        },
+        { status: error.statusCode }
+      )
+    }
     console.error('Error creating order:', error)
     return NextResponse.json(
       {

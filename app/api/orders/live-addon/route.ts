@@ -11,6 +11,7 @@ import { successResponse, errorResponse } from '@/api/utils/responses'
 import { addAddonToBatch, startLiveBatch } from '@/lib/live-batch-manager'
 import { invalidateKDSCache, invalidateLiveOrdersCache, registerActiveLiveOrder } from '@/lib/kds-utils'
 import { checkPermission } from '@/lib/rolesAndPermission'
+import { normalizePhoneForStorage } from '@/lib/phone'
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
@@ -23,6 +24,7 @@ export async function POST(request: NextRequest) {
       orderId: reqOrderId,
       items,
       customerName = 'Table Guest',
+      customerPhone,
       notes,
       bypassGraceLock = false,
       managerPin,
@@ -235,6 +237,7 @@ export async function POST(request: NextRequest) {
       const cover = Number(prevMeta.coverCharges || 0)
       const penalty = Number(prevMeta.nonPaymentPenalty || 0)
       const grandTotal = Math.round((taxable + billTax + tip + cover + penalty) * 100) / 100
+      const cleanAddonPhone = normalizePhoneForStorage(customerPhone)
 
       await prisma.bill.update({
         where: { id: targetBill.id },
@@ -244,6 +247,7 @@ export async function POST(request: NextRequest) {
           grandTotal,
           totalAmount: grandTotal,
           balanceDue: grandTotal - Number(targetBill.amountPaid || 0),
+          ...(cleanAddonPhone ? { customerPhone: cleanAddonPhone } : {}),
         },
       })
     }

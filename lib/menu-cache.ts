@@ -138,6 +138,68 @@ export function addCachedMenuItem(item: CachedMenuItem): void {
 }
 
 /**
+ * Optimistically update a single menu item in cache without forcing a cold DB reload
+ */
+export function updateCachedMenuItem(updated: Partial<CachedMenuItem> & { id: string }): void {
+  if (menuItemsCache?.data) {
+    menuItemsCache.data = menuItemsCache.data.map((item) =>
+      item.id === updated.id ? { ...item, ...updated } : item
+    )
+    menuItemsCache.timestamp = Date.now()
+    if (updated.category) {
+      itemIdToCategoryMap.set(updated.id, updated.category)
+    }
+  }
+  categoriesCacheMap.clear()
+  invalidatePOSMenuCache()
+}
+
+/**
+ * Optimistically update a category in both category cache and menu item cache
+ */
+export function updateCachedCategory(
+  categoryId: string,
+  updates: { name: string; description: string }
+): void {
+  for (const [key, entry] of categoriesCacheMap.entries()) {
+    categoriesCacheMap.set(key, {
+      data: entry.data.map((cat) =>
+        cat.id === categoryId
+          ? { ...cat, name: updates.name, description: updates.description }
+          : cat
+      ),
+      timestamp: Date.now(),
+    })
+  }
+
+  if (menuItemsCache?.data) {
+    menuItemsCache.data = menuItemsCache.data.map((item) => {
+      if (item.categoryId === categoryId) {
+        itemIdToCategoryMap.set(item.id, updates.name)
+        return { ...item, category: updates.name }
+      }
+      return item
+    })
+    menuItemsCache.timestamp = Date.now()
+  }
+
+  invalidatePOSMenuCache()
+}
+
+/**
+ * Optimistically append a newly created category into warm caches
+ */
+export function addCachedCategory(cat: CachedCategory): void {
+  for (const [key, entry] of categoriesCacheMap.entries()) {
+    categoriesCacheMap.set(key, {
+      data: [...entry.data.filter((c) => c.id !== cat.id), cat],
+      timestamp: Date.now(),
+    })
+  }
+  invalidatePOSMenuCache()
+}
+
+/**
  * Optimistically remove a deleted menu item from cache
  */
 export function removeCachedMenuItem(itemId: string): void {

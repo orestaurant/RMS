@@ -794,6 +794,8 @@ export function CustomerOrdersView({ hideHeader = false }: CustomerOrdersViewPro
         tableNumber={billTargetOrder?.tableNumber || 'Table 1'}
         tableOrders={billTargetOrder ? [billTargetOrder] : []}
         selectedOrderId={billTargetOrder?.id || null}
+        defaultCustomerPhone={profile?.mobile || ''}
+        defaultCustomerName={profile?.name || ''}
         onSuccess={() => {
           loadData(false)
         }}

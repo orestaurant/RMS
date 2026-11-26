@@ -63,7 +63,12 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
-import { cn } from '@/lib/utils'
+import {
+  cn,
+  findMatchingTable,
+  formatUnavailableTableMessage,
+  isTableAvailableStatus,
+} from '@/lib/utils'
 import { LiveBatchAddonBanner } from '@/components/orders/LiveBatchAddonBanner'
 
 export interface CustomerMenuItem {
@@ -213,9 +218,22 @@ export function CustomerMenu() {
 
   // 1. Table Number State & Persistence
   const [tableNumber, setTableNumber] = useState<string>('')
+  const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
   const [isTableLocked, setIsTableLocked] = useState<boolean>(false)
   const [showTableModal, setShowTableModal] = useState<boolean>(false)
   const [manualTableInput, setManualTableInput] = useState<string>('')
+  const [liveTables, setLiveTables] = useState<
+    Array<{
+      id: string
+      tableNumber: string
+      capacity: number
+      section: string
+      rawSection?: string
+      status: string
+    }>
+  >([])
+  const [tablesLoading, setTablesLoading] = useState<boolean>(true)
+  const [tableSelectionError, setTableSelectionError] = useState<string | null>(null)
 
   // 1b. Order Mode & Highway Drive-In Delivery State
   const [orderMode, setOrderMode] = useState<'dine_in' | 'drive_in'>('dine_in')
@@ -331,6 +349,9 @@ export function CustomerMenu() {
   const [cart, setCart] = useState<{ [cartKey: string]: CartItem }>({})
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false)
   const [orderNotes, setOrderNotes] = useState<string>('')
+  const [customerWhatsappPhone, setCustomerWhatsappPhone] = useState<string>(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('rms_customer_phone') || '' : ''
+  )
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [orderError, setOrderError] = useState<string | null>(null)
 
@@ -346,6 +367,7 @@ export function CustomerMenu() {
   const [customerAuth, setCustomerAuth] = useState<{
     id: string
     name: string
+    mobile?: string
     isFirstOrder: boolean
     totalOrders: number
     hasSubmittedReview: boolean
@@ -362,6 +384,14 @@ export function CustomerMenu() {
 
       const cust = data.customer
       setCustomerAuth(cust)
+      if (cust.mobile) {
+        setCustomerWhatsappPhone((prev) => prev || cust.mobile)
+        try {
+          if (!localStorage.getItem('rms_customer_phone')) {
+            localStorage.setItem('rms_customer_phone', cust.mobile)
+          }
+        } catch {}
+      }
 
       if (cust.isFirstOrder) {
         setCouponInput((prev) => prev || 'FIRST15')
@@ -544,6 +574,68 @@ export function CustomerMenu() {
     }
   }, [])
 
+  // Fetch real-time restaurant table statuses so customers only book available tables
+  const loadLiveTables = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tables?public=1', { cache: 'no-store' })
+      if (!res.ok) return
+      const json = await res.json()
+      if (json.success && Array.isArray(json.data)) {
+        setLiveTables(json.data)
+      }
+    } catch (err) {
+      console.warn('Could not load live table availability:', err)
+    } finally {
+      setTablesLoading(false)
+    }
+  }, [])
+
+  const diningTables = useMemo(
+    () => liveTables.filter((t) => t.tableNumber.trim().toLowerCase() !== 'takeaway'),
+    [liveTables]
+  )
+
+  const matchedSelectedTable = useMemo(
+    () => findMatchingTable(diningTables, tableNumber, selectedTableId),
+    [diningTables, tableNumber, selectedTableId]
+  )
+
+  const availableDiningTables = useMemo(
+    () => diningTables.filter((t) => isTableAvailableStatus(t.status)),
+    [diningTables]
+  )
+
+  const isSelectedTableUnavailable = Boolean(
+    orderMode === 'dine_in' &&
+      !isAppendMode &&
+      tableNumber &&
+      matchedSelectedTable &&
+      !isTableAvailableStatus(matchedSelectedTable.status)
+  )
+
+  // Clear or warn immediately when pre-selected/cached table is occupied or unavailable
+  useEffect(() => {
+    if (orderMode !== 'dine_in' || isAppendMode || !tableNumber || !matchedSelectedTable) return
+
+    if (!isTableAvailableStatus(matchedSelectedTable.status)) {
+      const msg = formatUnavailableTableMessage(
+        matchedSelectedTable.tableNumber,
+        matchedSelectedTable.status
+      )
+      setTableSelectionError(msg)
+      setTableNumber('')
+      setSelectedTableId(null)
+      setManualTableInput('')
+      setIsTableLocked(false)
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('rms_customer_table')
+      }
+      setShowTableModal(true)
+    } else if (selectedTableId !== matchedSelectedTable.id) {
+      setSelectedTableId(matchedSelectedTable.id)
+    }
+  }, [orderMode, isAppendMode, tableNumber, matchedSelectedTable, selectedTableId])
+
   // Active table / car delivery key for live orders polling
   const activeTableKey = useMemo(() => {
     if (orderMode === 'drive_in') {
@@ -572,7 +664,15 @@ export function CustomerMenu() {
 
   useEffect(() => {
     loadMenu()
-  }, [loadMenu])
+    loadLiveTables()
+  }, [loadMenu, loadLiveTables])
+
+  // Refresh live table availability when opening table selector or cart drawer
+  useEffect(() => {
+    if (showTableModal || isCartOpen) {
+      loadLiveTables()
+    }
+  }, [showTableModal, isCartOpen, loadLiveTables])
 
   // Visibility-aware polling (pauses automatically when tab is hidden)
   useEffect(() => {
@@ -580,12 +680,14 @@ export function CustomerMenu() {
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         fetchTableOrders()
+        loadLiveTables()
       }
-    }, 4000)
+    }, 6000)
 
     const handleVisibility = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         fetchTableOrders()
+        loadLiveTables()
       }
     }
     if (typeof document !== 'undefined') {
@@ -612,19 +714,48 @@ export function CustomerMenu() {
     }
   }, [searchParams, tableOrders])
 
-  // Handle manual table entry submission
+  const selectAvailableTable = useCallback(
+    (tableNum: string, tableId?: string | null) => {
+      const clean = tableNum.trim()
+      setTableNumber(clean)
+      setSelectedTableId(tableId || null)
+      setManualTableInput(clean)
+      setOrderMode('dine_in')
+      setIsTableLocked(true)
+      setTableSelectionError(null)
+      setOrderError(null)
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('rms_customer_table', clean)
+        localStorage.setItem('rms_customer_order_mode', 'dine_in')
+      }
+      setShowTableModal(false)
+    },
+    []
+  )
+
+  // Handle manual table entry submission with strict occupancy validation
   const handleSetTable = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!manualTableInput.trim()) return
     const clean = manualTableInput.trim()
-    setTableNumber(clean)
-    setOrderMode('dine_in')
-    setIsTableLocked(true)
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('rms_customer_table', clean)
-      localStorage.setItem('rms_customer_order_mode', 'dine_in')
+    if (!clean) return
+
+    if (diningTables.length > 0) {
+      const matched = findMatchingTable(diningTables, clean)
+      if (!matched) {
+        setTableSelectionError(
+          `Table "${clean}" was not found. Please select one of the available tables above.`
+        )
+        return
+      }
+      if (!isTableAvailableStatus(matched.status)) {
+        setTableSelectionError(formatUnavailableTableMessage(matched.tableNumber, matched.status))
+        return
+      }
+      selectAvailableTable(matched.tableNumber, matched.id)
+      return
     }
-    setShowTableModal(false)
+
+    selectAvailableTable(clean)
   }
 
   // Precomputed O(1) cart quantity lookup per menuItemId
@@ -1083,9 +1214,22 @@ export function CustomerMenu() {
         setOrderError('Please enter your car name, vehicle number, or highway parking spot before placing order.')
         return
       }
-    } else if (!tableNumber) {
-      setShowTableModal(true)
-      return
+    } else if (!isAppendMode) {
+      if (!tableNumber) {
+        setShowTableModal(true)
+        setOrderError('Please select an available dine-in table before placing your order.')
+        return
+      }
+      if (isSelectedTableUnavailable && matchedSelectedTable) {
+        const msg = formatUnavailableTableMessage(
+          matchedSelectedTable.tableNumber,
+          matchedSelectedTable.status
+        )
+        setTableSelectionError(msg)
+        setOrderError(msg)
+        setShowTableModal(true)
+        return
+      }
     }
 
     try {
@@ -1105,7 +1249,11 @@ export function CustomerMenu() {
         const appendPayload = {
           orderId: appendTargetOrder.id,
           tableNumber: finalTable || appendTargetOrder.tableNumber || '1',
-          customerName: typeof window !== 'undefined' ? localStorage.getItem('rms_customer_name') || 'Table Guest' : 'Table Guest',
+          customerName:
+            customerAuth?.name ||
+            (typeof window !== 'undefined' ? localStorage.getItem('rms_customer_name') : null) ||
+            'Table Guest',
+          customerPhone: customerWhatsappPhone.trim() || undefined,
           items: cartItemList.map((ci) => ({
             menuItemId: ci.menuItem.id,
             name: ci.menuItem.name,
@@ -1141,9 +1289,16 @@ export function CustomerMenu() {
 
       const payload = {
         tableNumber: finalTable,
+        tableId:
+          orderMode === 'dine_in' ? matchedSelectedTable?.id || selectedTableId || undefined : undefined,
         orderType: orderMode === 'drive_in' ? 'drive_in' : 'dine_in',
         status: 'pending',
         notes: orderNotes.trim() || undefined,
+        customerName:
+          customerAuth?.name ||
+          (typeof window !== 'undefined' ? localStorage.getItem('rms_customer_name') : null) ||
+          undefined,
+        customerPhone: customerWhatsappPhone.trim() || undefined,
         totalAmount: cartGrandTotal,
         couponCode: appliedCoupon && isCouponMinOrderMet ? appliedCoupon : undefined,
         discountAmount: appliedCoupon && isCouponMinOrderMet ? discountAmount : 0,
@@ -1173,6 +1328,25 @@ export function CustomerMenu() {
       const json = await res.json()
 
       if (!res.ok || !json.success) {
+        if (
+          res.status === 409 ||
+          json.code === 'TABLE_OCCUPIED' ||
+          json.code === 'TABLE_UNAVAILABLE' ||
+          json.code === 'TABLE_NOT_FOUND'
+        ) {
+          loadLiveTables()
+          setTableSelectionError(
+            json.message || 'This table is no longer available. Please pick an available table.'
+          )
+          setTableNumber('')
+          setSelectedTableId(null)
+          setManualTableInput('')
+          setIsTableLocked(false)
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('rms_customer_table')
+          }
+          setShowTableModal(true)
+        }
         throw new Error(json.message || 'Failed to place order. Please try again.')
       }
 
@@ -1218,8 +1392,9 @@ export function CustomerMenu() {
       )
       // Instantly open live order tracker
       setShowOrdersModal(true)
-      // Background non-blocking table orders & auth state refresh
+      // Background non-blocking table orders, table availability & auth state refresh
       fetchTableOrders()
+      loadLiveTables()
       refreshCustomerAuth()
     } catch (err: any) {
       console.error('Order creation failed:', err)
@@ -1652,53 +1827,142 @@ export function CustomerMenu() {
             <div>
               <h2 className="text-lg font-black text-foreground">Select Dine-In Table</h2>
               <p className="text-xs text-muted-foreground mt-1">
-                Choose or type your table number for direct table service.
+                Only available tables can be booked. Occupied tables are disabled.
               </p>
             </div>
 
-            {/* Quick Table Selection Pills */}
-            <div className="space-y-1.5 text-left pt-1">
-              <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block text-center">
-                Quick Select Table
-              </label>
-              <div className="flex flex-wrap gap-1.5 justify-center">
-                {['1', '2', '3', '4', '5', '6', '7', '8'].map((t) => {
-                  const isSelected = manualTableInput === t || tableNumber === t
-                  return (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => {
-                        setManualTableInput(t)
-                        setTableNumber(t)
-                        setOrderMode('dine_in')
-                        setIsTableLocked(true)
-                        if (typeof window !== 'undefined') {
-                          localStorage.setItem('rms_customer_table', t)
-                          localStorage.setItem('rms_customer_order_mode', 'dine_in')
-                        }
-                        setShowTableModal(false)
-                      }}
-                      className={cn(
-                        'px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer',
-                        isSelected
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                          : 'bg-muted/60 hover:bg-muted text-foreground border-border/70'
-                      )}
-                    >
-                      Table {t}
-                    </button>
-                  )
-                })}
+            {tableSelectionError && (
+              <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/25 text-destructive text-xs font-semibold flex items-start gap-2 text-left">
+                <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                <span>{tableSelectionError}</span>
               </div>
+            )}
+
+            {/* Live Table Selection Grid */}
+            <div className="space-y-2 text-left pt-1">
+              <div className="flex items-center justify-between px-1">
+                <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                  Restaurant Tables ({availableDiningTables.length} Available)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => loadLiveTables()}
+                  className="text-[10px] font-bold text-primary hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <RefreshCw className="size-2.5" />
+                  Refresh
+                </button>
+              </div>
+
+              {tablesLoading && diningTables.length === 0 ? (
+                <div className="py-6 text-center text-xs text-muted-foreground">
+                  Checking live table availability...
+                </div>
+              ) : diningTables.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-0.5">
+                  {diningTables.map((t) => {
+                    const isAvailable = isTableAvailableStatus(t.status)
+                    const isSelected =
+                      Boolean(tableNumber) &&
+                      (selectedTableId === t.id ||
+                        t.tableNumber.toLowerCase() === tableNumber.toLowerCase())
+                    const statusLabel =
+                      t.status === 'occupied'
+                        ? 'Occupied'
+                        : t.status === 'reserved'
+                        ? 'Reserved'
+                        : t.status === 'cleaning'
+                        ? 'Cleaning'
+                        : isAvailable
+                        ? 'Available'
+                        : 'Unavailable'
+
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        disabled={!isAvailable}
+                        onClick={() => selectAvailableTable(t.tableNumber, t.id)}
+                        title={
+                          isAvailable
+                            ? `Select ${t.tableNumber} (${t.capacity} seats)`
+                            : formatUnavailableTableMessage(t.tableNumber, t.status)
+                        }
+                        className={cn(
+                          'flex flex-col items-start gap-1 p-2.5 rounded-xl border text-left transition-all',
+                          isAvailable
+                            ? isSelected
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs cursor-pointer'
+                              : 'bg-emerald-500/5 hover:bg-emerald-500/15 text-foreground border-emerald-500/30 cursor-pointer'
+                            : 'bg-muted/40 text-muted-foreground border-border/60 opacity-60 cursor-not-allowed'
+                        )}
+                      >
+                        <div className="w-full flex items-center justify-between gap-1">
+                          <span className="text-xs font-extrabold truncate">{t.tableNumber}</span>
+                          <span
+                            className={cn(
+                              'text-[9px] font-bold px-1.5 py-0.5 rounded-md shrink-0',
+                              isSelected
+                                ? 'bg-white/20 text-white'
+                                : isAvailable
+                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                                : 'bg-destructive/15 text-destructive'
+                            )}
+                          >
+                            {statusLabel}
+                          </span>
+                        </div>
+                        <span
+                          className={cn(
+                            'text-[10px]',
+                            isSelected ? 'text-white/85' : 'text-muted-foreground'
+                          )}
+                        >
+                          Seats {t.capacity}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5 justify-center">
+                  {['1', '2', '3', '4', '5', '6', '7', '8'].map((t) => {
+                    const isSelected = manualTableInput === t || tableNumber === t
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => selectAvailableTable(t)}
+                        className={cn(
+                          'px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer',
+                          isSelected
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                            : 'bg-muted/60 hover:bg-muted text-foreground border-border/70'
+                        )}
+                      >
+                        Table {t}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+
+              {diningTables.length > 0 && availableDiningTables.length === 0 && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 font-semibold text-center pt-1">
+                  All dine-in tables are currently occupied. Please wait or use Car Drive-In.
+                </p>
+              )}
             </div>
 
             <form onSubmit={handleSetTable} className="space-y-3 pt-1">
               <Input
                 type="text"
-                placeholder="Or custom table (e.g. 10, VIP-1)"
+                placeholder="Or enter available table (e.g. T2, Table 4)"
                 value={manualTableInput}
-                onChange={(e) => setManualTableInput(e.target.value)}
+                onChange={(e) => {
+                  setManualTableInput(e.target.value)
+                  setTableSelectionError(null)
+                }}
                 autoFocus
                 className="text-center font-bold text-base h-11 rounded-xl"
               />
@@ -1707,7 +1971,7 @@ export function CustomerMenu() {
                 disabled={!manualTableInput.trim()}
                 className="w-full h-11 rounded-xl font-bold cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white"
               >
-                Confirm Table
+                Confirm Available Table
               </Button>
             </form>
 
@@ -3051,26 +3315,34 @@ export function CustomerMenu() {
               <div className="p-4 bg-primary/5 border-b border-primary/10 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Lock className="size-4 text-emerald-600 dark:text-emerald-400" />
+                    {tableNumber && !isSelectedTableUnavailable ? (
+                      <Lock className="size-4 text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <AlertCircle className="size-4 text-amber-500" />
+                    )}
                     <div>
                       <p className="text-[11px] text-muted-foreground font-medium">Ordering For</p>
-                      <p className="text-sm font-extrabold text-foreground">{displayTableBadge}</p>
+                      <p className="text-sm font-extrabold text-foreground">
+                        {tableNumber ? displayTableBadge : 'Select Available Table'}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <Badge variant="outline" className="text-[10px] bg-background text-muted-foreground">
-                      Locked to Session
-                    </Badge>
+                    {tableNumber && !isSelectedTableUnavailable && (
+                      <Badge variant="outline" className="text-[10px] bg-background text-muted-foreground">
+                        Available
+                      </Badge>
+                    )}
                     <Button
-                      variant="ghost"
+                      variant={tableNumber && !isSelectedTableUnavailable ? 'ghost' : 'outline'}
                       size="sm"
                       onClick={() => {
                         setManualTableInput(tableNumber)
                         setShowTableModal(true)
                       }}
-                      className="h-6 text-[10px] px-2 text-primary hover:bg-primary/10"
+                      className="h-6 text-[10px] px-2 text-primary hover:bg-primary/10 cursor-pointer"
                     >
-                      Change
+                      {tableNumber && !isSelectedTableUnavailable ? 'Change' : 'Select Table'}
                     </Button>
                   </div>
                 </div>
@@ -3221,19 +3493,49 @@ export function CustomerMenu() {
                 ))
               )}
 
-              {/* Special Instructions */}
+              {/* WhatsApp Number & Special Instructions */}
               {cartItemList.length > 0 && (
-                <div className="pt-2">
-                  <label className="text-xs font-semibold text-muted-foreground mb-1 block">
-                    Special Instructions (optional)
-                  </label>
-                  <Textarea
-                    placeholder="e.g. Less spicy, allergy to peanuts, extra lime..."
-                    value={orderNotes}
-                    onChange={(e) => setOrderNotes(e.target.value)}
-                    rows={2}
-                    className="text-xs resize-none rounded-xl"
-                  />
+                <div className="pt-2 space-y-2.5">
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1 flex items-center justify-between">
+                      <span>WhatsApp Number for Digital Bill (optional)</span>
+                      {customerWhatsappPhone.trim() && (
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                          Bill Ready
+                        </span>
+                      )}
+                    </label>
+                    <Input
+                      type="tel"
+                      inputMode="tel"
+                      placeholder="+91 98XXXXXXXX (to receive WhatsApp bill)"
+                      value={customerWhatsappPhone}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        setCustomerWhatsappPhone(val)
+                        try {
+                          if (val.trim()) {
+                            localStorage.setItem('rms_customer_phone', val.trim())
+                          } else {
+                            localStorage.removeItem('rms_customer_phone')
+                          }
+                        } catch {}
+                      }}
+                      className="h-9 text-xs rounded-xl"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1 block">
+                      Special Instructions (optional)
+                    </label>
+                    <Textarea
+                      placeholder="e.g. Less spicy, allergy to peanuts, extra lime..."
+                      value={orderNotes}
+                      onChange={(e) => setOrderNotes(e.target.value)}
+                      rows={2}
+                      className="text-xs resize-none rounded-xl"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -3548,6 +3850,8 @@ export function CustomerMenu() {
         tableNumber={orderMode === 'drive_in' ? displayTableBadge : tableNumber}
         tableOrders={tableOrders}
         selectedOrderId={selectedOrderIdForBill}
+        defaultCustomerPhone={customerWhatsappPhone}
+        defaultCustomerName={customerAuth?.name || ''}
         onSuccess={() => {
           setSelectedOrderIdForBill(null)
           fetchTableOrders()

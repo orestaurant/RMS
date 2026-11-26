@@ -5,54 +5,64 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { getMockAuthContext } from '@/api/middleware/auth'
+import { getMockAuthContext, extractAuthContext } from '@/api/middleware/auth'
 import { extractTenantContext } from '@/api/middleware/tenant'
 import { successResponse, errorResponse } from '@/api/utils/responses'
 import { ValidationError } from '@/api/utils/errors'
 import { invalidatePOSTablesCache } from '@/lib/pos-cache'
+import { invalidateDashboardStatsCache } from '@/lib/dashboard-cache'
+import { ACTIVE_ORDER_DB_STATUSES, getEffectiveTableStatus } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 export async function GET(request: NextRequest) {
   try {
-    const authContext = getMockAuthContext()
+    const requestedBranchId = request.nextUrl.searchParams.get('branchId')
+    const isPublicAvailability = request.nextUrl.searchParams.get('public') === '1'
+    const authContext = extractAuthContext(request)
     const tenantContext = extractTenantContext(authContext)
-    let branchId = request.nextUrl.searchParams.get('branchId') || tenantContext.branchId
 
-    if (!branchId) {
-      const defaultBranch = await prisma.branch.findFirst({
-        where: { organizationId: tenantContext.organizationId },
-        select: { id: true },
+    let branchId = requestedBranchId || (authContext.userId ? tenantContext.branchId : '')
+    let organizationId = tenantContext.organizationId
+
+    if (requestedBranchId) {
+      const branch = await prisma.branch.findUnique({
+        where: { id: requestedBranchId },
+        select: { id: true, organizationId: true },
       })
-      branchId = defaultBranch?.id || 'da3f7b7b-3e87-44cb-a69c-27b3e886922e'
+      if (branch) {
+        branchId = branch.id
+        organizationId = branch.organizationId
+      }
+    } else if (!branchId) {
+      const primaryBranch = await prisma.branch.findFirst({
+        orderBy: { isPrimary: 'desc' },
+        select: { id: true, organizationId: true },
+      })
+      if (primaryBranch) {
+        branchId = primaryBranch.id
+        organizationId = primaryBranch.organizationId
+      } else {
+        branchId = tenantContext.branchId
+      }
     }
 
+    const sessionCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000)
     const tables = await prisma.restaurantTable.findMany({
       where: {
-        organizationId: tenantContext.organizationId,
-        branchId: branchId,
+        organizationId,
+        branchId,
         deletedAt: null,
       },
       include: {
         orders: {
           where: {
-            status: {
-              in: [
-                'pending',
-                'PENDING',
-                'accepted',
-                'ACCEPTED',
-                'confirmed',
-                'preparing',
-                'PREPARING',
-                'ready',
-                'READY',
-                'served',
-                'SERVED',
-              ],
-            },
-            createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+            deletedAt: null,
+            isBilled: false,
+            status: { in: [...ACTIVE_ORDER_DB_STATUSES] as any[] },
+            paymentStatus: { notIn: ['completed', 'refunded', 'cancelled'] },
+            createdAt: { gte: sessionCutoff },
           },
           orderBy: { createdAt: 'desc' },
           take: 1,
@@ -64,19 +74,21 @@ export async function GET(request: NextRequest) {
             createdAt: true,
           },
         },
-        reservations: {
-          where: {
-            status: { in: ['confirmed', 'pending', 'checked_in'] },
-          },
-          orderBy: { reservationTime: 'asc' },
-          take: 1,
-          select: {
-            id: true,
-            guestName: true,
-            numberOfGuests: true,
-            reservationTime: true,
-          },
-        },
+        reservations: isPublicAvailability
+          ? false
+          : {
+              where: {
+                status: { in: ['confirmed', 'pending', 'checked_in'] },
+              },
+              orderBy: { reservationTime: 'asc' },
+              take: 1,
+              select: {
+                id: true,
+                guestName: true,
+                numberOfGuests: true,
+                reservationTime: true,
+              },
+            },
       },
       orderBy: [
         { section: 'asc' },
@@ -86,12 +98,26 @@ export async function GET(request: NextRequest) {
 
     const formatted = tables.map((t) => {
       const activeOrder = t.orders[0]
-      const activeRes = t.reservations[0]
+      const activeRes = Array.isArray((t as any).reservations) ? (t as any).reservations[0] : undefined
       const meta = (t.metadata as Record<string, any>) || {}
 
-      // Determine display status (customStatus e.g. cleaning or out_of_service, else DB enum)
-      const displayStatus = meta.customStatus || t.status
+      // Determine display status (customStatus e.g. cleaning or out_of_service, active unbilled order, else DB enum)
+      const baseStatus = getEffectiveTableStatus(t.status, meta)
+      const displayStatus =
+        baseStatus === 'available' && activeOrder ? 'occupied' : baseStatus
       const isOccupied = displayStatus === 'occupied'
+
+      if (isPublicAvailability) {
+        return {
+          id: t.id,
+          number: parseInt(t.tableNumber) || t.tableNumber,
+          tableNumber: t.tableNumber,
+          capacity: t.capacity,
+          section: (t.section || 'indoor').toLowerCase(),
+          rawSection: t.section || 'Indoor',
+          status: displayStatus,
+        }
+      }
 
       return {
         id: t.id,
@@ -299,6 +325,7 @@ export async function PATCH(request: NextRequest) {
     })
 
     invalidatePOSTablesCache()
+    invalidateDashboardStatsCache(updated.branchId)
     return NextResponse.json(successResponse(updated, 'Table updated successfully'), {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',

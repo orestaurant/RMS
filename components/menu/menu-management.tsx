@@ -183,6 +183,10 @@ export function MenuManagement() {
   // Add / Manage Category form state
   const [catName, setCatName] = useState('')
   const [catDescription, setCatDescription] = useState('')
+  const [editingCatId, setEditingCatId] = useState<string | null>(null)
+  const [editCatName, setEditCatName] = useState('')
+  const [editCatDescription, setEditCatDescription] = useState('')
+  const [savingCatId, setSavingCatId] = useState<string | null>(null)
   const [deletingCatId, setDeletingCatId] = useState<string | null>(null)
   const [confirmDeleteCatId, setConfirmDeleteCatId] = useState<string | null>(null)
   const [reassignTargetCatId, setReassignTargetCatId] = useState<string>('')
@@ -434,28 +438,60 @@ export function MenuManagement() {
     setEditItemOpen(true)
   }
 
-  // Handle Edit Item Submit
+  // Handle Edit Item Submit (0ms optimistic save with automatic rollback on failure)
   const handleUpdateItem = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingItem) return
 
-    setSaving(true)
+    const targetItem = editingItem
+    const nextName = name.trim()
+    const nextPrice = parseFloat(price)
+    const nextCostPrice = costPrice ? parseFloat(costPrice) : undefined
+    const nextDescription = description.trim()
+    const nextPrepTime = parseInt(prepTime) || 15
+    const nextImage = image.trim()
+    const matchedCat = categories.find((c) => c.id === categoryId)
+
+    const optimisticItem: MenuItem = {
+      ...targetItem,
+      name: nextName,
+      categoryId,
+      category: matchedCat?.name || targetItem.category,
+      price: !isNaN(nextPrice) ? nextPrice : targetItem.price,
+      costPrice: nextCostPrice,
+      description: nextDescription,
+      isVeg,
+      isSpicy,
+      prepTime: nextPrepTime,
+      isAvailable,
+      image: nextImage,
+    }
+
+    const previousItems = items
+    setItems((prev) => prev.map((i) => (i.id === targetItem.id ? optimisticItem : i)))
+    setEditItemOpen(false)
+    setEditingItem(null)
+    setImage('')
+    setImageLoadError(false)
+    setFeedback({ type: 'success', message: `Item "${nextName}" updated!` })
+    setTimeout(() => setFeedback(null), 3000)
+
     try {
-      const res = await fetch(`/api/menu/items/${editingItem.id}`, {
+      const res = await fetch(`/api/menu/items/${targetItem.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: name.trim(),
+          name: nextName,
           categoryId,
-          price: parseFloat(price),
-          costPrice: costPrice ? parseFloat(costPrice) : undefined,
-          description: description.trim(),
+          price: nextPrice,
+          costPrice: nextCostPrice,
+          description: nextDescription,
           isVeg,
           isSpicy,
-          prepTime: parseInt(prepTime) || 15,
+          prepTime: nextPrepTime,
           isAvailable,
-          imageUrl: image.trim(),
-          image: image.trim(),
+          imageUrl: nextImage,
+          image: nextImage,
         }),
       })
 
@@ -464,19 +500,13 @@ export function MenuManagement() {
         throw new Error(json.message || 'Failed to update item')
       }
 
-      setItems((prev) => prev.map((i) => (i.id === editingItem.id ? json.data : i)))
-      fetchCategories()
-      setEditItemOpen(false)
-      setEditingItem(null)
-      setImage('')
-      setImageLoadError(false)
-
-      setFeedback({ type: 'success', message: `Item "${json.data.name}" updated!` })
-      setTimeout(() => setFeedback(null), 3000)
+      if (json.data) {
+        setItems((prev) => prev.map((i) => (i.id === targetItem.id ? json.data : i)))
+      }
     } catch (err: any) {
-      alert(err.message || 'Error updating item')
-    } finally {
-      setSaving(false)
+      setItems(previousItems)
+      setFeedback({ type: 'error', message: err.message || 'Error updating item' })
+      setTimeout(() => setFeedback(null), 4000)
     }
   }
 
@@ -505,7 +535,9 @@ export function MenuManagement() {
         throw new Error(json.message || 'Failed to create category')
       }
 
-      await fetchCategories()
+      if (json.data) {
+        setCategories((prev) => [...prev.filter((c) => c.id !== json.data.id), json.data])
+      }
       setAddCatOpen(false)
       setCatName('')
       setCatDescription('')
@@ -517,6 +549,90 @@ export function MenuManagement() {
       setCatError(err.message || 'Error creating category')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Handle Inline Category Edit Save (0ms optimistic update + fast PATCH sync)
+  const handleUpdateCategory = async (cat: MenuCategory) => {
+    const trimmedName = editCatName.trim()
+    const trimmedDesc = editCatDescription.trim()
+
+    if (!trimmedName) {
+      setCatError('Category name is required')
+      return
+    }
+    if (trimmedName.toLowerCase() === 'inventory') {
+      setCatError('"Inventory" is a reserved category name')
+      return
+    }
+    const duplicate = categories.find(
+      (c) => c.id !== cat.id && c.name.trim().toLowerCase() === trimmedName.toLowerCase()
+    )
+    if (duplicate) {
+      setCatError(`Category "${trimmedName}" already exists`)
+      return
+    }
+
+    // No-op fast exit if unchanged
+    if (trimmedName === cat.name && trimmedDesc === (cat.description || '')) {
+      setEditingCatId(null)
+      setCatError(null)
+      return
+    }
+
+    const previousCategories = categories
+    const previousItems = items
+
+    // 1. Instant 0ms optimistic UI update
+    setCatError(null)
+    setEditingCatId(null)
+    setSavingCatId(cat.id)
+    setCategories((prev) =>
+      prev.map((c) =>
+        c.id === cat.id ? { ...c, name: trimmedName, description: trimmedDesc } : c
+      )
+    )
+    if (trimmedName !== cat.name) {
+      setItems((prev) =>
+        prev.map((i) =>
+          i.categoryId === cat.id || i.category.toLowerCase() === cat.name.toLowerCase()
+            ? { ...i, category: trimmedName }
+            : i
+        )
+      )
+    }
+    setFeedback({ type: 'success', message: `Category "${trimmedName}" updated!` })
+    setTimeout(() => setFeedback(null), 3000)
+
+    // 2. Persist in DB without blocking UI close/interaction
+    try {
+      const res = await fetch(`/api/menu/categories/${encodeURIComponent(cat.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: trimmedName,
+          description: trimmedDesc,
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to update category')
+      }
+      if (json.data) {
+        setCategories((prev) =>
+          prev.map((c) => (c.id === cat.id ? { ...c, ...json.data } : c))
+        )
+      }
+    } catch (err: any) {
+      // Revert optimistic changes if server validation fails
+      setCategories(previousCategories)
+      setItems(previousItems)
+      setEditingCatId(cat.id)
+      setEditCatName(trimmedName)
+      setEditCatDescription(trimmedDesc)
+      setCatError(err.message || 'Failed to save category changes')
+    } finally {
+      setSavingCatId(null)
     }
   }
 
@@ -1535,6 +1651,9 @@ export function MenuManagement() {
           if (!open) {
             setCatError(null)
             setConfirmDeleteCatId(null)
+            setEditingCatId(null)
+            setEditCatName('')
+            setEditCatDescription('')
             setReassignTargetCatId('')
           }
         }}
@@ -1543,7 +1662,7 @@ export function MenuManagement() {
           <DialogHeader className="shrink-0">
             <DialogTitle>Manage Menu Categories</DialogTitle>
             <DialogDescription>
-              Create a new category or delete existing categories from your menu.
+              Create, edit, or delete menu categories from your menu.
             </DialogDescription>
           </DialogHeader>
 
@@ -1607,12 +1726,12 @@ export function MenuManagement() {
               </DialogFooter>
             </form>
 
-            {/* Existing Categories List with Delete Option */}
+            {/* Existing Categories List with Edit & Delete Options */}
             {categories.length > 0 && (
               <div className="border-t border-border/70 pt-3.5 space-y-2.5">
                 <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                   <span>Existing Categories ({categories.length})</span>
-                  <span className="font-normal normal-case text-right">Click trash to delete</span>
+                  <span className="font-normal normal-case text-right">Edit or delete</span>
                 </div>
 
                 <div className="space-y-2">
@@ -1620,8 +1739,10 @@ export function MenuManagement() {
                   const count = items.filter(
                     (i) => i.categoryId === cat.id || i.category.toLowerCase() === cat.name.toLowerCase()
                   ).length
+                  const isEditing = editingCatId === cat.id
                   const isConfirming = confirmDeleteCatId === cat.id
                   const isDeleting = deletingCatId === cat.id
+                  const isSavingCat = savingCatId === cat.id
                   const otherCategories = categories.filter((c) => c.id !== cat.id)
 
                   return (
@@ -1629,41 +1750,151 @@ export function MenuManagement() {
                       key={cat.id}
                       className="rounded-xl border border-border/70 bg-muted/25 p-3 text-xs space-y-2.5"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-foreground truncate">{cat.name}</span>
-                            <Badge
+                      {isEditing ? (
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault()
+                            handleUpdateCategory(cat)
+                          }}
+                          className="space-y-2"
+                        >
+                          <Input
+                            value={editCatName}
+                            onChange={(e) => setEditCatName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') {
+                                setEditingCatId(null)
+                                setCatError(null)
+                              }
+                            }}
+                            placeholder="Category name"
+                            autoFocus
+                            required
+                            className="h-8 text-xs font-semibold bg-background"
+                          />
+                          <Input
+                            value={editCatDescription}
+                            onChange={(e) => setEditCatDescription(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') {
+                                setEditingCatId(null)
+                                setCatError(null)
+                              }
+                            }}
+                            placeholder="Description (optional)"
+                            className="h-8 text-xs bg-background"
+                          />
+                          <div className="flex items-center justify-end gap-1.5 pt-0.5">
+                            <Button
+                              type="button"
                               variant="outline"
-                              className="text-[10px] h-4.5 px-1.5 font-mono text-muted-foreground"
+                              size="sm"
+                              onClick={() => {
+                                setEditingCatId(null)
+                                setCatError(null)
+                              }}
+                              className="h-7 px-2.5 text-[11px] cursor-pointer"
                             >
-                              {count} {count === 1 ? 'item' : 'items'}
-                            </Badge>
+                              Cancel
+                            </Button>
+                            <Button
+                              type="submit"
+                              size="sm"
+                              disabled={!editCatName.trim() || isSavingCat}
+                              className="h-7 px-3 text-[11px] font-bold cursor-pointer"
+                            >
+                              {isSavingCat ? (
+                                <Loader2 className="size-3 animate-spin mr-1" />
+                              ) : null}
+                              Save
+                            </Button>
                           </div>
-                          {cat.description && (
-                            <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                              {cat.description}
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-1 shrink-0">
-                          {isConfirming && count === 0 ? (
-                            <>
-                              <Button
-                                type="button"
-                                variant="destructive"
-                                size="sm"
-                                disabled={isDeleting}
-                                onClick={() => handleDeleteCategory(cat)}
-                                className="h-7 px-2.5 text-[11px] font-bold cursor-pointer"
+                        </form>
+                      ) : (
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-foreground truncate">{cat.name}</span>
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] h-4.5 px-1.5 font-mono text-muted-foreground"
                               >
-                                {isDeleting ? (
-                                  <Loader2 className="size-3 animate-spin" />
-                                ) : (
-                                  'Confirm'
-                                )}
-                              </Button>
+                                {count} {count === 1 ? 'item' : 'items'}
+                              </Badge>
+                            </div>
+                            {cat.description && (
+                              <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+                                {cat.description}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            {isConfirming && count === 0 ? (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  size="sm"
+                                  disabled={isDeleting}
+                                  onClick={() => handleDeleteCategory(cat)}
+                                  className="h-7 px-2.5 text-[11px] font-bold cursor-pointer"
+                                >
+                                  {isDeleting ? (
+                                    <Loader2 className="size-3 animate-spin" />
+                                  ) : (
+                                    'Confirm'
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  disabled={isDeleting}
+                                  onClick={() => setConfirmDeleteCatId(null)}
+                                  className="size-7 cursor-pointer"
+                                  title="Cancel delete"
+                                >
+                                  <X className="size-3.5" />
+                                </Button>
+                              </>
+                            ) : !isConfirming ? (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  disabled={Boolean(deletingCatId)}
+                                  onClick={() => {
+                                    setCatError(null)
+                                    setConfirmDeleteCatId(null)
+                                    setEditingCatId(cat.id)
+                                    setEditCatName(cat.name)
+                                    setEditCatDescription(cat.description || '')
+                                  }}
+                                  className="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
+                                  title={`Edit ${cat.name}`}
+                                >
+                                  <Edit2 className="size-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  disabled={Boolean(deletingCatId)}
+                                  onClick={() => {
+                                    setCatError(null)
+                                    setEditingCatId(null)
+                                    setConfirmDeleteCatId(cat.id)
+                                    setReassignTargetCatId(otherCategories[0]?.id || '')
+                                  }}
+                                  className="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                                  title={`Delete ${cat.name}`}
+                                >
+                                  <Trash2 className="size-3.5" />
+                                </Button>
+                              </>
+                            ) : (
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -1671,42 +1902,14 @@ export function MenuManagement() {
                                 disabled={isDeleting}
                                 onClick={() => setConfirmDeleteCatId(null)}
                                 className="size-7 cursor-pointer"
-                                title="Cancel delete"
+                                title="Cancel"
                               >
                                 <X className="size-3.5" />
                               </Button>
-                            </>
-                          ) : !isConfirming ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              disabled={Boolean(deletingCatId)}
-                              onClick={() => {
-                                setCatError(null)
-                                setConfirmDeleteCatId(cat.id)
-                                setReassignTargetCatId(otherCategories[0]?.id || '')
-                              }}
-                              className="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
-                              title={`Delete ${cat.name}`}
-                            >
-                              <Trash2 className="size-3.5" />
-                            </Button>
-                          ) : (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              disabled={isDeleting}
-                              onClick={() => setConfirmDeleteCatId(null)}
-                              className="size-7 cursor-pointer"
-                              title="Cancel"
-                            >
-                              <X className="size-3.5" />
-                            </Button>
-                          )}
+                            )}
+                          </div>
                         </div>
-                      </div>
+                      )}
 
                       {/* Safe inline options when deleting a category that still has items */}
                       {isConfirming && count > 0 && (

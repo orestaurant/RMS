@@ -1,6 +1,132 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { invalidateAllMenuCaches } from '@/lib/menu-cache'
+import { invalidateAllMenuCaches, updateCachedCategory } from '@/lib/menu-cache'
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const body = await request.json().catch(() => null)
+
+    if (!id) {
+      return NextResponse.json(
+        { success: false, message: 'Category ID is required' },
+        { status: 400 }
+      )
+    }
+
+    const name = body?.name !== undefined ? String(body.name).trim() : undefined
+    const description =
+      body?.description !== undefined
+        ? body.description
+          ? String(body.description).trim()
+          : null
+        : undefined
+
+    if (name !== undefined && !name) {
+      return NextResponse.json(
+        { success: false, message: 'Category name is required' },
+        { status: 400 }
+      )
+    }
+
+    if (name && name.toLowerCase() === 'inventory') {
+      return NextResponse.json(
+        { success: false, message: '"Inventory" is a reserved category name' },
+        { status: 400 }
+      )
+    }
+
+    if (name === undefined && description === undefined) {
+      return NextResponse.json(
+        { success: false, message: 'Nothing to update' },
+        { status: 400 }
+      )
+    }
+
+    // Single round-trip lookup to verify existence & detect duplicate name in the same restaurant
+    const matches = await prisma.menuCategory.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          { id },
+          ...(name ? [{ name: { equals: name, mode: 'insensitive' as const } }] : []),
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        restaurantId: true,
+      },
+    })
+
+    const existing = matches.find((c) => c.id === id)
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, message: 'Category not found' },
+        { status: 404 }
+      )
+    }
+
+    if (name) {
+      const duplicate = matches.find(
+        (c) =>
+          c.id !== id &&
+          c.restaurantId === existing.restaurantId &&
+          c.name.toLowerCase() === name.toLowerCase()
+      )
+      if (duplicate) {
+        return NextResponse.json(
+          { success: false, message: `Category "${name}" already exists` },
+          { status: 409 }
+        )
+      }
+    }
+
+    const updated = await prisma.menuCategory.update({
+      where: { id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(description !== undefined ? { description } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        displayOrder: true,
+        isActive: true,
+        status: true,
+      },
+    })
+
+    updateCachedCategory(id, {
+      name: updated.name,
+      description: updated.description || '',
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: 'Category updated successfully',
+      data: {
+        id: updated.id,
+        name: updated.name,
+        description: updated.description || '',
+        displayOrder: updated.displayOrder,
+        isActive: updated.isActive,
+        status: updated.status,
+      },
+    })
+  } catch (error: any) {
+    console.error('Error updating category:', error)
+    return NextResponse.json(
+      { success: false, message: error?.message || 'Failed to update category' },
+      { status: 500 }
+    )
+  }
+}
 
 export async function DELETE(
   request: NextRequest,

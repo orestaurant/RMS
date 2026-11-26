@@ -10,7 +10,15 @@ import {
   invalidateLiveOrdersCache,
 } from '@/lib/kds-utils'
 import { invalidateDashboardStatsCache } from '@/lib/dashboard-cache'
+import { invalidatePOSTablesCache } from '@/lib/pos-cache'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
+import { removeOrderNotifications } from '@/lib/notifications-store'
+import { getEffectiveTableStatus, formatUnavailableTableMessage } from '@/lib/utils'
+import {
+  resolveDineInTable,
+  validateAndClaimDineInTable,
+  TableBookingConflictError,
+} from '@/api/services/tables.service'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -645,10 +653,12 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json().catch(() => ({}))
-    const requestedTable = body.tableNumber ? String(body.tableNumber).trim() : 'Table 1'
+    const requestedTableNum = body.tableNumber ? String(body.tableNumber).trim() : null
+    const requestedTableId = body.tableId ? String(body.tableId).trim() : null
 
     // 1. Resolve restaurant and branch
     let branch = await prisma.branch.findFirst({
+      orderBy: { isPrimary: 'desc' },
       include: { restaurant: true },
     })
 
@@ -658,6 +668,62 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    // 1b. Resolve target dine-in table and ensure it is strictly available
+    let resolvedTable =
+      requestedTableNum || requestedTableId
+        ? await resolveDineInTable(prisma, {
+            branchId: branch.id,
+            tableId: requestedTableId,
+            tableNumber: requestedTableNum,
+          })
+        : await prisma.restaurantTable.findFirst({
+            where: {
+              branchId: branch.id,
+              deletedAt: null,
+              status: 'available',
+            },
+            orderBy: { tableNumber: 'asc' },
+            select: { id: true, tableNumber: true, status: true, metadata: true },
+          })
+
+    if (!resolvedTable) {
+      const hasTables =
+        (await prisma.restaurantTable.count({
+          where: { branchId: branch.id, deletedAt: null },
+        })) > 0
+
+      if (hasTables) {
+        const message =
+          requestedTableNum || requestedTableId
+            ? `Table "${requestedTableNum || requestedTableId}" was not found. Please select an available table.`
+            : 'All dining tables are currently occupied. Please wait for an available table.'
+        return NextResponse.json(
+          {
+            success: false,
+            code: requestedTableNum || requestedTableId ? 'TABLE_NOT_FOUND' : 'TABLE_OCCUPIED',
+            message,
+          },
+          { status: requestedTableNum || requestedTableId ? 404 : 409 }
+        )
+      }
+    } else {
+      const effectiveStatus = getEffectiveTableStatus(resolvedTable.status, resolvedTable.metadata)
+      if (effectiveStatus !== 'available') {
+        return NextResponse.json(
+          {
+            success: false,
+            code: effectiveStatus === 'occupied' ? 'TABLE_OCCUPIED' : 'TABLE_UNAVAILABLE',
+            tableStatus: effectiveStatus,
+            tableNumber: resolvedTable.tableNumber,
+            message: formatUnavailableTableMessage(resolvedTable.tableNumber, effectiveStatus),
+          },
+          { status: 409 }
+        )
+      }
+    }
+
+    const requestedTable = resolvedTable?.tableNumber || requestedTableNum || 'Table 1'
 
     // 2. Fetch or ensure menu items for order
     let menuItems = await prisma.menuItem.findMany({
@@ -711,33 +777,43 @@ export async function POST(request: NextRequest) {
 
     const orderNumber = `ORD-CUST-${Date.now().toString().slice(-6)}`
 
-    // 3. Create the dynamic Order
-    const order = await prisma.order.create({
-      data: {
-        orderNumber,
-        branchId: branch.id,
-        restaurantId: branch.restaurantId,
-        organizationId: branch.organizationId,
-        customerId: session.customerId,
-        source: 'ONLINE',
-        orderType: 'dine_in',
-        status: 'pending',
-        subtotal: totalCalculated,
-        totalAmount: totalCalculated,
-        total: totalCalculated,
-        paymentStatus: 'pending',
-        metadata: {
-          tableNumber: requestedTable,
-          customerName: session.name || 'Customer',
+    // 3. Atomically claim table & create the dynamic Order
+    const order = await prisma.$transaction(async (tx) => {
+      if (resolvedTable) {
+        await validateAndClaimDineInTable(tx, {
+          table: resolvedTable,
+          isStaffPosOrder: false,
+        })
+      }
+
+      return tx.order.create({
+        data: {
+          orderNumber,
+          branchId: branch.id,
+          restaurantId: branch.restaurantId,
+          organizationId: branch.organizationId,
+          customerId: session.customerId,
+          tableId: resolvedTable?.id || null,
+          source: 'ONLINE',
+          orderType: 'dine_in',
+          status: 'pending',
+          subtotal: totalCalculated,
+          totalAmount: totalCalculated,
+          total: totalCalculated,
+          paymentStatus: 'pending',
+          metadata: {
+            tableNumber: requestedTable,
+            customerName: session.name || 'Customer',
+          },
+          items: {
+            create: itemsToCreate,
+          },
         },
-        items: {
-          create: itemsToCreate,
+        include: {
+          items: true,
+          customer: true,
         },
-      },
-      include: {
-        items: true,
-        customer: true,
-      },
+      })
     })
 
     // 4. Update customer order count (totalSpent is only updated once bill is paid/settled)
@@ -772,6 +848,7 @@ export async function POST(request: NextRequest) {
 
     // 6. Invalidate all caches so Admin and Staff see this order immediately
     invalidateDashboardStatsCache(branch.id)
+    invalidatePOSTablesCache()
     invalidateKDSCache()
     invalidateLiveOrdersCache()
 
@@ -794,6 +871,18 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error: any) {
+    if (error instanceof TableBookingConflictError) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: error.code,
+          tableStatus: error.tableStatus,
+          tableNumber: error.tableNumber,
+          message: error.message,
+        },
+        { status: error.statusCode }
+      )
+    }
     console.error('Error placing customer order:', error)
     return NextResponse.json(
       { success: false, message: error?.message || 'Failed to place test order' },
@@ -825,7 +914,14 @@ export async function DELETE(request: NextRequest) {
 
     const order = await prisma.order.findFirst({
       where: whereClause,
-      select: { id: true, orderNumber: true, status: true, branchId: true, customerId: true },
+      select: {
+        id: true,
+        orderNumber: true,
+        organizationId: true,
+        status: true,
+        branchId: true,
+        customerId: true,
+      },
     })
 
     if (!order) {
@@ -835,19 +931,22 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    // Soft delete & set cancelled status
-    await prisma.order.update({
-      where: { id: order.id },
-      data: {
-        deletedAt: new Date(),
-        status: 'cancelled',
-      },
-    })
-
-    // Recalculate customer's totalOrders and totalSpent if customerId is present
-    if (order.customerId) {
-      await syncCustomerOrderStats(order.customerId)
-    }
+    // Soft delete & purge order notifications in parallel
+    await Promise.all([
+      prisma.order.update({
+        where: { id: order.id },
+        data: {
+          deletedAt: new Date(),
+          status: 'cancelled',
+        },
+      }),
+      removeOrderNotifications({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        organizationId: order.organizationId,
+      }),
+      order.customerId ? syncCustomerOrderStats(order.customerId) : Promise.resolve(),
+    ])
 
     // Invalidate caches
     invalidateKDSCache()

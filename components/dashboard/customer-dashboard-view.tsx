@@ -14,6 +14,9 @@ import {
   Car,
   Plus,
   Star,
+  Gift,
+  Copy,
+  Check,
   Music,
   IndianRupee,
   CheckCircle2,
@@ -255,7 +258,7 @@ export function CustomerDashboardView() {
   const [showSongModal, setShowSongModal] = useState(false)
   const [showBillModal, setShowBillModal] = useState(false)
   const [selectedOrderIdForBill, setSelectedOrderIdForBill] = useState<string | null>(null)
-  const [selectedTableForBill, setSelectedTableForBill] = useState<string>('Table 1')
+  const [selectedTableForBill, setSelectedTableForBill] = useState<string>('')
   const profileRef = useRef<CustomerProfile | null>(null)
 
   // Menu discovery state (for Zomato-style "What's on your mind?" & "Chef's Picks")
@@ -264,6 +267,12 @@ export function CustomerDashboardView() {
   const [discoveryLoading, setDiscoveryLoading] = useState(true)
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({})
   const cravingsScrollRef = useRef<HTMLDivElement>(null)
+
+  // Review & 10% Off reward state synced from /api/customer/feedback
+  const [reviewDiscountPercent, setReviewDiscountPercent] = useState(10)
+  const [reviewDiscountEnabled, setReviewDiscountEnabled] = useState(true)
+  const [reviewCouponCode, setReviewCouponCode] = useState<string | null>(null)
+  const [copiedRewardCode, setCopiedRewardCode] = useState(false)
 
   // Server-side pagination state for Live Orders Tracker
   const [currentPage, setCurrentPage] = useState(1)
@@ -430,6 +439,37 @@ export function CustomerDashboardView() {
     }
   }, [])
 
+  // Fetch customer review reward status & discount settings
+  useEffect(() => {
+    let active = true
+    const loadReviewReward = async () => {
+      try {
+        const res = await fetch('/api/customer/feedback', { cache: 'no-store' })
+        if (!res.ok || !active) return
+        const json = await res.json()
+        if (!active || !json?.success || !json?.data) return
+        const d = json.data
+        if (d.settings) {
+          if (typeof d.settings.reviewDiscountPercent === 'number' && d.settings.reviewDiscountPercent > 0) {
+            setReviewDiscountPercent(d.settings.reviewDiscountPercent)
+          }
+          if (typeof d.settings.reviewDiscountEnabled === 'boolean') {
+            setReviewDiscountEnabled(d.settings.reviewDiscountEnabled)
+          }
+        }
+        if (d.alreadyReviewed && d.previousFeedback?.discountCode) {
+          setReviewCouponCode(String(d.previousFeedback.discountCode))
+        }
+      } catch (e) {
+        console.warn('Could not load review reward status:', e)
+      }
+    }
+    loadReviewReward()
+    return () => {
+      active = false
+    }
+  }, [])
+
   useEffect(() => {
     fetchCustomerData(currentPage > 1 || summary !== null, false)
   }, [fetchCustomerData])
@@ -468,7 +508,7 @@ export function CustomerDashboardView() {
   )
 
   const activeTableNumber = useMemo(
-    () => activeOrders.find((o) => o.tableNumber)?.tableNumber || 'Table 1',
+    () => activeOrders.find((o) => o.tableNumber)?.tableNumber || null,
     [activeOrders]
   )
 
@@ -477,16 +517,32 @@ export function CustomerDashboardView() {
     [activeOrders]
   )
 
+  const feedbackHref = useMemo(() => {
+    const params = new URLSearchParams()
+    if (activeTableNumber) params.set('table', activeTableNumber)
+    const primaryOrderId = activeOrders[0]?.id
+    if (primaryOrderId) params.set('orderId', primaryOrderId)
+    const qs = params.toString()
+    return qs ? `/customer/feedback?${qs}` : '/customer/feedback'
+  }, [activeTableNumber, activeOrders])
+
+  const handleCopyRewardCode = useCallback(() => {
+    if (!reviewCouponCode || typeof navigator === 'undefined' || !navigator.clipboard) return
+    navigator.clipboard.writeText(reviewCouponCode)
+    setCopiedRewardCode(true)
+    setTimeout(() => setCopiedRewardCode(false), 2000)
+  }, [reviewCouponCode])
+
   const openBillModalForOrder = useCallback(
     (order?: CustomerOrder) => {
       if (order) {
         setSelectedOrderIdForBill(order.id)
-        setSelectedTableForBill(order.tableNumber || activeTableNumber)
+        setSelectedTableForBill(order.tableNumber || activeTableNumber || '')
       } else {
         const firstOrder = activeOrders[0]
         const shouldUseSingleOrder = activeOrders.length === 1 || !firstOrder?.tableNumber
         setSelectedOrderIdForBill(shouldUseSingleOrder && firstOrder ? firstOrder.id : null)
-        setSelectedTableForBill(activeTableNumber)
+        setSelectedTableForBill(activeTableNumber || '')
       }
       setShowBillModal(true)
     },
@@ -754,9 +810,13 @@ export function CustomerDashboardView() {
                 return (
                   <Link
                     key={cat.id}
-                    href={`/menu?category=${encodeURIComponent(cat.name)}&table=${encodeURIComponent(
+                    href={
                       activeTableNumber
-                    )}`}
+                        ? `/menu?category=${encodeURIComponent(cat.name)}&table=${encodeURIComponent(
+                            activeTableNumber
+                          )}`
+                        : `/menu?category=${encodeURIComponent(cat.name)}`
+                    }
                     className="group flex flex-col items-center gap-2 shrink-0 w-22 sm:w-24 text-center"
                   >
                     <div
@@ -797,11 +857,13 @@ export function CustomerDashboardView() {
       )}
 
       {/* ── 4. 20-Second Live Chef Preparation Add-on Banner ─────────────────── */}
-      <LiveBatchAddonBanner
-        currentTableNumber={activeTableNumber}
-        customerName={customerName}
-        onOrderPlaced={fetchCustomerData}
-      />
+      {activeTableNumber && (
+        <LiveBatchAddonBanner
+          currentTableNumber={activeTableNumber}
+          customerName={customerName}
+          onOrderPlaced={fetchCustomerData}
+        />
+      )}
 
       {/* ── 5. Main Content Grid: Live Tracker (2/3) + Quick Services (1/3) ──── */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -1251,9 +1313,11 @@ export function CustomerDashboardView() {
                     const DishIcon = visual.Icon
                     const orderLink = firstAppendableOrder
                       ? `/menu?appendOrderId=${firstAppendableOrder.id}&dishId=${dish.id}&table=${encodeURIComponent(
-                          firstAppendableOrder.tableNumber || '1'
+                          firstAppendableOrder.tableNumber || ''
                         )}`
-                      : `/menu?dishId=${dish.id}&table=${encodeURIComponent(activeTableNumber)}`
+                      : activeTableNumber
+                        ? `/menu?dishId=${dish.id}&table=${encodeURIComponent(activeTableNumber)}`
+                        : `/menu?dishId=${dish.id}`
 
                     return (
                       <Link
@@ -1401,6 +1465,72 @@ export function CustomerDashboardView() {
                 <ArrowRight className="size-4 text-pink-500 shrink-0 group-hover:translate-x-0.5 transition-transform" />
               </button>
 
+              {/* Review & 10% Off Guest Reward */}
+              {reviewCouponCode ? (
+                <div className="relative overflow-hidden rounded-xl border border-emerald-500/30 bg-gradient-to-r from-emerald-500/[0.08] via-card to-amber-500/[0.06] p-3.5 transition-all hover:border-emerald-500/50 hover:shadow-xs group">
+                  <div className="pointer-events-none absolute -right-6 -top-6 size-20 rounded-full bg-emerald-400/15 blur-xl" />
+                  <div className="relative flex items-center justify-between gap-2.5">
+                    <Link href={feedbackHref} className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="size-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs shadow-emerald-500/20">
+                        <Gift className="size-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-extrabold text-foreground group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors truncate">
+                            Review &amp; {reviewDiscountPercent}% Off
+                          </p>
+                          <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-0 text-[9px] font-extrabold px-1.5 py-0 h-4 shrink-0">
+                            Unlocked
+                          </Badge>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">
+                          Tap to view or apply at billing
+                        </p>
+                      </div>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={handleCopyRewardCode}
+                      title="Copy coupon code"
+                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-1 text-[10px] font-mono font-extrabold text-emerald-700 dark:text-emerald-300 transition-colors shrink-0 cursor-pointer"
+                    >
+                      <span>{reviewCouponCode}</span>
+                      {copiedRewardCode ? <Check className="size-3" /> : <Copy className="size-3" />}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <Link
+                  href={feedbackHref}
+                  className="relative overflow-hidden flex items-center justify-between gap-3 p-3.5 rounded-xl border border-amber-500/30 bg-gradient-to-r from-amber-500/[0.09] via-card to-orange-500/[0.06] hover:border-amber-500/55 hover:shadow-xs transition-all group"
+                >
+                  <div className="pointer-events-none absolute -right-6 -top-6 size-20 rounded-full bg-amber-400/15 blur-xl group-hover:bg-amber-400/25 transition-colors" />
+                  <div className="relative flex items-center gap-3 min-w-0">
+                    <div className="size-10 rounded-xl bg-gradient-to-br from-amber-500 via-amber-500 to-orange-500 text-white flex items-center justify-center shrink-0 shadow-xs shadow-amber-500/25">
+                      <Star className="size-5 fill-white/90" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs font-extrabold text-foreground group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors truncate">
+                          {reviewDiscountEnabled ? `Review & ${reviewDiscountPercent}% Off` : 'Share Dining Review'}
+                        </p>
+                        {reviewDiscountEnabled && (
+                          <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25 text-[9px] font-extrabold px-1.5 py-0 h-4 tracking-wide shrink-0">
+                            {reviewDiscountPercent}% OFF
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">
+                        {reviewDiscountEnabled
+                          ? 'Rate your meal & unlock instant bill savings'
+                          : 'Tell us how we did on food, service & vibe'}
+                      </p>
+                    </div>
+                  </div>
+                  <ArrowRight className="relative size-4 text-amber-600 dark:text-amber-400 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                </Link>
+              )}
+
               {/* Compact 2-up Grid: Digital Menu & Order Receipts */}
               <div className="grid grid-cols-2 gap-2.5 pt-1">
                 <Link
@@ -1472,7 +1602,7 @@ export function CustomerDashboardView() {
       <SongRequestModal
         open={showSongModal}
         onOpenChange={setShowSongModal}
-        tableNumber={activeTableNumber}
+        tableNumber={activeTableNumber || 'Guest'}
         guestName={customerName}
       />
     </div>

@@ -246,6 +246,16 @@ function OrderRow({
       })
       const json = await res.json().catch(() => null)
       if (res.ok && json?.success) {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('rms:order-deleted', {
+              detail: {
+                orderId: order.id,
+                fullId: order.fullId,
+              },
+            })
+          )
+        }
         onOrderDeleted?.(order.id)
         setDeleteConfirmOpen(false)
         setDetailsOpen(false)

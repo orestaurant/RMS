@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { signCustomerToken, CUSTOMER_SESSION_COOKIE } from '@/lib/customer-auth'
+import { normalizePhoneForStorage } from '@/lib/phone'
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,16 +15,18 @@ export async function POST(request: NextRequest) {
     const { name = 'Guest', phone, tableNumber } = body
 
     const cleanName = String(name || 'Guest').trim()
-    const cleanPhone = phone ? String(phone).replace(/[^0-9]/g, '') : ''
-    const generatedEmail = cleanPhone
-      ? `guest_${cleanPhone}@guest.restosphere.local`
+    const cleanPhoneDigits = phone ? String(phone).replace(/[^0-9]/g, '') : ''
+    const storedPhone = normalizePhoneForStorage(phone) || (cleanPhoneDigits || null)
+    const generatedEmail = cleanPhoneDigits
+      ? `guest_${cleanPhoneDigits}@guest.restosphere.local`
       : `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}@guest.restosphere.local`
 
     // Try finding existing guest customer record or create a lightweight one
     let customer = await prisma.customer.findFirst({
       where: {
         OR: [
-          ...(cleanPhone ? [{ phone: cleanPhone }] : []),
+          ...(cleanPhoneDigits ? [{ phone: cleanPhoneDigits }, { mobile: cleanPhoneDigits }] : []),
+          ...(storedPhone ? [{ phone: storedPhone }, { mobile: storedPhone }] : []),
           { email: generatedEmail },
         ],
       },
@@ -37,9 +40,11 @@ export async function POST(request: NextRequest) {
       customer = await prisma.customer.create({
         data: {
           organizationId: orgId,
+          name: cleanName,
           firstName: cleanName,
           email: generatedEmail,
-          phone: cleanPhone || null,
+          phone: storedPhone,
+          mobile: storedPhone,
           role: 'CUSTOMER',
           status: 'active',
           metadata: {
@@ -48,6 +53,17 @@ export async function POST(request: NextRequest) {
           },
         },
       })
+    } else if (storedPhone && (!customer.phone || !customer.mobile)) {
+      customer = await prisma.customer
+        .update({
+          where: { id: customer.id },
+          data: {
+            phone: customer.phone || storedPhone,
+            mobile: customer.mobile || storedPhone,
+            ...(cleanName && cleanName !== 'Guest' && !customer.name ? { name: cleanName } : {}),
+          },
+        })
+        .catch(() => customer!)
     }
 
     // Sign lightweight customer session token
