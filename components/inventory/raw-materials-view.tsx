@@ -390,12 +390,12 @@ export function RawMaterialsView() {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">
+    <div className="flex flex-1 flex-col gap-3.5 p-3.5 md:p-5 max-w-7xl mx-auto w-full">
       {/* Feedback Alert Toast / Banner */}
       {feedback && (
         <div
           className={cn(
-            'flex items-center justify-between p-3.5 rounded-xl border text-sm shadow-sm transition-all animate-in fade-in slide-in-from-top-2',
+            'flex items-center justify-between px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm shadow-xs transition-all animate-in fade-in slide-in-from-top-2',
             feedback.type === 'success' &&
               'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400',
             feedback.type === 'warning' &&
@@ -420,19 +420,23 @@ export function RawMaterialsView() {
       )}
 
       {/* Header section */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight">Raw Material Inventory</h1>
-            <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-600 border-orange-500/20">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight">Raw Material Inventory</h1>
+            <Badge
+              variant="outline"
+              className="text-[11px] h-5 px-2 gap-1.5 bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/25 font-medium"
+            >
+              <span className="size-1.5 rounded-full bg-orange-500 animate-pulse" />
               Live Auto-Alerts
             </Badge>
           </div>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Manage raw ingredient stocks, automated low-inventory vendor notifications, and QR labels.
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Track raw ingredients, QR labels, and automated low-stock vendor alerts.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <Button
             variant="outline"
             size="sm"
@@ -441,7 +445,7 @@ export function RawMaterialsView() {
               fetchMaterials()
             }}
             disabled={refreshing}
-            className="gap-1.5"
+            className="h-8 px-2.5 text-xs gap-1.5"
           >
             <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
             Refresh
@@ -449,176 +453,209 @@ export function RawMaterialsView() {
           <Button
             onClick={handleOpenAdd}
             size="sm"
-            className="gap-1.5 bg-orange-600 hover:bg-orange-700 text-white font-medium shadow-sm"
+            className="h-8 px-3 text-xs gap-1.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-semibold shadow-xs"
           >
-            <Plus className="size-4" />
+            <Plus className="size-3.5" />
             Add Raw Material
           </Button>
         </div>
       </div>
 
-      {/* Summary KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {/* Compact & Elegant Summary KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {/* Total Raw Materials */}
-        <Card className="border border-border/70 shadow-xs">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Total Raw Materials
-            </CardTitle>
-            <div className="p-2 rounded-lg bg-primary/10 text-primary">
-              <Boxes className="size-4" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Active warehouse SKUs tracked in real-time
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* Low Stock Items (highlighted in red/amber) */}
-        <Card
+        <button
+          type="button"
+          onClick={() => setStatusFilter('all')}
           className={cn(
-            'border shadow-xs transition-colors',
-            stats.lowStockCount > 0
-              ? 'border-amber-500/40 bg-amber-500/5 dark:bg-amber-950/20'
-              : 'border-border/70'
+            'group text-left rounded-xl border bg-card/80 px-4 py-3 shadow-xs transition-all hover:shadow-sm hover:border-primary/35 cursor-pointer',
+            statusFilter === 'all' ? 'border-primary/40 ring-1 ring-primary/15' : 'border-border/70'
           )}
         >
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
-              Low Stock Items
-            </CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Total Raw Materials
+              </p>
+              <div className="flex items-baseline gap-2 mt-1">
+                <span className="text-xl font-bold tracking-tight text-foreground">{stats.total}</span>
+                <span className="text-[11px] text-muted-foreground truncate">
+                  {stats.inStockCount} healthy
+                </span>
+              </div>
+            </div>
+            <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0 group-hover:scale-105 transition-transform">
+              <Boxes className="size-4" />
+            </div>
+          </div>
+        </button>
+
+        {/* Low Stock Items */}
+        <button
+          type="button"
+          onClick={() => setStatusFilter('low-stock')}
+          className={cn(
+            'group text-left rounded-xl border px-4 py-3 shadow-xs transition-all hover:shadow-sm cursor-pointer',
+            stats.lowStockCount > 0
+              ? 'border-amber-500/40 bg-gradient-to-br from-amber-500/10 to-transparent'
+              : 'border-border/70 bg-card/80 hover:border-amber-500/35',
+            statusFilter === 'low-stock' && 'ring-1 ring-amber-500/40'
+          )}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                Low Stock
+              </p>
+              <div className="flex items-baseline gap-2 mt-1">
+                <span className="text-xl font-bold tracking-tight text-amber-600 dark:text-amber-400">
+                  {stats.lowStockCount}
+                </span>
+                <span className="text-[11px] text-muted-foreground truncate">
+                  Below threshold
+                </span>
+              </div>
+            </div>
             <div
               className={cn(
-                'p-2 rounded-lg',
+                'p-2 rounded-xl shrink-0 group-hover:scale-105 transition-transform',
                 stats.lowStockCount > 0
                   ? 'bg-amber-500/20 text-amber-600 dark:text-amber-300 animate-pulse'
-                  : 'bg-muted text-muted-foreground'
+                  : 'bg-muted/80 text-muted-foreground'
               )}
             >
               <AlertTriangle className="size-4" />
             </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
-              {stats.lowStockCount}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Items at or below minimum threshold — Vendor alerted
-            </p>
-          </CardContent>
-        </Card>
+          </div>
+        </button>
 
         {/* Out of Stock Items */}
-        <Card
+        <button
+          type="button"
+          onClick={() => setStatusFilter('critical')}
           className={cn(
-            'border shadow-xs transition-colors',
+            'group text-left rounded-xl border px-4 py-3 shadow-xs transition-all hover:shadow-sm cursor-pointer',
             stats.outOfStockCount > 0
-              ? 'border-rose-500/40 bg-rose-500/5 dark:bg-rose-950/20'
-              : 'border-border/70'
+              ? 'border-rose-500/40 bg-gradient-to-br from-rose-500/10 to-transparent'
+              : 'border-border/70 bg-card/80 hover:border-rose-500/35',
+            statusFilter === 'critical' && 'ring-1 ring-rose-500/40'
           )}
         >
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">
-              Out of Stock (Critical)
-            </CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">
+                Out of Stock
+              </p>
+              <div className="flex items-baseline gap-2 mt-1">
+                <span className="text-xl font-bold tracking-tight text-rose-600 dark:text-rose-400">
+                  {stats.outOfStockCount}
+                </span>
+                <span className="text-[11px] text-muted-foreground truncate">
+                  Restock required
+                </span>
+              </div>
+            </div>
             <div
               className={cn(
-                'p-2 rounded-lg',
+                'p-2 rounded-xl shrink-0 group-hover:scale-105 transition-transform',
                 stats.outOfStockCount > 0
                   ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400'
-                  : 'bg-muted text-muted-foreground'
+                  : 'bg-muted/80 text-muted-foreground'
               )}
             >
               <AlertOctagon className="size-4" />
             </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-rose-600 dark:text-rose-400">
-              {stats.outOfStockCount}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Zero quantity in warehouse — Urgent restock required
-            </p>
-          </CardContent>
-        </Card>
+          </div>
+        </button>
       </div>
 
-      {/* Filter and Search Bar */}
-      <Card className="border border-border/70">
-        <CardContent className="p-4">
-          <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
-            {/* Search */}
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-              <Input
-                placeholder="Search raw material name, SKU code, location, or vendor..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9 h-9 text-sm"
-              />
-            </div>
-
-            {/* Status Filter Tabs */}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <Button
-                variant={statusFilter === 'all' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setStatusFilter('all')}
-                className="h-8 text-xs px-2.5"
-              >
-                All ({stats.total})
-              </Button>
-              <Button
-                variant={statusFilter === 'in-stock' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setStatusFilter('in-stock')}
-                className="h-8 text-xs px-2.5 text-emerald-600 dark:text-emerald-400"
-              >
-                In Stock ({stats.inStockCount})
-              </Button>
-              <Button
-                variant={statusFilter === 'low-stock' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setStatusFilter('low-stock')}
-                className="h-8 text-xs px-2.5 text-amber-600 dark:text-amber-400"
-              >
-                Low Stock ({stats.lowStockCount})
-              </Button>
-              <Button
-                variant={statusFilter === 'critical' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setStatusFilter('critical')}
-                className="h-8 text-xs px-2.5 text-rose-600 dark:text-rose-400"
-              >
-                Critical ({stats.outOfStockCount})
-              </Button>
-            </div>
-
-            {/* Vendor Filter Dropdown */}
-            {vendors.length > 0 && (
-              <select
-                value={selectedVendorFilter}
-                onChange={(e) => setSelectedVendorFilter(e.target.value)}
-                aria-label="Filter by Assigned Vendor"
-                className="h-9 px-3 rounded-md border border-input bg-background text-xs font-medium focus:outline-hidden focus:ring-1 focus:ring-ring"
-              >
-                <option value="all">All Vendors</option>
-                {vendors.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-            )}
+      {/* Sleek Filter & Search Toolbar */}
+      <div className="rounded-xl border border-border/70 bg-card/80 p-2.5 shadow-xs">
+        <div className="flex flex-col md:flex-row gap-2 items-stretch md:items-center justify-between">
+          {/* Search */}
+          <div className="relative flex-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Search material, SKU, location, or vendor..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8 h-8 text-xs bg-background/80"
+            />
           </div>
-        </CardContent>
-      </Card>
+
+          {/* Segmented Status Filter Tabs */}
+          <div className="inline-flex items-center gap-1 rounded-lg bg-muted/60 p-0.5 border border-border/50 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setStatusFilter('all')}
+              className={cn(
+                'h-7 px-2.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer',
+                statusFilter === 'all'
+                  ? 'bg-background text-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              All ({stats.total})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('in-stock')}
+              className={cn(
+                'h-7 px-2.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer',
+                statusFilter === 'in-stock'
+                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 shadow-xs'
+                  : 'text-emerald-600/80 dark:text-emerald-400/80 hover:text-emerald-600'
+              )}
+            >
+              In Stock ({stats.inStockCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('low-stock')}
+              className={cn(
+                'h-7 px-2.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer',
+                statusFilter === 'low-stock'
+                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 shadow-xs'
+                  : 'text-amber-600/80 dark:text-amber-400/80 hover:text-amber-600'
+              )}
+            >
+              Low ({stats.lowStockCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('critical')}
+              className={cn(
+                'h-7 px-2.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer',
+                statusFilter === 'critical'
+                  ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 shadow-xs'
+                  : 'text-rose-600/80 dark:text-rose-400/80 hover:text-rose-600'
+              )}
+            >
+              Critical ({stats.outOfStockCount})
+            </button>
+          </div>
+
+          {/* Vendor Filter Dropdown */}
+          {vendors.length > 0 && (
+            <select
+              value={selectedVendorFilter}
+              onChange={(e) => setSelectedVendorFilter(e.target.value)}
+              aria-label="Filter by Assigned Vendor"
+              className="h-8 px-2.5 rounded-md border border-input bg-background text-xs font-medium focus:outline-hidden focus:ring-1 focus:ring-ring"
+            >
+              <option value="all">All Vendors</option>
+              {vendors.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
 
       {/* Raw Materials Table */}
-      <Card className="border border-border/70 overflow-hidden shadow-xs">
+      <Card className="border border-border/70 overflow-hidden shadow-xs rounded-xl">
         <div className="overflow-x-auto">
           <Table>
             <TableHeader className="bg-muted/40">

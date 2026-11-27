@@ -212,19 +212,19 @@ const RESTOCK_MODAL_CONFIG: Record<
     Icon: Send,
   },
   deliver: {
-    title: 'Confirm Restock Delivery',
+    title: 'Deliver & Auto-Update Inventory',
     descriptionSuffix:
-      'Once submitted, the Inventory Manager will verify and confirm stock replenishment.',
+      'Submitting will automatically add this quantity to the restaurant inventory right away.',
     qtyLabel: 'Delivered / Replenished Quantity',
     qtyHint:
-      'Upon manager confirmation, this quantity will be automatically added to the warehouse inventory.',
+      'This quantity will be added directly to the warehouse inventory as soon as you submit.',
     notesLabel: 'Delivery Notes (Optional)',
     notesPlaceholder: 'e.g. Delivered Batch #441 via delivery truck',
-    defaultNotes: 'Shipment delivered to warehouse receiving dock.',
-    submitLabel: 'Mark Restock Delivered',
-    submittingLabel: 'Submitting...',
-    submitBtnClass: 'bg-teal-600 hover:bg-teal-700 text-white font-semibold',
-    iconClass: 'text-teal-600',
+    defaultNotes: 'Shipment delivered and automatically added to warehouse inventory.',
+    submitLabel: 'Deliver & Update Stock',
+    submittingLabel: 'Updating Stock...',
+    submitBtnClass: 'bg-emerald-600 hover:bg-emerald-700 text-white font-semibold',
+    iconClass: 'text-emerald-600',
     Icon: PackageCheck,
   },
 }
@@ -615,16 +615,18 @@ export function VendorDashboardView() {
       })
       const json = await res.json()
       if (json.success) {
-        if (json.data) {
+        const updatedNotifData = json.data?.notification || json.data
+        if (updatedNotifData) {
           setNotifications((prev) =>
-            prev.map((n) => (n.id === notif.id ? { ...n, ...json.data } : n))
+            prev.map((n) => (n.id === notif.id ? { ...n, ...updatedNotifData } : n))
           )
         }
         showFeedback(
           'success',
           mode === 'accept'
             ? `Accepted "${materialName}" for ${qty} ${weightUnit}. Status is now Request In Progress.`
-            : 'Restock marked as Delivered! Awaiting Inventory Manager verification to complete restock.'
+            : json.message ||
+                `Delivered +${qty} ${weightUnit} of "${materialName}"! Warehouse inventory updated automatically.`
         )
         setActionModal(null)
         emitVendorNotificationsUpdated()

@@ -143,7 +143,7 @@ export function AppSidebar() {
           ],
         },
         {
-          label: 'KITCHEN',
+          label: 'KITCHEN & INVENTORY',
           items: [
             {
               label: 'Kitchen Display',
@@ -152,6 +152,7 @@ export function AppSidebar() {
               badge: counts?.kitchenLive ? 'Live' : undefined,
             },
             { label: 'Menu Management', href: '/admin-menu', icon: UtensilsCrossed },
+            { label: 'Inventory', href: '/inventory', icon: Package },
           ],
         },
       ]
@@ -241,14 +242,7 @@ export function AppSidebar() {
         {
           label: 'INVENTORY',
           items: [
-            { label: 'Raw Material', href: '/inventory-manager/inventory', icon: Package },
-            { label: 'Inventory Management', href: '/inventory', icon: Boxes },
-          ],
-        },
-        {
-          label: 'BUSINESS',
-          items: [
-            { label: 'Settings', href: '/dashboard/settings', icon: Settings },
+            { label: 'Raw Materials', href: '/inventory-manager/inventory', icon: Package },
           ],
         },
       ]

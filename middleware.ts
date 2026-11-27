@@ -149,8 +149,7 @@ export async function middleware(request: NextRequest) {
       pathname.startsWith('/staff/') ||
       pathname === '/pos' ||
       pathname.startsWith('/pos/') ||
-      pathname === '/inventory' ||
-      pathname.startsWith('/inventory/') ||
+      (isWaiter && (pathname === '/inventory' || pathname.startsWith('/inventory/'))) ||
       pathname === '/analytics' ||
       pathname.startsWith('/analytics/') ||
       pathname === '/crm' ||

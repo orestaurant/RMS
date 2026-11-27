@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
+import {
+  invalidateInventoryLookupCache,
+  syncMenuAvailabilityFromInventory,
+} from '@/lib/inventory-deduction'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -381,46 +385,166 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // 4. STAGE 3: Vendor Marks Delivered -> Status: RESTOCK_DELIVERED
+    // Shared atomic restock completion helper:
+    // Immediately increments RawMaterial + InventoryItem stock and completes both Vendor & Manager alerts.
+    const executeAutoRestockCompletion = async (opts: {
+      qtyToAdd: number
+      isVendorDelivery: boolean
+      notesText?: string
+    }) => {
+      if (notif.status === 'RESTOCK_COMPLETED') {
+        return NextResponse.json(
+          { success: false, message: 'This restock delivery has already been completed.' },
+          { status: 400 }
+        )
+      }
+
+      if (!Number.isFinite(opts.qtyToAdd) || opts.qtyToAdd <= 0) {
+        return NextResponse.json(
+          { success: false, message: 'Restock quantity must be greater than 0.' },
+          { status: 400 }
+        )
+      }
+
+      const completedAt = new Date().toISOString()
+      const currentStock = notif.rawMaterial
+        ? Number(notif.rawMaterial.quantity)
+        : Number(existingMeta.currentQuantity || 0)
+
+      const { updatedRawMaterial, updatedNotif, newTotalStock } = await prisma.$transaction(
+        async (tx) => {
+          let rawMat = null
+          let finalStock = currentStock + opts.qtyToAdd
+
+          if (notif.rawMaterialId) {
+            // Atomic increment avoids lost updates under concurrent kitchen deductions
+            rawMat = await tx.rawMaterial.update({
+              where: { id: notif.rawMaterialId },
+              data: {
+                quantity: { increment: opts.qtyToAdd },
+                updatedAt: new Date(),
+              },
+            })
+            finalStock = Number(rawMat.quantity)
+
+            // Sync matching InventoryItem records in 1 query
+            const invOrClauses: any[] = []
+            if (materialSku) invOrClauses.push({ sku: materialSku })
+            if (materialName) {
+              invOrClauses.push({ name: { equals: materialName, mode: 'insensitive' } })
+            }
+
+            if (invOrClauses.length > 0) {
+              await tx.inventoryItem.updateMany({
+                where: {
+                  deletedAt: null,
+                  OR: invOrClauses,
+                },
+                data: {
+                  quantity: finalStock,
+                  quantityInStock: finalStock,
+                  updatedAt: new Date(),
+                },
+              })
+            }
+          }
+
+          const updatedMeta = {
+            ...existingMeta,
+            ...(opts.isVendorDelivery ? { deliveredAt: completedAt } : {}),
+            completedAt,
+            deliveredQuantity: opts.qtyToAdd,
+            previousStock: currentStock,
+            newStock: finalStock,
+            autoRestocked: opts.isVendorDelivery,
+            confirmedBy: opts.isVendorDelivery
+              ? `${vendorName} (Auto-Restocked)`
+              : sessionUser?.name || 'Inventory Manager',
+            status: 'RESTOCK_COMPLETED',
+            materialName,
+            vendorName,
+            vendorNotes:
+              opts.notesText ||
+              existingMeta.vendorNotes ||
+              `Delivered +${opts.qtyToAdd} ${weightUnit}. Inventory automatically updated to ${finalStock} ${weightUnit}.`,
+          }
+
+          const selfTitle = `✅ Restock Completed: ${materialName}`
+          const selfMessage = opts.isVendorDelivery
+            ? `Delivered +${opts.qtyToAdd} ${weightUnit} of ${materialName}. Warehouse stock automatically updated to ${finalStock} ${weightUnit}.`
+            : `Restock delivery confirmed! +${opts.qtyToAdd} ${weightUnit} added to inventory. Current stock level: ${finalStock} ${weightUnit}.`
+
+          const completedNotif = await tx.dashboardNotification.update({
+            where: { id },
+            data: {
+              status: 'RESTOCK_COMPLETED',
+              isRead: true,
+              title: selfTitle,
+              message: selfMessage,
+              metadata: updatedMeta,
+            },
+          })
+
+          if (notif.recipientRole === 'VENDOR') {
+            await syncManagerNotification(
+              tx,
+              'RESTOCK_COMPLETED',
+              `✅ Auto-Restocked: ${materialName}`,
+              `${vendorName} delivered +${opts.qtyToAdd} ${weightUnit} of ${materialName} at ${location}. Inventory automatically updated to ${finalStock} ${weightUnit}.`,
+              updatedMeta
+            )
+          } else {
+            await syncVendorNotification(
+              tx,
+              'RESTOCK_COMPLETED',
+              `✅ Restock Completed: ${materialName}`,
+              `Inventory updated for ${materialName}! +${opts.qtyToAdd} ${weightUnit} added to warehouse stock. Thank you!`,
+              updatedMeta
+            )
+          }
+
+          return { updatedRawMaterial: rawMat, updatedNotif: completedNotif, newTotalStock: finalStock }
+        }
+      )
+
+      // Invalidate deduction cache and automatically re-enable any Out-of-Stock dishes
+      invalidateInventoryLookupCache()
+      await syncMenuAvailabilityFromInventory().catch(() => {})
+
+      return NextResponse.json({
+        success: true,
+        message: `Delivered +${opts.qtyToAdd} ${weightUnit}! Inventory automatically updated to ${newTotalStock} ${weightUnit}.`,
+        data: {
+          notification: updatedNotif,
+          rawMaterial: updatedRawMaterial,
+          newStock: newTotalStock,
+          addedQuantity: opts.qtyToAdd,
+        },
+      })
+    }
+
+    // 4. STAGE 3 (Auto-Complete): Vendor Marks Delivered -> Automatically updates Inventory & marks RESTOCK_COMPLETED
     if (action === 'mark_delivered' || action === 'delivered') {
-      const rawDelivered = deliveredQuantity ?? quantity
+      const rawDelivered = deliveredQuantity ?? restockQuantity ?? quantity
       const suppliedQty =
         rawDelivered !== undefined && Number.isFinite(Number(rawDelivered)) && Number(rawDelivered) > 0
           ? Number(rawDelivered)
           : Number(existingMeta.deliveredQuantity || existingMeta.plannedQuantity || existingMeta.minThreshold || 20)
 
-      return runVendorStageTransition({
-        status: 'RESTOCK_DELIVERED',
-        metaPatch: {
-          deliveredAt: new Date().toISOString(),
-          deliveredQuantity: suppliedQty,
-          vendorNotes:
-            (typeof vendorNotes === 'string' && vendorNotes.trim()) ||
-            `Vendor delivered replenishment (${suppliedQty} ${weightUnit}). Awaiting inventory confirmation.`,
-        },
-        managerTitle: `📦 Restock Delivered: ${materialName}`,
-        managerMessage: `${vendorName} has marked ${materialName} (${suppliedQty} ${weightUnit}) as delivered at ${location}. Please confirm receipt to update stock.`,
-        successMessage: 'Order marked as delivered! Inventory Manager will verify and confirm stock receipt.',
+      return executeAutoRestockCompletion({
+        qtyToAdd: suppliedQty,
+        isVendorDelivery: true,
+        notesText: typeof vendorNotes === 'string' && vendorNotes.trim() ? vendorNotes.trim() : undefined,
       })
     }
 
-    // 5. STAGE 4: Inventory Manager Confirms Delivery / Restock Completed -> Status: RESTOCK_COMPLETED
-    // AND automatically updates RawMaterial stock in inventory!
+    // 5. STAGE 4 (Legacy / Manual Confirm Fallback): Confirms any remaining RESTOCK_DELIVERED alerts
     if (
       action === 'confirm_delivery' ||
       action === 'complete_restock' ||
       action === 'mark_completed' ||
       action === 'update_stock'
     ) {
-      if (notif.status === 'RESTOCK_COMPLETED') {
-        return NextResponse.json(
-          { success: false, message: 'This restock delivery has already been confirmed and completed.' },
-          { status: 400 }
-        )
-      }
-
-      const completedAt = new Date().toISOString()
-
       const currentStock = notif.rawMaterial
         ? Number(notif.rawMaterial.quantity)
         : Number(existingMeta.currentQuantity || 0)
@@ -441,91 +565,10 @@ export async function POST(request: NextRequest) {
         qtyToAdd = Math.max(10, minThresh * 2 - currentStock)
       }
 
-      if (qtyToAdd <= 0) {
-        return NextResponse.json(
-          { success: false, message: 'Received quantity must be greater than 0 to complete restock.' },
-          { status: 400 }
-        )
-      }
-
-      const newTotalStock = currentStock + qtyToAdd
-
-      const updatedMeta = {
-        ...existingMeta,
-        completedAt,
-        deliveredQuantity: qtyToAdd,
-        previousStock: currentStock,
-        newStock: newTotalStock,
-        confirmedBy: sessionUser?.name || 'Inventory Manager',
-        status: 'RESTOCK_COMPLETED',
-        materialName,
-        vendorName,
-        vendorNotes: vendorNotes || existingMeta.vendorNotes || 'Restock delivery confirmed and inventory stock updated.',
-      }
-
-      const { updatedRawMaterial, updatedNotif } = await prisma.$transaction(async (tx) => {
-        let rawMat = null
-        if (notif.rawMaterialId) {
-          rawMat = await tx.rawMaterial.update({
-            where: { id: notif.rawMaterialId },
-            data: {
-              quantity: newTotalStock,
-              updatedAt: new Date(),
-            },
-          })
-
-          if (materialSku) {
-            await tx.inventoryItem.updateMany({
-              where: { sku: materialSku },
-              data: {
-                quantity: newTotalStock,
-                quantityInStock: newTotalStock,
-              },
-            })
-          }
-        }
-
-        const completedNotif = await tx.dashboardNotification.update({
-          where: { id },
-          data: {
-            status: 'RESTOCK_COMPLETED',
-            isRead: true,
-            title: `✅ Restock Completed: ${materialName}`,
-            message: `Restock delivery confirmed! +${qtyToAdd} ${weightUnit} added to inventory. Current stock level: ${newTotalStock} ${weightUnit}.`,
-            metadata: updatedMeta,
-          },
-        })
-
-        if (notif.recipientRole === 'VENDOR') {
-          await syncManagerNotification(
-            tx,
-            'RESTOCK_COMPLETED',
-            `✅ Restock Completed: ${materialName}`,
-            `Restock delivery confirmed! +${qtyToAdd} ${weightUnit} added to inventory. Current stock: ${newTotalStock} ${weightUnit}.`,
-            updatedMeta
-          )
-        } else {
-          await syncVendorNotification(
-            tx,
-            'RESTOCK_COMPLETED',
-            `✅ Restock Completed: ${materialName}`,
-            `Inventory Manager confirmed receipt of ${materialName}! +${qtyToAdd} ${weightUnit} updated in warehouse stock. Thank you!`,
-            updatedMeta
-          )
-        }
-
-        return { updatedRawMaterial: rawMat, updatedNotif: completedNotif }
-      })
-
-      return NextResponse.json({
-        success: true,
-        message: `Restock completed! Successfully added +${qtyToAdd} ${weightUnit} to inventory. Current stock is now ${newTotalStock} ${weightUnit}.`,
-        data: {
-          notification: updatedNotif,
-          rawMaterial: updatedRawMaterial,
-          newStock: newTotalStock,
-          addedQuantity: qtyToAdd,
-        },
+      return executeAutoRestockCompletion({
+        qtyToAdd,
+        isVendorDelivery: false,
+        notesText: typeof vendorNotes === 'string' && vendorNotes.trim() ? vendorNotes.trim() : undefined,
       })
     }
 
