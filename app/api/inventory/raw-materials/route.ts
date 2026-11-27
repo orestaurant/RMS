@@ -3,26 +3,36 @@ import prisma from '@/lib/prisma'
 import QRCode from 'qrcode'
 import { checkAndTriggerLowStockAlert } from '@/lib/inventory-alerts'
 import { invalidateInventoryLookupCache, syncMenuAvailabilityFromInventory } from '@/lib/inventory-deduction'
+import { SESSION_COOKIE_NAME, verifyJWT, normalizeRole } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
+async function getRequestRole(request: NextRequest): Promise<string> {
+  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value
+  const session = token ? await verifyJWT(token).catch(() => null) : null
+  return normalizeRole(session?.role)
+}
+
 export async function GET(request: NextRequest) {
   try {
+    const isChef = (await getRequestRole(request)) === 'CHEF'
     const search = request.nextUrl.searchParams.get('search')?.toLowerCase().trim() || ''
     const statusFilter = request.nextUrl.searchParams.get('status')?.trim() || 'all'
-    const vendorFilter = request.nextUrl.searchParams.get('vendorId')?.trim() || 'all'
+    const vendorFilter = isChef ? 'all' : request.nextUrl.searchParams.get('vendorId')?.trim() || 'all'
 
     const allMaterials = await prisma.rawMaterial.findMany({
-      include: {
-        vendor: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
+      include: isChef
+        ? undefined
+        : {
+            vendor: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+              },
+            },
           },
-        },
-      },
       orderBy: { updatedAt: 'desc' },
     })
 
@@ -30,7 +40,7 @@ export async function GET(request: NextRequest) {
     let outOfStockCount = 0
     let inStockCount = 0
 
-    const enriched = allMaterials.map((item) => {
+    const enriched = allMaterials.map((item: any) => {
       const qty = Number(item.quantity)
       const threshold = Number(item.minThreshold)
 
@@ -46,6 +56,14 @@ export async function GET(request: NextRequest) {
         inStockCount++
       }
 
+      if (isChef) {
+        const { vendorId: _vId, qrCodeData: _qr, vendor: _vendor, ...chefSafeItem } = item
+        return {
+          ...chefSafeItem,
+          status,
+        }
+      }
+
       return {
         ...item,
         status,
@@ -53,12 +71,12 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    const filtered = enriched.filter((item) => {
+    const filtered = enriched.filter((item: any) => {
       if (search) {
         const matchesName = item.name.toLowerCase().includes(search)
         const matchesSku = item.sku.toLowerCase().includes(search)
         const matchesLocation = item.location.toLowerCase().includes(search)
-        const matchesVendor = (item.vendorName || '').toLowerCase().includes(search)
+        const matchesVendor = !isChef && (item.vendorName || '').toLowerCase().includes(search)
         if (!matchesName && !matchesSku && !matchesLocation && !matchesVendor) return false
       }
 
@@ -72,7 +90,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      if (vendorFilter !== 'all' && item.vendorId !== vendorFilter) {
+      if (!isChef && vendorFilter !== 'all' && item.vendorId !== vendorFilter) {
         return false
       }
 
@@ -100,6 +118,13 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    if ((await getRequestRole(request)) === 'CHEF') {
+      return NextResponse.json(
+        { success: false, message: 'Forbidden: Chefs are not permitted to add raw materials' },
+        { status: 403 }
+      )
+    }
+
     const body = await request.json()
     const {
       name,

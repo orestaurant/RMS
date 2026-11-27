@@ -3,27 +3,37 @@ import prisma from '@/lib/prisma'
 import QRCode from 'qrcode'
 import { checkAndTriggerLowStockAlert } from '@/lib/inventory-alerts'
 import { invalidateInventoryLookupCache, syncMenuAvailabilityFromInventory } from '@/lib/inventory-deduction'
+import { SESSION_COOKIE_NAME, verifyJWT, normalizeRole } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
+
+async function getRequestRole(request: NextRequest): Promise<string> {
+  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value
+  const session = token ? await verifyJWT(token).catch(() => null) : null
+  return normalizeRole(session?.role)
+}
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const isChef = (await getRequestRole(request)) === 'CHEF'
     const { id } = await params
     const material = await prisma.rawMaterial.findUnique({
       where: { id },
-      include: {
-        vendor: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
+      include: isChef
+        ? undefined
+        : {
+            vendor: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+              },
+            },
           },
-        },
-      },
     })
 
     if (!material) {
@@ -31,6 +41,14 @@ export async function GET(
         { success: false, message: 'Raw material not found' },
         { status: 404 }
       )
+    }
+
+    if (isChef) {
+      const { vendorId: _vId, qrCodeData: _qr, ...chefSafeMaterial } = material
+      return NextResponse.json({
+        success: true,
+        data: chefSafeMaterial,
+      })
     }
 
     // Also generate SVG version on-the-fly if needed for SVG download
@@ -69,6 +87,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const isChef = (await getRequestRole(request)) === 'CHEF'
     const { id } = await params
     const body = await request.json()
     const {
@@ -119,7 +138,7 @@ export async function PATCH(
     if (minThreshold !== undefined && !isNaN(Number(minThreshold))) {
       updateData.minThreshold = Math.max(0, Number(minThreshold))
     }
-    if (vendorId && typeof vendorId === 'string') {
+    if (!isChef && vendorId && typeof vendorId === 'string') {
       updateData.vendorId = vendorId
     }
 
@@ -159,6 +178,16 @@ export async function PATCH(
     invalidateInventoryLookupCache()
     await syncMenuAvailabilityFromInventory().catch(() => {})
 
+    if (isChef) {
+      const { vendorId: _vId, qrCodeData: _qr, vendor: _vendor, ...chefSafeUpdated } = updated
+      return NextResponse.json({
+        success: true,
+        message: 'Raw material updated successfully',
+        data: chefSafeUpdated,
+        alertResult: { triggered: alertResult.triggered },
+      })
+    }
+
     return NextResponse.json({
       success: true,
       message: 'Raw material updated successfully',
@@ -183,6 +212,8 @@ export async function DELETE(
     await prisma.rawMaterial.delete({
       where: { id },
     })
+    invalidateInventoryLookupCache()
+    await syncMenuAvailabilityFromInventory().catch(() => {})
     return NextResponse.json({
       success: true,
       message: 'Raw material deleted successfully',

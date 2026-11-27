@@ -45,6 +45,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { RawMaterialQRModal } from '@/components/inventory/raw-material-qr-modal'
+import { useAuthContext } from '@/hooks/useAuthContext'
 import { cn } from '@/lib/utils'
 
 export interface RawMaterialItem {
@@ -76,7 +77,20 @@ export interface VendorOption {
   phone?: string
 }
 
-export function RawMaterialsView() {
+export interface RawMaterialsViewProps {
+  initialRole?: string
+}
+
+export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
+  const { auth, loading: authLoading } = useAuthContext()
+  const resolvedRole = String(
+    (!authLoading ? auth?.role : undefined) || initialRole || auth?.role || ''
+  )
+    .toUpperCase()
+    .trim()
+  const isChef = resolvedRole === 'CHEF'
+  const roleReady = Boolean(resolvedRole) || !authLoading
+
   const [materials, setMaterials] = useState<RawMaterialItem[]>([])
   const [vendors, setVendors] = useState<VendorOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -126,7 +140,7 @@ export function RawMaterialsView() {
   const [formVendorId, setFormVendorId] = useState('')
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
 
-  // Fetch Vendors
+  // Fetch Vendors (not used in Chef view)
   const fetchVendors = useCallback(async () => {
     try {
       const res = await fetch('/api/inventory/vendors')
@@ -145,7 +159,9 @@ export function RawMaterialsView() {
       const params = new URLSearchParams()
       if (search) params.set('search', search)
       if (statusFilter !== 'all') params.set('status', statusFilter)
-      if (selectedVendorFilter !== 'all') params.set('vendorId', selectedVendorFilter)
+      if (!isChef && selectedVendorFilter !== 'all') {
+        params.set('vendorId', selectedVendorFilter)
+      }
 
       const res = await fetch(`/api/inventory/raw-materials?${params.toString()}`)
       const json = await res.json()
@@ -162,11 +178,17 @@ export function RawMaterialsView() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [search, statusFilter, selectedVendorFilter])
+  }, [search, statusFilter, selectedVendorFilter, isChef])
 
   useEffect(() => {
+    if (!roleReady) return
+    if (isChef) {
+      setVendors([])
+      setSelectedVendorFilter('all')
+      return
+    }
     fetchVendors()
-  }, [fetchVendors])
+  }, [roleReady, isChef, fetchVendors])
 
   useEffect(() => {
     fetchMaterials()
@@ -186,7 +208,7 @@ export function RawMaterialsView() {
     if (formMinThreshold === '' || isNaN(Number(formMinThreshold)) || Number(formMinThreshold) < 0) {
       errors.minThreshold = 'Minimum threshold must be a valid number'
     }
-    if (!formVendorId) {
+    if (!isChef && !formVendorId) {
       errors.vendorId = 'Assigned Vendor is required to enable automated restock alerts'
     }
     setFormErrors(errors)
@@ -195,6 +217,7 @@ export function RawMaterialsView() {
 
   // Open Add Dialog
   const handleOpenAdd = () => {
+    if (isChef) return
     setFormName('')
     setFormSku(`RM-${Date.now().toString().slice(-5)}`)
     setFormQuantity('20')
@@ -210,7 +233,7 @@ export function RawMaterialsView() {
   // Submit Add Material
   const handleCreateMaterial = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!validateForm()) return
+    if (isChef || !validateForm()) return
 
     setSubmitting(true)
     try {
@@ -275,18 +298,22 @@ export function RawMaterialsView() {
 
     setSubmitting(true)
     try {
+      const payload: Record<string, unknown> = {
+        name: formName.trim(),
+        quantity: Number(formQuantity),
+        weight: Number(formWeight),
+        weightUnit: formWeightUnit,
+        location: formLocation.trim(),
+        minThreshold: Number(formMinThreshold),
+      }
+      if (!isChef) {
+        payload.vendorId = formVendorId
+      }
+
       const res = await fetch(`/api/inventory/raw-materials/${activeMaterial.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formName.trim(),
-          quantity: Number(formQuantity),
-          weight: Number(formWeight),
-          weightUnit: formWeightUnit,
-          location: formLocation.trim(),
-          minThreshold: Number(formMinThreshold),
-          vendorId: formVendorId,
-        }),
+        body: JSON.stringify(payload),
       })
 
       const json = await res.json()
@@ -299,7 +326,9 @@ export function RawMaterialsView() {
       if (json.alertResult?.triggered) {
         showFeedback(
           'warning',
-          `Stock dropped below threshold! Automated low-inventory notification sent to Vendor.`
+          isChef
+            ? `Stock for "${json.data.name}" dropped below minimum threshold.`
+            : `Stock dropped below threshold! Automated low-inventory notification sent to Vendor.`
         )
       } else {
         showFeedback('success', `Updated "${json.data.name}" successfully.`)
@@ -348,7 +377,9 @@ export function RawMaterialsView() {
         if (json.alertResult?.triggered) {
           showFeedback(
             'warning',
-            `⚠️ Low Stock Triggered! "${material.name}" is now at ${newQty}. Vendor alerted automatically.`
+            isChef
+              ? `⚠️ Low Stock Triggered! "${material.name}" is now at ${newQty}.`
+              : `⚠️ Low Stock Triggered! "${material.name}" is now at ${newQty}. Vendor alerted automatically.`
           )
         }
         fetchMaterials()
@@ -385,6 +416,7 @@ export function RawMaterialsView() {
 
   // Open QR modal
   const handleOpenQR = (material: RawMaterialItem) => {
+    if (isChef) return
     setQrModalItem(material)
     setIsQrOpen(true)
   }
@@ -424,16 +456,20 @@ export function RawMaterialsView() {
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-lg sm:text-xl font-bold tracking-tight">Raw Material Inventory</h1>
-            <Badge
-              variant="outline"
-              className="text-[11px] h-5 px-2 gap-1.5 bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/25 font-medium"
-            >
-              <span className="size-1.5 rounded-full bg-orange-500 animate-pulse" />
-              Live Auto-Alerts
-            </Badge>
+            {!isChef && (
+              <Badge
+                variant="outline"
+                className="text-[11px] h-5 px-2 gap-1.5 bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/25 font-medium"
+              >
+                <span className="size-1.5 rounded-full bg-orange-500 animate-pulse" />
+                Live Auto-Alerts
+              </Badge>
+            )}
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Track raw ingredients, QR labels, and automated low-stock vendor alerts.
+            {isChef
+              ? 'Update kitchen raw material stock levels and monitor thresholds.'
+              : 'Track raw ingredients, QR labels, and automated low-stock vendor alerts.'}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -450,14 +486,16 @@ export function RawMaterialsView() {
             <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button
-            onClick={handleOpenAdd}
-            size="sm"
-            className="h-8 px-3 text-xs gap-1.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-semibold shadow-xs"
-          >
-            <Plus className="size-3.5" />
-            Add Raw Material
-          </Button>
+          {!isChef && (
+            <Button
+              onClick={handleOpenAdd}
+              size="sm"
+              className="h-8 px-3 text-xs gap-1.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-semibold shadow-xs"
+            >
+              <Plus className="size-3.5" />
+              Add Raw Material
+            </Button>
+          )}
         </div>
       </div>
 
@@ -576,7 +614,11 @@ export function RawMaterialsView() {
           <div className="relative flex-1">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
             <Input
-              placeholder="Search material, SKU, location, or vendor..."
+              placeholder={
+                isChef
+                  ? 'Search material, SKU, or location...'
+                  : 'Search material, SKU, location, or vendor...'
+              }
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-8 h-8 text-xs bg-background/80"
@@ -636,7 +678,7 @@ export function RawMaterialsView() {
           </div>
 
           {/* Vendor Filter Dropdown */}
-          {vendors.length > 0 && (
+          {!isChef && vendors.length > 0 && (
             <select
               value={selectedVendorFilter}
               onChange={(e) => setSelectedVendorFilter(e.target.value)}
@@ -666,7 +708,7 @@ export function RawMaterialsView() {
                 <TableHead className="font-semibold text-xs">Specification</TableHead>
                 <TableHead className="font-semibold text-xs">Location</TableHead>
                 <TableHead className="font-semibold text-xs">Min Threshold</TableHead>
-                <TableHead className="font-semibold text-xs">Assigned Vendor</TableHead>
+                {!isChef && <TableHead className="font-semibold text-xs">Assigned Vendor</TableHead>}
                 <TableHead className="font-semibold text-xs text-center">Quick Adjust</TableHead>
                 <TableHead className="font-semibold text-xs text-right">Actions</TableHead>
               </TableRow>
@@ -675,19 +717,21 @@ export function RawMaterialsView() {
               {loading ? (
                 Array.from({ length: 4 }).map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={9} className="py-4">
+                    <TableCell colSpan={isChef ? 8 : 9} className="py-4">
                       <div className="h-6 rounded bg-muted/60 shimmer w-full" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : materials.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={isChef ? 8 : 9} className="text-center py-12 text-muted-foreground">
                     <Package className="size-10 mx-auto text-muted-foreground/40 mb-2" />
                     <p className="font-medium text-sm">No raw materials found</p>
                     <p className="text-xs mt-1">
                       {search || statusFilter !== 'all'
                         ? 'Try clearing your search or status filters'
+                        : isChef
+                        ? 'No raw materials are currently available in inventory.'
                         : 'Click "Add Raw Material" above to track warehouse inventory.'}
                     </p>
                   </TableCell>
@@ -775,11 +819,13 @@ export function RawMaterialsView() {
                       </TableCell>
 
                       {/* Assigned Vendor */}
-                      <TableCell>
-                        <span className="text-xs font-medium text-foreground truncate max-w-[140px] block">
-                          {item.vendorName || item.vendor?.name || 'Unassigned'}
-                        </span>
-                      </TableCell>
+                      {!isChef && (
+                        <TableCell>
+                          <span className="text-xs font-medium text-foreground truncate max-w-[140px] block">
+                            {item.vendorName || item.vendor?.name || 'Unassigned'}
+                          </span>
+                        </TableCell>
+                      )}
 
                       {/* Quick Stock Adjust (+ / -) */}
                       <TableCell className="text-center">
@@ -807,26 +853,28 @@ export function RawMaterialsView() {
                         </div>
                       </TableCell>
 
-                      {/* Actions: View/Print QR Code & Edit */}
+                      {/* Actions */}
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleOpenQR(item)}
-                            className="h-8 gap-1 text-xs px-2.5 font-medium border-orange-500/30 text-orange-600 hover:bg-orange-500/10 dark:text-orange-400"
-                            title="View & Print QR Code Label"
-                          >
-                            <QrCode className="size-3.5" />
-                            QR Label
-                          </Button>
+                          {!isChef && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleOpenQR(item)}
+                              className="h-8 gap-1 text-xs px-2.5 font-medium border-orange-500/30 text-orange-600 hover:bg-orange-500/10 dark:text-orange-400"
+                              title="View & Print QR Code Label"
+                            >
+                              <QrCode className="size-3.5" />
+                              QR Label
+                            </Button>
+                          )}
 
                           <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => handleOpenEdit(item)}
                             className="size-8 text-muted-foreground hover:text-foreground"
-                            title="Edit raw material"
+                            title={isChef ? 'Update stock' : 'Edit raw material'}
                           >
                             <Edit2 className="size-3.5" />
                           </Button>
@@ -852,6 +900,7 @@ export function RawMaterialsView() {
       </Card>
 
       {/* ADD RAW MATERIAL MODAL */}
+      {!isChef && (
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
         <DialogContent className="max-w-lg p-6 bg-card">
           <DialogHeader>
@@ -1056,6 +1105,7 @@ export function RawMaterialsView() {
           </form>
         </DialogContent>
       </Dialog>
+      )}
 
       {/* EDIT RAW MATERIAL MODAL */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
@@ -1066,9 +1116,13 @@ export function RawMaterialsView() {
                 <Package className="size-5" />
               </div>
               <div>
-                <DialogTitle className="text-lg font-bold">Edit Raw Material</DialogTitle>
+                <DialogTitle className="text-lg font-bold">
+                  {isChef ? 'Update Stock' : 'Edit Raw Material'}
+                </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground mt-0.5">
-                  Update inventory counts, warehouse rack location, or assigned vendor.
+                  {isChef
+                    ? 'Update stock counts and material thresholds.'
+                    : 'Update inventory counts, warehouse rack location, or assigned vendor.'}
                 </DialogDescription>
               </div>
             </div>
@@ -1173,7 +1227,7 @@ export function RawMaterialsView() {
             </div>
 
             {/* Min Threshold & Vendor */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className={cn('grid grid-cols-1 gap-3', !isChef && 'sm:grid-cols-2')}>
               <div className="space-y-1.5">
                 <div className="h-5 flex items-center">
                   <Label className="text-xs font-semibold">
@@ -1189,29 +1243,31 @@ export function RawMaterialsView() {
                   className="h-9 text-sm"
                 />
               </div>
-              <div className="space-y-1.5">
-                <div className="h-5 flex items-center">
-                  <Label className="text-xs font-semibold">
-                    Assigned Vendor <span className="text-rose-500">*</span>
-                  </Label>
+              {!isChef && (
+                <div className="space-y-1.5">
+                  <div className="h-5 flex items-center">
+                    <Label className="text-xs font-semibold">
+                      Assigned Vendor <span className="text-rose-500">*</span>
+                    </Label>
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={formVendorId}
+                      onChange={(e) => setFormVendorId(e.target.value)}
+                      aria-label="Assigned Vendor"
+                      className="h-9 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-8 text-sm font-normal shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="">Select Vendor...</option>
+                      {vendors.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name} {v.email ? `(${v.email})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  </div>
                 </div>
-                <div className="relative">
-                  <select
-                    value={formVendorId}
-                    onChange={(e) => setFormVendorId(e.target.value)}
-                    aria-label="Assigned Vendor"
-                    className="h-9 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-8 text-sm font-normal shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">Select Vendor...</option>
-                    {vendors.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} {v.email ? `(${v.email})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                </div>
-              </div>
+              )}
             </div>
 
             <DialogFooter className="pt-2">
@@ -1230,7 +1286,7 @@ export function RawMaterialsView() {
                 disabled={submitting}
                 className="bg-orange-600 hover:bg-orange-700 text-white font-medium shadow-sm"
               >
-                {submitting ? 'Saving...' : 'Save Changes'}
+                {submitting ? 'Saving...' : isChef ? 'Update Stock' : 'Save Changes'}
               </Button>
             </DialogFooter>
           </form>
@@ -1238,11 +1294,13 @@ export function RawMaterialsView() {
       </Dialog>
 
       {/* QR CODE PREVIEW & PRINT MODAL */}
-      <RawMaterialQRModal
-        isOpen={isQrOpen}
-        onClose={() => setIsQrOpen(false)}
-        material={qrModalItem}
-      />
+      {!isChef && (
+        <RawMaterialQRModal
+          isOpen={isQrOpen}
+          onClose={() => setIsQrOpen(false)}
+          material={qrModalItem}
+        />
+      )}
     </div>
   )
 }

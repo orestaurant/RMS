@@ -12,6 +12,10 @@ const JWT_SECRET = new TextEncoder().encode(JWT_SECRET_STRING)
 
 export const SESSION_COOKIE_NAME = 'admin_session'
 
+export function normalizeRole(role?: string | null): string {
+  return String(role || '').toUpperCase().trim()
+}
+
 export async function signJWT(payload: JWTPayload): Promise<string> {
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: 'HS256' })
