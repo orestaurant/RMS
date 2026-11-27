@@ -146,7 +146,8 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
   const isCustomerPortalPage =
     Boolean(pathname?.startsWith('/customer')) || title === 'Customer Portal'
   const isCustomer = roleUpper === 'CUSTOMER' || isCustomerPortalPage
-  const canSeeNewOrder = !isCustomer && NEW_ORDER_ROLES.has(roleUpper)
+  const isVendor = !isCustomer && roleUpper === 'VENDOR'
+  const canSeeNewOrder = !isCustomer && !isVendor && NEW_ORDER_ROLES.has(roleUpper)
   const [liveNotifications, setLiveNotifications] = useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const hasInitializedNotifsRef = useRef(false)
@@ -155,6 +156,45 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
   const fetchLiveNotifications = useCallback(async () => {
     if (authLoading) return
     try {
+      if (isVendor) {
+        const qs = auth?.id ? `&recipientId=${encodeURIComponent(auth.id)}` : ''
+        const res = await fetch(`/api/dashboard-notifications?role=VENDOR${qs}&limit=20`, {
+          cache: 'no-store',
+        })
+        const json = await res.json()
+        if (json.success && json.data) {
+          const rawNotifs: any[] = json.data.notifications || []
+          const mapped: NotificationItem[] = rawNotifs.map((n) => {
+            const diffMins = Math.floor((Date.now() - new Date(n.createdAt).getTime()) / 60000)
+            const timeLabel =
+              diffMins < 1
+                ? 'Just now'
+                : diffMins < 60
+                ? `${diffMins}m ago`
+                : diffMins < 1440
+                ? `${Math.floor(diffMins / 60)}h ago`
+                : `${Math.floor(diffMins / 1440)}d ago`
+
+            return {
+              id: n.id,
+              type: n.type || 'LOW_STOCK_ALERT',
+              title: n.title || 'Restock Alert',
+              body: n.message || '',
+              time: timeLabel,
+              read: Boolean(n.isRead),
+              createdAt: n.createdAt,
+              metadata: {
+                materialName: n.rawMaterial?.name || n.metadata?.materialName,
+                sku: n.rawMaterial?.sku || n.metadata?.sku,
+              },
+            }
+          })
+          setLiveNotifications(mapped)
+          setUnreadCount(json.data.unreadCount ?? mapped.filter((m) => !m.read).length)
+        }
+        return
+      }
+
       const custParam = isCustomer
         ? `&role=CUSTOMER${auth?.id ? `&customerId=${encodeURIComponent(auth.id)}` : ''}`
         : roleUpper
@@ -212,13 +252,13 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
     } catch (err) {
       console.warn('Could not sync notifications:', err)
     }
-  }, [authLoading, isCustomer, canSeeNewOrder, roleUpper, auth?.id])
+  }, [authLoading, isCustomer, isVendor, canSeeNewOrder, roleUpper, auth?.id])
 
   useEffect(() => {
     if (authLoading) return
     fetchLiveNotifications()
 
-    // Visibility-aware polling every 5 seconds for near-real-time Waiter/Kitchen alerts
+    // Visibility-aware polling every 5 seconds for near-real-time Waiter/Kitchen/Vendor alerts
     const interval = setInterval(() => {
       if (typeof document === 'undefined' || document.visibilityState === 'visible') {
         fetchLiveNotifications()
@@ -229,6 +269,9 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         fetchLiveNotifications()
       }
+    }
+    const handleVendorSync = () => {
+      if (isVendor) fetchLiveNotifications()
     }
     const handleOrderDeleted = (e: Event) => {
       const detail = (e as CustomEvent<{ orderId?: string; fullId?: string }>).detail
@@ -262,6 +305,7 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
     }
     if (typeof window !== 'undefined') {
       window.addEventListener('rms:order-deleted', handleOrderDeleted)
+      window.addEventListener('rms:vendor-notifications-updated', handleVendorSync)
     }
 
     return () => {
@@ -271,15 +315,32 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
       }
       if (typeof window !== 'undefined') {
         window.removeEventListener('rms:order-deleted', handleOrderDeleted)
+        window.removeEventListener('rms:vendor-notifications-updated', handleVendorSync)
       }
     }
-  }, [authLoading, fetchLiveNotifications])
+  }, [authLoading, isVendor, fetchLiveNotifications])
 
   const handleMarkAllRead = async (e: React.MouseEvent) => {
     e.stopPropagation()
     setLiveNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
     setUnreadCount(0)
     try {
+      if (isVendor) {
+        await fetch('/api/dashboard-notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'mark_read',
+            id: 'all',
+            role: 'VENDOR',
+            recipientId: auth?.id || undefined,
+          }),
+        })
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('rms:vendor-notifications-updated'))
+        }
+        return
+      }
       await fetch('/api/notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -299,12 +360,18 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
       setUnreadCount((c) => Math.max(0, c - 1))
 
       // Non-blocking mark-read call that survives route transitions
-      fetch('/api/notifications', {
+      fetch(isVendor ? '/api/dashboard-notifications' : '/api/notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'mark_read', id: notif.id }),
         keepalive: true,
-      }).catch(() => {})
+      })
+        .then(() => {
+          if (isVendor && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('rms:vendor-notifications-updated'))
+          }
+        })
+        .catch(() => {})
     }
 
     // 2. Close popover cleanly
@@ -395,7 +462,11 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs font-extrabold tracking-tight text-foreground truncate">
-                      {isCustomer ? 'Dining & Order Updates' : 'Live Kitchen & Table Alerts'}
+                      {isCustomer
+                        ? 'Dining & Order Updates'
+                        : isVendor
+                        ? 'Vendor Restock Alerts'
+                        : 'Live Kitchen & Table Alerts'}
                     </span>
                     {unreadCount > 0 && (
                       <Badge className="text-[10px] h-4.5 px-1.5 bg-[#E23744] text-white border-0 font-bold">
@@ -495,6 +566,8 @@ export function TopNavbar({ title, subtitle, children }: TopNavbarProps) {
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     {isCustomer
                       ? 'Updates about your food preparation and dining orders will appear here.'
+                      : isVendor
+                      ? 'Low stock restock alerts from warehouse managers will appear here.'
                       : 'Food prepared, pending bill requests, and new order alerts will appear here.'}
                   </p>
                 </div>

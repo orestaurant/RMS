@@ -8,6 +8,7 @@ import {
   CachedMenuItem,
 } from '@/lib/menu-cache'
 import { getCachedBranchMeta, setCachedBranchMeta } from '@/lib/dashboard-cache'
+import { syncMenuAvailabilityFromInventory } from '@/lib/inventory-deduction'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -248,6 +249,7 @@ export async function POST(request: NextRequest) {
       imageUrl,
       image,
       isAvailable,
+      recipe,
     } = body
 
     if (!name || typeof name !== 'string' || !name.trim()) {
@@ -317,6 +319,19 @@ export async function POST(request: NextRequest) {
 
     const finalImageUrl = (imageUrl || image) ? String(imageUrl || image).trim() : null
 
+    const normalizedRecipe = Array.isArray(recipe)
+      ? recipe
+          .filter((r: any) => r && String(r.ingredientName || r.name || '').trim())
+          .map((r: any) => ({
+            inventoryItemId: r.inventoryItemId || undefined,
+            rawMaterialId: r.rawMaterialId || undefined,
+            sku: r.sku || undefined,
+            ingredientName: String(r.ingredientName || r.name).trim(),
+            quantity: Math.max(0.001, parseFloat(r.quantity) || 0.1),
+            unit: String(r.unit || 'kg').trim(),
+          }))
+      : []
+
     const newItem = await prisma.menuItem.create({
       data: {
         name: name.trim(),
@@ -333,30 +348,51 @@ export async function POST(request: NextRequest) {
         preparationTimeMinutes: prepTime || preparationTimeMinutes ? Number(prepTime || preparationTimeMinutes) : 15,
         imageUrl: finalImageUrl,
         isAvailable: isAvailable !== undefined ? Boolean(isAvailable) : true,
+        ...(normalizedRecipe.length > 0
+          ? {
+              metadata: {
+                recipe: normalizedRecipe,
+                recipeUpdatedAt: new Date().toISOString(),
+              },
+            }
+          : {}),
       },
       include: {
         category: true,
       },
     })
 
+    if (normalizedRecipe.length > 0) {
+      await syncMenuAvailabilityFromInventory(targetCat.organizationId).catch(() => {})
+    }
+
+    const refreshedItem =
+      normalizedRecipe.length > 0
+        ? await prisma.menuItem.findUnique({
+            where: { id: newItem.id },
+            include: { category: true },
+          })
+        : newItem
+    const effectiveItem = refreshedItem || newItem
+
     const formattedItem: CachedMenuItem = {
-      id: newItem.id,
-      name: newItem.name,
-      description: newItem.description || '',
-      categoryId: newItem.categoryId,
-      restaurantId: newItem.restaurantId,
-      category: newItem.category?.name || 'Uncategorized',
-      price: Number(newItem.basePrice),
-      costPrice: newItem.costPrice ? Number(newItem.costPrice) : undefined,
-      image: newItem.imageUrl || '',
-      isVeg: newItem.isVegetarian,
-      isVegan: newItem.isVegan,
-      isSpicy: newItem.isSpicy,
-      spiceLevel: newItem.spiceLevel || 0,
-      isAvailable: newItem.isAvailable,
-      prepTime: newItem.preparationTimeMinutes || 15,
+      id: effectiveItem.id,
+      name: effectiveItem.name,
+      description: effectiveItem.description || '',
+      categoryId: effectiveItem.categoryId,
+      restaurantId: effectiveItem.restaurantId,
+      category: effectiveItem.category?.name || 'Uncategorized',
+      price: Number(effectiveItem.basePrice),
+      costPrice: effectiveItem.costPrice ? Number(effectiveItem.costPrice) : undefined,
+      image: effectiveItem.imageUrl || '',
+      isVeg: effectiveItem.isVegetarian,
+      isVegan: effectiveItem.isVegan,
+      isSpicy: effectiveItem.isSpicy,
+      spiceLevel: effectiveItem.spiceLevel || 0,
+      isAvailable: effectiveItem.isAvailable,
+      prepTime: effectiveItem.preparationTimeMinutes || 15,
       rating: 4.8,
-      tags: newItem.isSpicy ? ['spicy'] : [],
+      tags: effectiveItem.isSpicy ? ['spicy'] : [],
       variants: [],
     }
 

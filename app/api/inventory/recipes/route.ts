@@ -1,15 +1,103 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { getRecipeForDish, RecipeIngredient } from '@/lib/inventory-deduction'
+import {
+  getRecipeForDish,
+  RecipeIngredient,
+  syncMenuAvailabilityFromInventory,
+} from '@/lib/inventory-deduction'
 import { invalidateAllMenuCaches } from '@/lib/menu-cache'
 
 export const dynamic = 'force-dynamic'
 
+export interface InventoryOptionItem {
+  key: string
+  name: string
+  sku: string
+  quantity: number
+  unit: string
+  source: 'inventory' | 'raw_material' | 'both'
+  inventoryItemId?: string
+  rawMaterialId?: string
+  status: 'in-stock' | 'low-stock' | 'out-of-stock'
+}
+
+async function getUnifiedInventoryOptions(): Promise<InventoryOptionItem[]> {
+  const [invItems, rawMaterials] = await Promise.all([
+    prisma.inventoryItem
+      .findMany({
+        where: { deletedAt: null },
+        orderBy: { name: 'asc' },
+      })
+      .catch(() => []),
+    prisma.rawMaterial
+      .findMany({
+        orderBy: { name: 'asc' },
+      })
+      .catch(() => []),
+  ])
+
+  const byKey = new Map<string, InventoryOptionItem>()
+
+  for (const inv of invItems) {
+    const qty = Number(inv.quantity ?? inv.quantityInStock ?? 0)
+    const min = Number(inv.minStock ?? 5)
+    const key = (inv.sku || inv.name).toLowerCase().trim()
+    byKey.set(key, {
+      key: `inv_${inv.id}`,
+      name: inv.name || inv.itemName || 'Inventory Item',
+      sku: inv.sku || '',
+      quantity: qty,
+      unit: inv.unit || inv.unitOfMeasure || 'kg',
+      source: 'inventory',
+      inventoryItemId: inv.id,
+      status: qty <= 0 ? 'out-of-stock' : qty <= min ? 'low-stock' : 'in-stock',
+    })
+  }
+
+  for (const raw of rawMaterials) {
+    const qty = Number(raw.quantity ?? 0)
+    const min = Number(raw.minThreshold ?? 10)
+    const skuKey = (raw.sku || '').toLowerCase().trim()
+    const nameKey = (raw.name || '').toLowerCase().trim()
+    const existing = (skuKey && byKey.get(skuKey)) || byKey.get(nameKey)
+
+    if (existing) {
+      existing.rawMaterialId = raw.id
+      existing.source = 'both'
+      existing.quantity = qty
+      existing.unit = raw.weightUnit || existing.unit
+      existing.status = qty <= 0 ? 'out-of-stock' : qty <= min ? 'low-stock' : 'in-stock'
+    } else {
+      byKey.set(skuKey || nameKey, {
+        key: `raw_${raw.id}`,
+        name: raw.name,
+        sku: raw.sku,
+        quantity: qty,
+        unit: raw.weightUnit || 'kg',
+        source: 'raw_material',
+        rawMaterialId: raw.id,
+        status: qty <= 0 ? 'out-of-stock' : qty <= min ? 'low-stock' : 'in-stock',
+      })
+    }
+  }
+
+  return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name))
+}
+
 export async function GET(request: NextRequest) {
   try {
     const menuItemId = request.nextUrl.searchParams.get('menuItemId')
+    const optionsOnly = request.nextUrl.searchParams.get('optionsOnly') === 'true'
 
-    if (!menuItemId) {
+    const inventoryOptions = await getUnifiedInventoryOptions()
+
+    if (optionsOnly || !menuItemId) {
+      if (optionsOnly) {
+        return NextResponse.json({
+          success: true,
+          data: { inventoryOptions },
+        })
+      }
       return NextResponse.json(
         { success: false, error: 'menuItemId parameter is required' },
         { status: 400 }
@@ -39,6 +127,7 @@ export async function GET(request: NextRequest) {
         dishName: item.name,
         isCustom,
         recipe: effectiveRecipe,
+        inventoryOptions,
       },
     })
   } catch (error: any) {
@@ -71,7 +160,7 @@ export async function POST(request: NextRequest) {
 
     const item = await prisma.menuItem.findUnique({
       where: { id: menuItemId },
-      select: { id: true, metadata: true },
+      select: { id: true, organizationId: true, metadata: true },
     })
 
     if (!item) {
@@ -86,6 +175,8 @@ export async function POST(request: NextRequest) {
       ...existingMeta,
       recipe: recipe.map((r: any) => ({
         inventoryItemId: r.inventoryItemId || undefined,
+        rawMaterialId: r.rawMaterialId || undefined,
+        sku: r.sku || undefined,
         ingredientName: String(r.ingredientName || r.name).trim(),
         quantity: Math.max(0.001, parseFloat(r.quantity) || 0.1),
         unit: String(r.unit || 'kg').trim(),
@@ -99,6 +190,7 @@ export async function POST(request: NextRequest) {
     })
 
     invalidateAllMenuCaches()
+    await syncMenuAvailabilityFromInventory(item.organizationId).catch(() => {})
 
     return NextResponse.json({
       success: true,

@@ -68,6 +68,7 @@ export async function PATCH(
 
     let updatedDbOrder = null
     let existing: any = null
+    let inventoryDeduction: any = null
 
     try {
       const isUuid = (str: string) =>
@@ -117,10 +118,6 @@ export async function PATCH(
           updateData.status = dbStatusMap[normalizedKdsStatus] as any
           if (normalizedKdsStatus === 'ready') {
             updateData.preparedAt = new Date()
-            // Real-time automatic inventory recipe deduction (asynchronous non-blocking)
-            deductStockForPreparedOrder(existing.id).catch((err) =>
-              console.error('Inventory auto-deduction error:', err?.message)
-            )
           } else if (normalizedKdsStatus === 'served') {
             updateData.servedAt = new Date()
           }
@@ -133,6 +130,14 @@ export async function PATCH(
           where: { id: existing.id },
           data: updateData,
         })
+
+        // Awaited automatic inventory recipe deduction when dish is marked Ready / Prepared
+        if (normalizedKdsStatus === 'ready') {
+          inventoryDeduction = await deductStockForPreparedOrder(existing.id).catch((err) => {
+            console.error('Inventory auto-deduction error:', err?.message)
+            return null
+          })
+        }
 
         // Fast parallel update for linked KitchenTickets
         const ktStatusMap: Record<string, any> = {
@@ -235,6 +240,7 @@ export async function PATCH(
         priority,
         updated: true,
         ticket: fallbackUpdate,
+        ...(inventoryDeduction ? { inventoryDeduction } : {}),
       }),
       {
         headers: {

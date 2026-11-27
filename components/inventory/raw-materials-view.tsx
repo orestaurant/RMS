@@ -22,9 +22,6 @@ import {
   ArrowUpDown,
   Filter,
   ChevronDown,
-  Truck,
-  Timer,
-  PackageCheck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -68,8 +65,6 @@ export interface RawMaterialItem {
     name: string
     email: string
   } | null
-  latestRestockStatus?: string | null
-  latestRestockMeta?: any
   createdAt?: string
   updatedAt?: string
 }
@@ -205,7 +200,7 @@ export function RawMaterialsView() {
     setFormQuantity('20')
     setFormWeight('5')
     setFormWeightUnit('kg')
-    setFormLocation('Warehouse A - Rack 2 - Bin 1')
+    setFormLocation('')
     setFormMinThreshold('10')
     setFormVendorId(vendors[0]?.id || '')
     setFormErrors({})
@@ -683,71 +678,30 @@ export function RawMaterialsView() {
                         </div>
                       </TableCell>
 
-                      {/* Visual Status Badge & Restock Lifecycle */}
+                      {/* Visual Stock Status Badge */}
                       <TableCell>
-                        <div className="flex flex-col gap-1 items-start">
-                          {isCritical ? (
-                            <Badge variant="destructive" className="text-[11px] gap-1 px-2 py-0.5">
-                              <AlertOctagon className="size-3" />
-                              Critical / Out
-                            </Badge>
-                          ) : isLow ? (
-                            <Badge
-                              variant="outline"
-                              className="text-[11px] gap-1 px-2 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 font-medium"
-                            >
-                              <AlertTriangle className="size-3" />
-                              Low Stock
-                            </Badge>
-                          ) : (
-                            <Badge
-                              variant="outline"
-                              className="text-[11px] gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
-                            >
-                              <CheckCircle2 className="size-3" />
-                              In Stock
-                            </Badge>
-                          )}
-
-                          {/* Restock Lifecycle indicator if active notification */}
-                          {item.latestRestockStatus === 'RESTOCK_DELIVERED' && (
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] gap-1 px-1.5 py-0 bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/30 font-semibold"
-                            >
-                              <PackageCheck className="size-2.5" />
-                              Restock Delivered
-                            </Badge>
-                          )}
-                          {item.latestRestockStatus === 'RESTOCK_IN_TRANSIT' && (
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] gap-1 px-1.5 py-0 bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/30 font-semibold"
-                            >
-                              <Truck className="size-2.5" />
-                              In Transit
-                            </Badge>
-                          )}
-                          {(item.latestRestockStatus === 'RESTOCK_IN_PROGRESS' ||
-                            item.latestRestockStatus === 'RESTOCK_INITIATED') && (
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] gap-1 px-1.5 py-0 bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30 font-semibold"
-                            >
-                              <Timer className="size-2.5" />
-                              In Progress
-                            </Badge>
-                          )}
-                          {item.latestRestockStatus === 'RESTOCK_COMPLETED' && (
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] gap-1 px-1.5 py-0 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 font-medium"
-                            >
-                              <CheckCircle2 className="size-2.5" />
-                              Restocked
-                            </Badge>
-                          )}
-                        </div>
+                        {isCritical ? (
+                          <Badge variant="destructive" className="text-[11px] gap-1 px-2 py-0.5">
+                            <AlertOctagon className="size-3" />
+                            Critical / Out
+                          </Badge>
+                        ) : isLow ? (
+                          <Badge
+                            variant="outline"
+                            className="text-[11px] gap-1 px-2 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 font-medium"
+                          >
+                            <AlertTriangle className="size-3" />
+                            Low Stock
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant="outline"
+                            className="text-[11px] gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
+                          >
+                            <CheckCircle2 className="size-3" />
+                            In Stock
+                          </Badge>
+                        )}
                       </TableCell>
 
                       {/* Quantity */}
@@ -916,7 +870,12 @@ export function RawMaterialsView() {
                 <Input
                   placeholder="e.g. Warehouse A - Rack 4 - Bin 2"
                   value={formLocation}
-                  onChange={(e) => setFormLocation(e.target.value)}
+                  onChange={(e) => {
+                    setFormLocation(e.target.value)
+                    if (formErrors.location) {
+                      setFormErrors((prev) => ({ ...prev, location: '' }))
+                    }
+                  }}
                   className={cn('h-9 text-sm', formErrors.location && 'border-rose-500')}
                 />
                 {formErrors.location && <p className="text-[11px] text-rose-500">{formErrors.location}</p>}
@@ -1108,10 +1067,17 @@ export function RawMaterialsView() {
                   </Label>
                 </div>
                 <Input
+                  placeholder="e.g. Warehouse A - Rack 4 - Bin 2"
                   value={formLocation}
-                  onChange={(e) => setFormLocation(e.target.value)}
-                  className="h-9 text-sm"
+                  onChange={(e) => {
+                    setFormLocation(e.target.value)
+                    if (formErrors.location) {
+                      setFormErrors((prev) => ({ ...prev, location: '' }))
+                    }
+                  }}
+                  className={cn('h-9 text-sm', formErrors.location && 'border-rose-500')}
                 />
+                {formErrors.location && <p className="text-[11px] text-rose-500">{formErrors.location}</p>}
               </div>
             </div>
 

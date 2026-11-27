@@ -128,6 +128,16 @@ export function MenuManagement() {
   const [uploadingImage, setUploadingImage] = useState(false)
   const [imageLoadError, setImageLoadError] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [newItemRecipe, setNewItemRecipe] = useState<
+    Array<{
+      ingredientName: string
+      quantity: string
+      unit: string
+      inventoryItemId?: string
+      rawMaterialId?: string
+      sku?: string
+    }>
+  >([])
   const editFileInputRef = useRef<HTMLInputElement>(null)
   const [qrGeneratorOpen, setQrGeneratorOpen] = useState(false)
 
@@ -175,7 +185,27 @@ export function MenuManagement() {
   const [recipeOpen, setRecipeOpen] = useState(false)
   const [recipeItem, setRecipeItem] = useState<MenuItem | null>(null)
   const [recipeIngredients, setRecipeIngredients] = useState<
-    Array<{ ingredientName: string; quantity: string; unit: string }>
+    Array<{
+      ingredientName: string
+      quantity: string
+      unit: string
+      inventoryItemId?: string
+      rawMaterialId?: string
+      sku?: string
+    }>
+  >([])
+  const [inventoryOptions, setInventoryOptions] = useState<
+    Array<{
+      key: string
+      name: string
+      sku: string
+      quantity: number
+      unit: string
+      source: 'inventory' | 'raw_material' | 'both'
+      inventoryItemId?: string
+      rawMaterialId?: string
+      status: 'in-stock' | 'low-stock' | 'out-of-stock'
+    }>
   >([])
   const [recipeLoading, setRecipeLoading] = useState(false)
   const [recipeSaving, setRecipeSaving] = useState(false)
@@ -244,9 +274,29 @@ export function MenuManagement() {
     await loadMenuData(false)
   }, [loadMenuData])
 
+  const fetchInventoryOptions = useCallback(async () => {
+    try {
+      const res = await fetch('/api/inventory/recipes?optionsOnly=true', { cache: 'no-store' })
+      const json = await res.json()
+      if (json.success && Array.isArray(json.data?.inventoryOptions)) {
+        setInventoryOptions(json.data.inventoryOptions)
+      }
+    } catch (err) {
+      console.error('Failed to load inventory options:', err)
+    }
+  }, [])
+
   useEffect(() => {
     loadMenuData(true)
-  }, [loadMenuData])
+    fetchInventoryOptions()
+  }, [loadMenuData, fetchInventoryOptions])
+
+  // Refresh inventory stock options whenever Add Item modal opens
+  useEffect(() => {
+    if (addItemOpen) {
+      fetchInventoryOptions()
+    }
+  }, [addItemOpen, fetchInventoryOptions])
 
   // Toggle item availability
   const handleToggleAvailability = async (item: MenuItem) => {
@@ -302,11 +352,17 @@ export function MenuManagement() {
     setRecipeOpen(true)
     setRecipeLoading(true)
     try {
-      const res = await fetch(`/api/inventory/recipes?menuItemId=${item.id}`)
+      const res = await fetch(`/api/inventory/recipes?menuItemId=${item.id}`, { cache: 'no-store' })
       const json = await res.json()
+      if (json.success && Array.isArray(json.data?.inventoryOptions)) {
+        setInventoryOptions(json.data.inventoryOptions)
+      }
       if (json.success && json.data?.recipe) {
         setRecipeIngredients(
           json.data.recipe.map((r: any) => ({
+            inventoryItemId: r.inventoryItemId,
+            rawMaterialId: r.rawMaterialId,
+            sku: r.sku,
             ingredientName: r.ingredientName,
             quantity: String(r.quantity),
             unit: r.unit || 'kg',
@@ -330,6 +386,9 @@ export function MenuManagement() {
       const validIngredients = recipeIngredients
         .filter((r) => r.ingredientName.trim())
         .map((r) => ({
+          inventoryItemId: r.inventoryItemId,
+          rawMaterialId: r.rawMaterialId,
+          sku: r.sku,
           ingredientName: r.ingredientName.trim(),
           quantity: parseFloat(r.quantity) || 0.1,
           unit: r.unit.trim() || 'kg',
@@ -347,6 +406,7 @@ export function MenuManagement() {
       const json = await res.json()
       if (json.success) {
         setRecipeOpen(false)
+        await fetchItems()
         setFeedback({
           type: 'success',
           message: `Recipe saved! Raw materials will auto-deduct when "${recipeItem.name}" is prepared.`,
@@ -362,6 +422,204 @@ export function MenuManagement() {
     }
   }
 
+  // Resolve matching inventory option for a recipe ingredient row
+  const findMatchedInventory = (ing: {
+    inventoryItemId?: string
+    rawMaterialId?: string
+    sku?: string
+    ingredientName: string
+  }) => {
+    const norm = ing.ingredientName.toLowerCase().trim()
+    return inventoryOptions.find(
+      (opt) =>
+        (ing.inventoryItemId && opt.inventoryItemId === ing.inventoryItemId) ||
+        (ing.rawMaterialId && opt.rawMaterialId === ing.rawMaterialId) ||
+        (ing.sku && opt.sku.toLowerCase() === ing.sku.toLowerCase()) ||
+        (norm && (opt.name.toLowerCase().trim() === norm || opt.name.toLowerCase().includes(norm)))
+    )
+  }
+
+  // Shared helper to render inventory-linked recipe rows in Add Item and Recipe dialogs
+  const renderRecipeRows = (
+    rows: Array<{
+      ingredientName: string
+      quantity: string
+      unit: string
+      inventoryItemId?: string
+      rawMaterialId?: string
+      sku?: string
+    }>,
+    setRows: React.Dispatch<
+      React.SetStateAction<
+        Array<{
+          ingredientName: string
+          quantity: string
+          unit: string
+          inventoryItemId?: string
+          rawMaterialId?: string
+          sku?: string
+        }>
+      >
+    >
+  ) => (
+    <div className="space-y-2">
+      {rows.map((ing, idx) => {
+        const matched = findMatchedInventory(ing)
+        return (
+          <div key={idx} className="space-y-1.5 bg-background border rounded-lg p-2.5 shadow-xs">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <select
+                  value={matched?.key || '__custom__'}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    if (val === '__custom__') {
+                      setRows((prev) =>
+                        prev.map((item, i) =>
+                          i === idx
+                            ? {
+                                ...item,
+                                inventoryItemId: undefined,
+                                rawMaterialId: undefined,
+                                sku: undefined,
+                              }
+                            : item
+                        )
+                      )
+                      return
+                    }
+                    const picked = inventoryOptions.find((o) => o.key === val)
+                    if (picked) {
+                      setRows((prev) =>
+                        prev.map((item, i) =>
+                          i === idx
+                            ? {
+                                ...item,
+                                ingredientName: picked.name,
+                                unit: picked.unit || item.unit,
+                                inventoryItemId: picked.inventoryItemId,
+                                rawMaterialId: picked.rawMaterialId,
+                                sku: picked.sku,
+                              }
+                            : item
+                        )
+                      )
+                    }
+                  }}
+                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs font-medium"
+                >
+                  <option value="__custom__">-- Custom / Type Name --</option>
+                  {inventoryOptions.map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.name} ({opt.quantity} {opt.unit}{' '}
+                      {opt.status === 'out-of-stock'
+                        ? '• OUT OF STOCK'
+                        : opt.status === 'low-stock'
+                        ? '• Low'
+                        : '• In Stock'}
+                      )
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="w-20">
+                <Input
+                  type="number"
+                  step="0.001"
+                  min="0.001"
+                  placeholder="Qty"
+                  value={ing.quantity}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setRows((prev) =>
+                      prev.map((item, i) => (i === idx ? { ...item, quantity: val } : item))
+                    )
+                  }}
+                  className="h-8 text-xs text-right font-mono"
+                />
+              </div>
+              <div className="w-16">
+                <select
+                  value={ing.unit}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setRows((prev) =>
+                      prev.map((item, i) => (i === idx ? { ...item, unit: val } : item))
+                    )
+                  }}
+                  className="h-8 w-full rounded-md border border-input bg-background px-1.5 text-xs"
+                >
+                  <option value="kg">kg</option>
+                  <option value="g">g</option>
+                  <option value="L">L</option>
+                  <option value="ml">ml</option>
+                  <option value="pcs">pcs</option>
+                </select>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 text-muted-foreground hover:text-destructive shrink-0"
+                onClick={() => setRows((prev) => prev.filter((_, i) => i !== idx))}
+                title="Remove Ingredient"
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+
+            {!matched && (
+              <Input
+                placeholder="Ingredient Name (e.g. Paneer, Onion, Oil)"
+                value={ing.ingredientName}
+                onChange={(e) => {
+                  const val = e.target.value
+                  setRows((prev) =>
+                    prev.map((item, i) =>
+                      i === idx
+                        ? {
+                            ...item,
+                            ingredientName: val,
+                            inventoryItemId: undefined,
+                            rawMaterialId: undefined,
+                            sku: undefined,
+                          }
+                        : item
+                    )
+                  )
+                }}
+                className="h-7 text-xs"
+              />
+            )}
+
+            <div className="flex items-center justify-between text-[11px] px-0.5">
+              {matched ? (
+                <span
+                  className={cn(
+                    'font-medium',
+                    matched.status === 'out-of-stock'
+                      ? 'text-destructive'
+                      : matched.status === 'low-stock'
+                      ? 'text-amber-600'
+                      : 'text-emerald-600'
+                  )}
+                >
+                  {matched.status === 'out-of-stock'
+                    ? `⚠️ Out of Stock in Inventory (0 ${matched.unit})`
+                    : `✓ Linked to Inventory: ${matched.quantity} ${matched.unit} available`}
+                </span>
+              ) : (
+                <span className="text-amber-600">
+                  ⚠️ Not found in Inventory — add &quot;{ing.ingredientName || 'item'}&quot; in Inventory for auto-deduction
+                </span>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+
   // Handle Add Item Submit
   const handleCreateItem = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -372,6 +630,17 @@ export function MenuManagement() {
 
     setSaving(true)
     try {
+      const validRecipe = newItemRecipe
+        .filter((r) => r.ingredientName.trim())
+        .map((r) => ({
+          inventoryItemId: r.inventoryItemId,
+          rawMaterialId: r.rawMaterialId,
+          sku: r.sku,
+          ingredientName: r.ingredientName.trim(),
+          quantity: parseFloat(r.quantity) || 0.1,
+          unit: r.unit.trim() || 'kg',
+        }))
+
       const res = await fetch('/api/menu/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -387,6 +656,7 @@ export function MenuManagement() {
           isAvailable,
           imageUrl: image.trim(),
           image: image.trim(),
+          ...(validRecipe.length > 0 ? { recipe: validRecipe } : {}),
         }),
       })
 
@@ -411,6 +681,7 @@ export function MenuManagement() {
       setIsAvailable(true)
       setImage('')
       setImageLoadError(false)
+      setNewItemRecipe([])
 
       setFeedback({ type: 'success', message: `Item "${json.data.name}" added to menu!` })
       setTimeout(() => setFeedback(null), 3500)
@@ -1321,6 +1592,44 @@ export function MenuManagement() {
               </label>
             </div>
 
+            {/* ── Inventory / Raw Materials Mapping (Auto-Deduct on Prepare) ── */}
+            <div className="p-3 rounded-xl border border-border bg-muted/20 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-xs font-bold flex items-center gap-1.5">
+                    <ChefHat className="size-3.5 text-amber-500" />
+                    Raw Materials / Inventory Link (Optional)
+                  </Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    Check if ingredients exist in Inventory; stock auto-deducts when Chef marks Ready.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px] px-2 gap-1"
+                  onClick={() =>
+                    setNewItemRecipe((prev) => [
+                      ...prev,
+                      {
+                        ingredientName: inventoryOptions[0]?.name || '',
+                        quantity: '0.1',
+                        unit: inventoryOptions[0]?.unit || 'kg',
+                        inventoryItemId: inventoryOptions[0]?.inventoryItemId,
+                        rawMaterialId: inventoryOptions[0]?.rawMaterialId,
+                        sku: inventoryOptions[0]?.sku,
+                      },
+                    ])
+                  }
+                >
+                  <Plus className="size-3" /> Add Ingredient
+                </Button>
+              </div>
+
+              {newItemRecipe.length > 0 && renderRecipeRows(newItemRecipe, setNewItemRecipe)}
+            </div>
+
             <DialogFooter className="pt-2">
               <Button
                 type="button"
@@ -2013,78 +2322,11 @@ export function MenuManagement() {
                 <div className="text-center py-6 text-sm text-muted-foreground">
                   No custom ingredients configured yet.
                   <p className="text-xs text-muted-foreground/80 mt-1">
-                    Default smart dictionary will auto-detect raw materials. Click below to customize!
+                    Select from Inventory / Raw Materials below so stock auto-deducts when prepared!
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2.5">
-                  {recipeIngredients.map((ing, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center gap-2 bg-background border rounded-lg p-2.5 shadow-xs"
-                    >
-                      <div className="flex-1">
-                        <Input
-                          placeholder="Ingredient Name (e.g. Paneer)"
-                          value={ing.ingredientName}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            setRecipeIngredients((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, ingredientName: val } : item))
-                            )
-                          }}
-                          className="h-8 text-xs font-medium"
-                        />
-                      </div>
-                      <div className="w-24">
-                        <Input
-                          type="number"
-                          step="0.001"
-                          min="0.001"
-                          placeholder="Qty"
-                          value={ing.quantity}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            setRecipeIngredients((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, quantity: val } : item))
-                            )
-                          }}
-                          className="h-8 text-xs text-right font-mono"
-                        />
-                      </div>
-                      <div className="w-20">
-                        <select
-                          value={ing.unit}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            setRecipeIngredients((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, unit: val } : item))
-                            )
-                          }}
-                          className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
-                        >
-                          <option value="kg">kg</option>
-                          <option value="g">g</option>
-                          <option value="L">L</option>
-                          <option value="ml">ml</option>
-                          <option value="pcs">pcs</option>
-                        </select>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:text-destructive shrink-0"
-                        onClick={() => {
-                          setRecipeIngredients((prev) => prev.filter((_, i) => i !== idx))
-                        }}
-                        title="Remove Ingredient"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
+                renderRecipeRows(recipeIngredients, setRecipeIngredients)
               )}
 
               <Button
@@ -2095,7 +2337,14 @@ export function MenuManagement() {
                 onClick={() => {
                   setRecipeIngredients((prev) => [
                     ...prev,
-                    { ingredientName: '', quantity: '0.1', unit: 'kg' },
+                    {
+                      ingredientName: inventoryOptions[0]?.name || '',
+                      quantity: '0.1',
+                      unit: inventoryOptions[0]?.unit || 'kg',
+                      inventoryItemId: inventoryOptions[0]?.inventoryItemId,
+                      rawMaterialId: inventoryOptions[0]?.rawMaterialId,
+                      sku: inventoryOptions[0]?.sku,
+                    },
                   ])
                 }}
               >

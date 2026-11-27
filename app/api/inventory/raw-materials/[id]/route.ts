@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import QRCode from 'qrcode'
 import { checkAndTriggerLowStockAlert } from '@/lib/inventory-alerts'
+import { invalidateInventoryLookupCache, syncMenuAvailabilityFromInventory } from '@/lib/inventory-deduction'
 
 export const dynamic = 'force-dynamic'
 
@@ -155,6 +156,8 @@ export async function PATCH(
 
     // Automated trigger check: drops below minThreshold
     const alertResult = await checkAndTriggerLowStockAlert(updated)
+    invalidateInventoryLookupCache()
+    await syncMenuAvailabilityFromInventory().catch(() => {})
 
     return NextResponse.json({
       success: true,

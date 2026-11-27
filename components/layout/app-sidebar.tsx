@@ -241,8 +241,8 @@ export function AppSidebar() {
         {
           label: 'INVENTORY',
           items: [
-            { label: 'Inventory', href: '/inventory-manager/inventory', icon: Package },
-            { label: 'Menu Inventory', href: '/inventory', icon: Boxes },
+            { label: 'Raw Material', href: '/inventory-manager/inventory', icon: Package },
+            { label: 'Inventory Management', href: '/inventory', icon: Boxes },
           ],
         },
         {

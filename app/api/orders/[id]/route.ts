@@ -4,6 +4,7 @@ import { successResponse, errorResponse } from '@/api/utils/responses'
 import { updateFallbackOrder, removeFallbackOrder, invalidateLiveOrdersCache, invalidateKDSCache } from '@/lib/kds-utils'
 import { invalidatePOSTablesCache } from '@/lib/pos-cache'
 import { syncCustomerOrderStats } from '@/lib/customer-stats'
+import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
 import {
   notifyOrderPrepared,
   markOrderPreparedNotificationsRead,
@@ -119,6 +120,11 @@ export async function PATCH(
         const updateData: any = { updatedAt: new Date() }
         if (status && dbStatusMap[status]) {
           updateData.status = dbStatusMap[status] as any
+          if (updateData.status === 'READY') {
+            updateData.preparedAt = new Date()
+          } else if (updateData.status === 'SERVED') {
+            updateData.servedAt = new Date()
+          }
         }
         if (notes !== undefined) updateData.notes = notes
 
@@ -170,6 +176,9 @@ export async function PATCH(
         })
 
         if (updateData.status === 'READY') {
+          await deductStockForPreparedOrder(existing.id).catch((err) =>
+            console.error('Inventory auto-deduction error:', err?.message)
+          )
           const tableLabel =
             existing.table?.tableNumber ||
             (updatedOrder.vehicleNumber ? `🚗 ${updatedOrder.vehicleNumber}` : null) ||

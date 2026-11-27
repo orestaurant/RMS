@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Bell,
   AlertTriangle,
@@ -11,23 +11,23 @@ import {
   Scale,
   RefreshCw,
   Send,
-  Boxes,
   Truck,
   CheckCheck,
   ShieldAlert,
-  ArrowRight,
   PackageCheck,
   Timer,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  ArrowUpRight,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Dialog,
   DialogContent,
@@ -59,6 +59,7 @@ export interface VendorNotification {
     inTransitAt?: string
     deliveredAt?: string
     completedAt?: string
+    plannedQuantity?: number
     deliveredQuantity?: number
     newStock?: number
     vendorNotes?: string
@@ -87,264 +88,568 @@ export interface VendorNotification {
   } | null
 }
 
+type FilterMode = 'all' | 'pending' | 'in_progress' | 'in_transit' | 'delivered' | 'completed'
+type StageKey = Exclude<FilterMode, 'all'>
+
+const STAGE_CONFIG: Record<
+  StageKey,
+  {
+    kpiTitle: string
+    kpiSubtitle: string
+    tabLabel: string
+    badgeLabel: string
+    Icon: React.ElementType
+    accentText: string
+    borderLeft: string
+    badgeClass: string
+    kpiRing: string
+    kpiIconBg: string
+    hoverBorder: string
+  }
+> = {
+  pending: {
+    kpiTitle: 'Pending',
+    kpiSubtitle: 'Need acknowledgement',
+    tabLabel: 'Pending',
+    badgeLabel: 'Restock Required',
+    Icon: AlertTriangle,
+    accentText: 'text-amber-600 dark:text-amber-400',
+    borderLeft: 'border-l-4 border-l-amber-500',
+    badgeClass: 'bg-amber-600 text-white hover:bg-amber-600 border-transparent',
+    kpiRing: 'ring-2 ring-amber-500',
+    kpiIconBg: 'bg-amber-500/20 text-amber-600',
+    hoverBorder: 'hover:border-amber-500/60',
+  },
+  in_progress: {
+    kpiTitle: 'In Progress',
+    kpiSubtitle: 'Preparing supplies',
+    tabLabel: 'In Progress',
+    badgeLabel: 'Request In Progress',
+    Icon: Timer,
+    accentText: 'text-sky-600 dark:text-sky-400',
+    borderLeft: 'border-l-4 border-l-sky-500',
+    badgeClass: 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30',
+    kpiRing: 'ring-2 ring-sky-500',
+    kpiIconBg: 'bg-sky-500/10 text-sky-600',
+    hoverBorder: 'hover:border-sky-500/60',
+  },
+  in_transit: {
+    kpiTitle: 'In Transit',
+    kpiSubtitle: 'On the way to restaurant',
+    tabLabel: 'In Transit',
+    badgeLabel: 'Restock In Transit',
+    Icon: Truck,
+    accentText: 'text-purple-600 dark:text-purple-400',
+    borderLeft: 'border-l-4 border-l-purple-500',
+    badgeClass: 'bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/30',
+    kpiRing: 'ring-2 ring-purple-500',
+    kpiIconBg: 'bg-purple-500/10 text-purple-600',
+    hoverBorder: 'hover:border-purple-500/60',
+  },
+  delivered: {
+    kpiTitle: 'Delivered',
+    kpiSubtitle: 'Awaiting manager check',
+    tabLabel: 'Delivered',
+    badgeLabel: 'Restock Delivered',
+    Icon: PackageCheck,
+    accentText: 'text-teal-600 dark:text-teal-400',
+    borderLeft: 'border-l-4 border-l-teal-500',
+    badgeClass: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/30',
+    kpiRing: 'ring-2 ring-teal-500',
+    kpiIconBg: 'bg-teal-500/10 text-teal-600',
+    hoverBorder: 'hover:border-teal-500/60',
+  },
+  completed: {
+    kpiTitle: 'Completed',
+    kpiSubtitle: 'Stock updated in warehouse',
+    tabLabel: 'Completed',
+    badgeLabel: 'Restock Completed',
+    Icon: CheckCircle2,
+    accentText: 'text-emerald-600 dark:text-emerald-400',
+    borderLeft: 'border-l-4 border-l-emerald-500',
+    badgeClass: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30',
+    kpiRing: 'ring-2 ring-emerald-500',
+    kpiIconBg: 'bg-emerald-500/10 text-emerald-600',
+    hoverBorder: 'hover:border-emerald-500/60',
+  },
+}
+
+const STAGE_KEYS: StageKey[] = ['pending', 'in_progress', 'in_transit', 'delivered', 'completed']
+
+type RestockModalMode = 'accept' | 'deliver'
+
+const RESTOCK_MODAL_CONFIG: Record<
+  RestockModalMode,
+  {
+    title: string
+    descriptionSuffix: string
+    qtyLabel: string
+    qtyHint: string
+    notesLabel: string
+    notesPlaceholder: string
+    defaultNotes: string
+    submitLabel: string
+    submittingLabel: string
+    submitBtnClass: string
+    iconClass: string
+    Icon: React.ElementType
+  }
+> = {
+  accept: {
+    title: 'Accept Restock & Confirm Quantity',
+    descriptionSuffix:
+      'Enter the exact quantity you will deliver so your workers and the Inventory Manager know what to prepare.',
+    qtyLabel: 'Quantity to Deliver',
+    qtyHint:
+      'This committed quantity will be shown on the request card for your workers and synced with the warehouse.',
+    notesLabel: 'Dispatch / Worker Notes (Optional)',
+    notesPlaceholder: 'e.g. Packing 12 units for morning dispatch.',
+    defaultNotes: '',
+    submitLabel: 'Accept & Confirm Quantity',
+    submittingLabel: 'Accepting...',
+    submitBtnClass: 'bg-emerald-600 hover:bg-emerald-700 text-white font-semibold',
+    iconClass: 'text-emerald-600',
+    Icon: Send,
+  },
+  deliver: {
+    title: 'Confirm Restock Delivery',
+    descriptionSuffix:
+      'Once submitted, the Inventory Manager will verify and confirm stock replenishment.',
+    qtyLabel: 'Delivered / Replenished Quantity',
+    qtyHint:
+      'Upon manager confirmation, this quantity will be automatically added to the warehouse inventory.',
+    notesLabel: 'Delivery Notes (Optional)',
+    notesPlaceholder: 'e.g. Delivered Batch #441 via delivery truck',
+    defaultNotes: 'Shipment delivered to warehouse receiving dock.',
+    submitLabel: 'Mark Restock Delivered',
+    submittingLabel: 'Submitting...',
+    submitBtnClass: 'bg-teal-600 hover:bg-teal-700 text-white font-semibold',
+    iconClass: 'text-teal-600',
+    Icon: PackageCheck,
+  },
+}
+
+function getStageKey(status: VendorNotification['status']): StageKey {
+  if (status === 'RESTOCK_IN_PROGRESS' || status === 'RESTOCK_INITIATED') return 'in_progress'
+  if (status === 'RESTOCK_IN_TRANSIT') return 'in_transit'
+  if (status === 'RESTOCK_DELIVERED') return 'delivered'
+  if (status === 'RESTOCK_COMPLETED') return 'completed'
+  return 'pending'
+}
+
+function formatShortTime(dateStr: string): string {
+  return new Date(dateStr).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function formatRelativeTime(dateStr: string): string {
+  const diffMins = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000)
+  if (diffMins < 1) return 'Just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  const diffHours = Math.floor(diffMins / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+  return `${Math.floor(diffHours / 24)}d ago`
+}
+
+function emitVendorNotificationsUpdated() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('rms:vendor-notifications-updated'))
+  }
+}
+
 export function VendorDashboardView() {
-  const { auth } = useAuthContext()
+  const { auth, loading: authLoading } = useAuthContext()
   const [notifications, setNotifications] = useState<VendorNotification[]>([])
-  const [unreadCount, setUnreadCount] = useState(0)
+  const [serverUnreadCount, setServerUnreadCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [actingId, setActingId] = useState<string | null>(null)
+  const [bellOpen, setBellOpen] = useState(false)
+  const [highlightedId, setHighlightedId] = useState<string | null>(null)
 
-  // Filter mode
-  const [filterMode, setFilterMode] = useState<
-    'all' | 'pending' | 'in_progress' | 'in_transit' | 'delivered' | 'completed'
-  >('all')
-
-  // Pagination state
+  const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [itemsPerPage, setItemsPerPage] = useState<number>(5)
 
-  // Delivered Confirmation Modal state
-  const [deliveryModalNotif, setDeliveryModalNotif] = useState<VendorNotification | null>(null)
-  const [deliveryQty, setDeliveryQty] = useState<string>('20')
-  const [deliveryNotes, setDeliveryNotes] = useState<string>('')
-  const [submittingDelivery, setSubmittingDelivery] = useState(false)
+  const [actionModal, setActionModal] = useState<{
+    mode: RestockModalMode
+    notif: VendorNotification
+  } | null>(null)
+  const [modalQty, setModalQty] = useState<string>('20')
+  const [modalNotes, setModalNotes] = useState<string>('')
+  const [submittingModal, setSubmittingModal] = useState(false)
 
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'info' | 'error'
     message: string
   } | null>(null)
 
-  const showFeedback = (type: 'success' | 'info' | 'error', message: string) => {
-    setFeedback({ type, message })
-    setTimeout(() => {
-      setFeedback((curr) => (curr?.message === message ? null : curr))
-    }, 4500)
-  }
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fetchAbortRef = useRef<AbortController | null>(null)
 
-  // Fetch Vendor Notifications
+  const showFeedback = useCallback((type: 'success' | 'info' | 'error', message: string) => {
+    setFeedback({ type, message })
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current)
+    feedbackTimerRef.current = setTimeout(() => {
+      setFeedback(null)
+    }, 4500)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current)
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
+      fetchAbortRef.current?.abort()
+    }
+  }, [])
+
+  const isVendorRole = String(auth?.role || '').toUpperCase() === 'VENDOR'
+  const scopedVendorId = isVendorRole && auth?.id ? auth.id : ''
+
+  // Fetch Vendor Notifications with AbortController and cache bypass
   const fetchNotifications = useCallback(async () => {
+    if (authLoading) return
+
+    fetchAbortRef.current?.abort()
+    const controller = new AbortController()
+    fetchAbortRef.current = controller
+
     try {
-      const recipientId = auth?.id || ''
-      const res = await fetch(
-        `/api/dashboard-notifications?role=VENDOR${recipientId ? `&recipientId=${recipientId}` : ''}`
-      )
+      const qs = scopedVendorId ? `&recipientId=${encodeURIComponent(scopedVendorId)}` : ''
+      const res = await fetch(`/api/dashboard-notifications?role=VENDOR${qs}&limit=50`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
       const json = await res.json()
       if (json.success && json.data) {
         setNotifications(json.data.notifications || [])
-        setUnreadCount(json.data.unreadCount || 0)
+        setServerUnreadCount(json.data.unreadCount ?? 0)
       }
-    } catch (err) {
-      console.warn('Error fetching vendor notifications:', err)
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
+        console.warn('Error fetching vendor notifications:', err)
+      }
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (!controller.signal.aborted) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
-  }, [auth?.id])
+  }, [authLoading, scopedVendorId])
 
-  // Initial fetch and 20s Polling Loop for live updates without page reload
+  // Visibility-aware polling every 20s + instant sync when TopNavbar marks items read
   useEffect(() => {
+    if (authLoading) return
     fetchNotifications()
-    const interval = setInterval(fetchNotifications, 20000)
-    return () => clearInterval(interval)
-  }, [fetchNotifications])
 
-  // Mark single as read
-  const handleMarkAsRead = async (notifId: string) => {
-    try {
-      setActingId(notifId)
-      const res = await fetch('/api/dashboard-notifications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'mark_read', id: notifId }),
-      })
-      if (res.ok) {
-        setNotifications((prev) =>
-          prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n))
-        )
-        setUnreadCount((c) => Math.max(0, c - 1))
-        showFeedback('info', 'Alert marked as read')
+    const interval = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        fetchNotifications()
       }
-    } catch {
-      showFeedback('error', 'Failed to update alert status')
-    } finally {
-      setActingId(null)
-    }
-  }
+    }, 20000)
 
-  // Mark all as read
-  const handleMarkAllRead = async () => {
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchNotifications()
+      }
+    }
+
+    const handleExternalSync = () => {
+      fetchNotifications()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('rms:vendor-notifications-updated', handleExternalSync)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('rms:vendor-notifications-updated', handleExternalSync)
+    }
+  }, [authLoading, fetchNotifications])
+
+  // Single-pass counts + filtered list
+  const { stageCounts, filteredNotifications, localUnreadCount } = useMemo(() => {
+    const counts: Record<StageKey, number> = {
+      pending: 0,
+      in_progress: 0,
+      in_transit: 0,
+      delivered: 0,
+      completed: 0,
+    }
+    const filtered: VendorNotification[] = []
+    let unread = 0
+
+    for (const notif of notifications) {
+      if (!notif.isRead) unread++
+      const stage = getStageKey(notif.status)
+      counts[stage]++
+      if (filterMode === 'all' || filterMode === stage) {
+        filtered.push(notif)
+      }
+    }
+
+    return { stageCounts: counts, filteredNotifications: filtered, localUnreadCount: unread }
+  }, [notifications, filterMode])
+
+  // Prefer exact local unread count when all items fit in the fetched window
+  const unreadCount = notifications.length < 50 ? localUnreadCount : Math.max(localUnreadCount, serverUnreadCount)
+
+  // Prioritized alerts for the notification bell popover (unread first, then recent)
+  const dropdownNotifications = useMemo(() => {
+    const unread = notifications.filter((n) => !n.isRead)
+    const read = notifications.filter((n) => n.isRead)
+    return [...unread, ...read].slice(0, 12)
+  }, [notifications])
+
+  // Mark single notification as read (optimistic with rollback)
+  const handleMarkAsRead = useCallback(
+    async (notifId: string, silent = false) => {
+      const target = notifications.find((n) => n.id === notifId)
+      if (!target || target.isRead) return
+
+      setNotifications((prev) => prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n)))
+      setServerUnreadCount((c) => Math.max(0, c - 1))
+
+      try {
+        if (!silent) setActingId(notifId)
+        const res = await fetch('/api/dashboard-notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'mark_read', id: notifId }),
+        })
+        if (!res.ok) throw new Error('Failed')
+        emitVendorNotificationsUpdated()
+        if (!silent) showFeedback('info', 'Alert marked as read')
+      } catch {
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notifId ? { ...n, isRead: false } : n))
+        )
+        setServerUnreadCount((c) => c + 1)
+        if (!silent) showFeedback('error', 'Failed to update alert status')
+      } finally {
+        if (!silent) setActingId(null)
+      }
+    },
+    [notifications, showFeedback]
+  )
+
+  // Mark all as read (optimistic with rollback)
+  const handleMarkAllRead = useCallback(async () => {
+    const prevSnapshot = notifications
+    const prevUnread = serverUnreadCount
+
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })))
+    setServerUnreadCount(0)
+
     try {
-      setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })))
-      setUnreadCount(0)
-      await fetch('/api/dashboard-notifications', {
+      const res = await fetch('/api/dashboard-notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'mark_read',
           id: 'all',
           role: 'VENDOR',
-          recipientId: auth?.id || undefined,
+          recipientId: scopedVendorId || undefined,
         }),
       })
+      if (!res.ok) throw new Error('Failed')
+      emitVendorNotificationsUpdated()
       showFeedback('info', 'All alerts marked as read')
     } catch {
-      fetchNotifications()
+      setNotifications(prevSnapshot)
+      setServerUnreadCount(prevUnread)
+      showFeedback('error', 'Failed to mark alerts as read')
     }
-  }
+  }, [notifications, serverUnreadCount, scopedVendorId, showFeedback])
 
-  // STAGE 1: Vendor Accepts Request -> Status: RESTOCK_IN_PROGRESS
-  const handleAcceptRequest = async (notifId: string, materialName: string) => {
+  // Focus & scroll to a specific notification from the Bell dropdown or TopNavbar
+  const focusNotification = useCallback(
+    (notif: VendorNotification) => {
+      setBellOpen(false)
+      setFilterMode('all')
+
+      const indexInAll = notifications.findIndex((n) => n.id === notif.id)
+      if (indexInAll >= 0) {
+        setCurrentPage(Math.floor(indexInAll / itemsPerPage) + 1)
+      } else {
+        setCurrentPage(1)
+      }
+
+      if (!notif.isRead) {
+        handleMarkAsRead(notif.id, true)
+      }
+
+      setHighlightedId(notif.id)
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
+      highlightTimerRef.current = setTimeout(() => setHighlightedId(null), 3000)
+
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          const el = document.getElementById(`vendor-notif-${notif.id}`)
+          el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }, 60)
+      })
+    },
+    [notifications, itemsPerPage, handleMarkAsRead]
+  )
+
+  // Listen for ?notif=<id> URL param or TopNavbar navigation events
+  useEffect(() => {
+    if (notifications.length === 0) return
+
+    const handleNavEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ notifId?: string }>).detail
+      if (!detail?.notifId) return
+      const match = notifications.find((n) => n.id === detail.notifId)
+      if (match) focusNotification(match)
+    }
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      const urlNotifId = params.get('notif')
+      if (urlNotifId) {
+        const match = notifications.find((n) => n.id === urlNotifId)
+        if (match) {
+          focusNotification(match)
+          params.delete('notif')
+          const cleanUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`
+          window.history.replaceState({}, '', cleanUrl)
+        }
+      }
+      window.addEventListener('rms:notification-navigate', handleNavEvent)
+      return () => window.removeEventListener('rms:notification-navigate', handleNavEvent)
+    }
+  }, [notifications, focusNotification])
+
+  // Shared workflow transition handler for In-Transit (and direct stage actions)
+  const handleStageAction = async (
+    notifId: string,
+    action: 'accept_request' | 'mark_in_transit',
+    vendorNotes: string,
+    successMessage: string,
+    failureMessage: string
+  ) => {
     try {
       setActingId(notifId)
       const res = await fetch('/api/dashboard-notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'accept_request',
-          id: notifId,
-          vendorNotes: `Restock request accepted by ${auth?.name || 'Vendor'}. Preparation in progress.`,
-        }),
+        body: JSON.stringify({ action, id: notifId, vendorNotes }),
       })
       const json = await res.json()
       if (json.success) {
-        showFeedback(
-          'success',
-          `Restock request accepted for "${materialName}"! Status is now Request In Progress.`
-        )
+        if (json.data) {
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === notifId ? { ...n, ...json.data } : n))
+          )
+        }
+        showFeedback('success', successMessage)
+        emitVendorNotificationsUpdated()
         fetchNotifications()
       } else {
-        showFeedback('error', json.message || 'Failed to accept restock request')
+        showFeedback('error', json.message || failureMessage)
       }
     } catch {
-      showFeedback('error', 'Error accepting restock request')
+      showFeedback('error', failureMessage)
     } finally {
       setActingId(null)
     }
   }
 
-  // STAGE 2: Vendor Marks In Transit -> Status: RESTOCK_IN_TRANSIT
-  const handleMarkInTransit = async (notifId: string, materialName: string) => {
-    try {
-      setActingId(notifId)
-      const res = await fetch('/api/dashboard-notifications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'mark_in_transit',
-          id: notifId,
-          vendorNotes: `Restock shipment dispatched by ${auth?.name || 'Vendor'}. Goods are currently in transit.`,
-        }),
-      })
-      const json = await res.json()
-      if (json.success) {
-        showFeedback(
-          'success',
-          `"${materialName}" marked as Restock In Transit! Order is on the way to warehouse.`
-        )
-        fetchNotifications()
-      } else {
-        showFeedback('error', json.message || 'Failed to mark restock in transit')
-      }
-    } catch {
-      showFeedback('error', 'Error updating shipment status')
-    } finally {
-      setActingId(null)
-    }
-  }
-
-  // Open Mark Delivered Dialog
-  const openDeliveryModal = (notif: VendorNotification) => {
+  const openActionModal = (mode: RestockModalMode, notif: VendorNotification) => {
     const currentQty = notif.rawMaterial?.quantity ?? notif.metadata?.currentQuantity ?? 0
     const minThreshold = notif.rawMaterial?.minThreshold ?? notif.metadata?.minThreshold ?? 10
     const suggestedQty = Math.max(10, Math.ceil(minThreshold * 2 - currentQty))
-    setDeliveryModalNotif(notif)
-    setDeliveryQty(String(suggestedQty))
-    setDeliveryNotes('Shipment delivered to warehouse receiving dock.')
+    const initialQty = notif.metadata?.plannedQuantity ?? suggestedQty
+
+    setActionModal({ mode, notif })
+    setModalQty(String(initialQty))
+    setModalNotes(RESTOCK_MODAL_CONFIG[mode].defaultNotes)
   }
 
-  // STAGE 3: Vendor Submits Delivery -> Status: RESTOCK_DELIVERED
-  const handleSubmitDelivery = async () => {
-    if (!deliveryModalNotif) return
-    const qty = Number(deliveryQty)
-    if (isNaN(qty) || qty <= 0) {
-      showFeedback('error', 'Please provide a valid delivered quantity greater than 0')
+  const handleSubmitActionModal = async () => {
+    if (!actionModal) return
+    const { mode, notif } = actionModal
+    const qty = Number(modalQty)
+    if (!Number.isFinite(qty) || qty <= 0) {
+      showFeedback(
+        'error',
+        mode === 'accept'
+          ? 'Please provide a valid quantity to deliver greater than 0'
+          : 'Please provide a valid delivered quantity greater than 0'
+      )
       return
     }
 
+    const materialName = notif.rawMaterial?.name || notif.metadata?.materialName || 'Raw Material'
+    const weightUnit = notif.rawMaterial?.weightUnit || notif.metadata?.weightUnit || 'kg'
+    const trimmedNotes = modalNotes.trim()
+
     try {
-      setSubmittingDelivery(true)
+      setSubmittingModal(true)
+      const payload =
+        mode === 'accept'
+          ? {
+              action: 'accept_request',
+              id: notif.id,
+              plannedQuantity: qty,
+              vendorNotes:
+                trimmedNotes ||
+                `Accepted by ${auth?.name || 'Vendor'} — will deliver ${qty} ${weightUnit}.`,
+            }
+          : {
+              action: 'mark_delivered',
+              id: notif.id,
+              deliveredQuantity: qty,
+              vendorNotes: trimmedNotes,
+            }
+
       const res = await fetch('/api/dashboard-notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'mark_delivered',
-          id: deliveryModalNotif.id,
-          deliveredQuantity: qty,
-          vendorNotes: deliveryNotes.trim(),
-        }),
+        body: JSON.stringify(payload),
       })
       const json = await res.json()
       if (json.success) {
+        if (json.data) {
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === notif.id ? { ...n, ...json.data } : n))
+          )
+        }
         showFeedback(
           'success',
-          `Restock marked as Delivered! Awaiting Inventory Manager verification to complete restock.`
+          mode === 'accept'
+            ? `Accepted "${materialName}" for ${qty} ${weightUnit}. Status is now Request In Progress.`
+            : 'Restock marked as Delivered! Awaiting Inventory Manager verification to complete restock.'
         )
-        setDeliveryModalNotif(null)
+        setActionModal(null)
+        emitVendorNotificationsUpdated()
         fetchNotifications()
       } else {
-        showFeedback('error', json.message || 'Failed to mark restock delivered')
+        showFeedback(
+          'error',
+          json.message ||
+            (mode === 'accept' ? 'Failed to accept restock request' : 'Failed to mark restock delivered')
+        )
       }
     } catch {
-      showFeedback('error', 'Error recording delivery')
+      showFeedback(
+        'error',
+        mode === 'accept' ? 'Error accepting restock request' : 'Error recording delivery'
+      )
     } finally {
-      setSubmittingDelivery(false)
+      setSubmittingModal(false)
     }
   }
 
-  // Filter change handler with auto-reset page
-  const handleFilterChange = (mode: typeof filterMode) => {
+  const handleFilterChange = (mode: FilterMode) => {
     setFilterMode(mode)
     setCurrentPage(1)
   }
-
-  // Memoized KPI Calculations
-  const pendingCount = useMemo(
-    () => notifications.filter((n) => n.status === 'PENDING').length,
-    [notifications]
-  )
-  const inProgressCount = useMemo(
-    () =>
-      notifications.filter(
-        (n) => n.status === 'RESTOCK_IN_PROGRESS' || n.status === 'RESTOCK_INITIATED'
-      ).length,
-    [notifications]
-  )
-  const inTransitCount = useMemo(
-    () => notifications.filter((n) => n.status === 'RESTOCK_IN_TRANSIT').length,
-    [notifications]
-  )
-  const deliveredCount = useMemo(
-    () => notifications.filter((n) => n.status === 'RESTOCK_DELIVERED').length,
-    [notifications]
-  )
-  const completedCount = useMemo(
-    () => notifications.filter((n) => n.status === 'RESTOCK_COMPLETED').length,
-    [notifications]
-  )
-
-  // Memoized Filtered List
-  const filteredNotifications = useMemo(() => {
-    return notifications.filter((notif) => {
-      if (filterMode === 'pending') return notif.status === 'PENDING'
-      if (filterMode === 'in_progress')
-        return notif.status === 'RESTOCK_IN_PROGRESS' || notif.status === 'RESTOCK_INITIATED'
-      if (filterMode === 'in_transit') return notif.status === 'RESTOCK_IN_TRANSIT'
-      if (filterMode === 'delivered') return notif.status === 'RESTOCK_DELIVERED'
-      if (filterMode === 'completed') return notif.status === 'RESTOCK_COMPLETED'
-      return true
-    })
-  }, [notifications, filterMode])
 
   // Pagination Math
   const totalItems = filteredNotifications.length
@@ -380,8 +685,9 @@ export function VendorDashboardView() {
             <span>{feedback.message}</span>
           </div>
           <button
+            type="button"
             onClick={() => setFeedback(null)}
-            className="text-xs font-semibold opacity-70 hover:opacity-100"
+            className="text-xs font-semibold opacity-70 hover:opacity-100 cursor-pointer"
           >
             ✕
           </button>
@@ -390,21 +696,20 @@ export function VendorDashboardView() {
 
       {/* Top Banner & Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-card border border-border/70 p-5 rounded-2xl shadow-xs">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <div className="p-2.5 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 shadow-xs">
-              <Truck className="size-5" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight">Vendor Portal & Restock Center</h1>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Logged in as <strong className="text-foreground">{auth?.name || 'Registered Vendor'}</strong> ({auth?.email})
-              </p>
-            </div>
+        <div className="flex items-center gap-2.5">
+          <div className="p-2.5 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 shadow-xs">
+            <Truck className="size-5" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Vendor Portal & Restock Center</h1>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Logged in as <strong className="text-foreground">{auth?.name || 'Registered Vendor'}</strong>{' '}
+              {auth?.email ? `(${auth.email})` : ''}
+            </p>
           </div>
         </div>
 
-        {/* Live Notification Bell & Sync indicator */}
+        {/* Live Notification Bell Popover & Sync indicator */}
         <div className="flex items-center gap-3">
           <Button
             variant="outline"
@@ -414,16 +719,36 @@ export function VendorDashboardView() {
               fetchNotifications()
             }}
             disabled={refreshing}
-            className="gap-1.5 h-9 text-xs"
+            className="gap-1.5 h-9 text-xs cursor-pointer"
           >
             <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
             Refresh
           </Button>
 
-          {/* Dedicated Vendor Notification Bell with Unread Badge */}
-          <div className="relative inline-flex items-center">
-            <div className="flex items-center gap-2 p-2 px-3 rounded-lg bg-muted/60 border border-border">
-              <div className="relative">
+          <Popover
+            open={bellOpen}
+            onOpenChange={(open) => {
+              setBellOpen(open)
+              if (open) fetchNotifications()
+            }}
+          >
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-label="Open vendor restock notifications"
+                  className={cn(
+                    'flex items-center gap-2 h-9 px-3 rounded-lg border transition-all cursor-pointer',
+                    unreadCount > 0
+                      ? 'bg-orange-500/10 border-orange-500/40 hover:bg-orange-500/15'
+                      : 'bg-muted/60 border-border hover:bg-muted'
+                  )}
+                />
+              }
+            >
+              <div className="relative flex items-center justify-center">
                 <Bell
                   className={cn(
                     'size-4 text-foreground',
@@ -431,145 +756,232 @@ export function VendorDashboardView() {
                   )}
                 />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-1.5 -right-2 flex size-4 items-center justify-center rounded-full bg-orange-600 text-[10px] font-bold text-white shadow-xs">
-                    {unreadCount}
+                  <span className="absolute -top-2 -right-2 flex size-4 items-center justify-center rounded-full bg-orange-600 text-[10px] font-bold text-white shadow-xs">
+                    {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
               </div>
               <span className="text-xs font-semibold text-foreground">
-                {unreadCount > 0 ? `${unreadCount} New Alert${unreadCount > 1 ? 's' : ''}` : 'All Caught Up'}
+                {unreadCount > 0
+                  ? `${unreadCount} New Alert${unreadCount > 1 ? 's' : ''}`
+                  : 'All Caught Up'}
               </span>
-            </div>
-          </div>
+            </PopoverTrigger>
+
+            <PopoverContent
+              align="end"
+              sideOffset={8}
+              className="w-[340px] sm:w-[400px] p-0 overflow-hidden rounded-2xl border border-border/80 bg-card shadow-2xl gap-0"
+            >
+              <div className="px-4 py-3 bg-gradient-to-r from-orange-500/10 via-muted/40 to-amber-500/10 border-b border-border/70 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="size-7 rounded-xl bg-orange-500/15 text-orange-600 dark:text-orange-400 flex items-center justify-center shrink-0">
+                    <Bell className="size-3.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-extrabold tracking-tight text-foreground truncate">
+                        Vendor Restock Alerts
+                      </span>
+                      {unreadCount > 0 && (
+                        <Badge className="text-[10px] h-4.5 px-1.5 bg-orange-600 text-white border-0 font-bold">
+                          {unreadCount} new
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Click any alert to jump to its request card
+                    </p>
+                  </div>
+                </div>
+
+                {unreadCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleMarkAllRead}
+                    className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 font-semibold px-2 py-1 rounded-lg hover:bg-background/70 transition-colors cursor-pointer shrink-0"
+                  >
+                    <CheckCheck className="size-3 text-emerald-600 dark:text-emerald-400" />
+                    Mark all read
+                  </button>
+                )}
+              </div>
+
+              <div className="max-h-[340px] overflow-y-auto divide-y divide-border/50">
+                {dropdownNotifications.length > 0 ? (
+                  dropdownNotifications.map((notif) => {
+                    const stage = getStageKey(notif.status)
+                    const cfg = STAGE_CONFIG[stage]
+                    const StageIcon = cfg.Icon
+                    const materialName =
+                      notif.rawMaterial?.name || notif.metadata?.materialName || 'Raw Material'
+                    const sku = notif.rawMaterial?.sku || notif.metadata?.sku
+
+                    return (
+                      <div
+                        key={notif.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => focusNotification(notif)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            focusNotification(notif)
+                          }
+                        }}
+                        className={cn(
+                          'group w-full text-left flex items-start gap-3 px-4 py-3 transition-colors cursor-pointer hover:bg-muted/60',
+                          !notif.isRead
+                            ? 'bg-orange-500/[0.06] border-l-2 border-l-orange-500'
+                            : 'opacity-85 hover:opacity-100'
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            'size-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5',
+                            cfg.kpiIconBg
+                          )}
+                        >
+                          <StageIcon className="size-4" />
+                        </div>
+
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <span
+                              className={cn(
+                                'text-xs leading-snug line-clamp-1',
+                                !notif.isRead ? 'font-bold text-foreground' : 'font-semibold text-foreground/80'
+                              )}
+                            >
+                              {materialName}
+                              {sku ? ` (${sku})` : ''}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground shrink-0 font-mono pt-0.5">
+                              {formatRelativeTime(notif.createdAt)}
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
+                            {notif.message}
+                          </p>
+
+                          <div className="flex items-center justify-between gap-2 pt-0.5">
+                            <Badge variant="outline" className={cn('text-[9px] h-4 px-1.5 font-semibold', cfg.badgeClass)}>
+                              {cfg.badgeLabel}
+                            </Badge>
+                            <div className="flex items-center gap-2">
+                              {!notif.isRead && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleMarkAsRead(notif.id)
+                                  }}
+                                  className="text-[10px] font-semibold text-muted-foreground hover:text-foreground underline-offset-2 hover:underline cursor-pointer"
+                                >
+                                  Mark read
+                                </button>
+                              )}
+                              <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-orange-600 dark:text-orange-400 opacity-80 group-hover:opacity-100">
+                                View
+                                <ArrowUpRight className="size-3" />
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {!notif.isRead && (
+                          <span className="size-2 rounded-full bg-orange-600 shrink-0 mt-1.5 ring-2 ring-orange-500/20" />
+                        )}
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="py-10 px-6 text-center space-y-2">
+                    <div className="size-10 rounded-2xl bg-muted/70 text-muted-foreground mx-auto flex items-center justify-center">
+                      <Bell className="size-4 opacity-60" />
+                    </div>
+                    <p className="text-xs font-semibold text-foreground">All caught up!</p>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Low stock restock alerts from warehouse managers will appear here.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="px-4 py-2 bg-muted/30 border-t border-border/60 flex items-center justify-between text-[10px] text-muted-foreground font-mono">
+                <span className="flex items-center gap-1.5">
+                  <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live Restock Sync (20s)
+                </span>
+                {stageCounts.pending > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleFilterChange('pending')
+                      setBellOpen(false)
+                    }}
+                    className="font-sans font-semibold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
+                  >
+                    Filter Pending ({stageCounts.pending})
+                  </button>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
       {/* KPI Cards for Lifecycle Tracking */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
-        {/* 1. Pending Requests */}
-        <Card
-          onClick={() => handleFilterChange('pending')}
-          className={cn(
-            'border shadow-xs transition-all cursor-pointer hover:border-amber-500/60',
-            pendingCount > 0
-              ? 'border-amber-500/40 bg-amber-500/5 dark:bg-amber-950/20'
-              : 'border-border/70',
-            filterMode === 'pending' && 'ring-2 ring-amber-500'
-          )}
-        >
-          <CardHeader className="flex flex-row items-center justify-between pb-1.5 space-y-0 p-3.5">
-            <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
-              Pending
-            </CardTitle>
-            <div
+        {STAGE_KEYS.map((stageKey, idx) => {
+          const cfg = STAGE_CONFIG[stageKey]
+          const count = stageCounts[stageKey]
+          const Icon = cfg.Icon
+          const isPendingHighlight = stageKey === 'pending' && count > 0
+
+          return (
+            <Card
+              key={stageKey}
+              onClick={() => handleFilterChange(stageKey)}
               className={cn(
-                'p-1.5 rounded-lg',
-                pendingCount > 0
-                  ? 'bg-amber-500/20 text-amber-600 animate-pulse'
-                  : 'bg-muted text-muted-foreground'
+                'border shadow-xs transition-all cursor-pointer',
+                cfg.hoverBorder,
+                idx === STAGE_KEYS.length - 1 && 'col-span-2 sm:col-span-1',
+                isPendingHighlight
+                  ? 'border-amber-500/40 bg-amber-500/5 dark:bg-amber-950/20'
+                  : 'border-border/70',
+                filterMode === stageKey && cfg.kpiRing
               )}
             >
-              <AlertTriangle className="size-3.5" />
-            </div>
-          </CardHeader>
-          <CardContent className="p-3.5 pt-0">
-            <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{pendingCount}</div>
-            <p className="text-[10px] text-muted-foreground mt-0.5">Need acknowledgement</p>
-          </CardContent>
-        </Card>
-
-        {/* 2. In Progress */}
-        <Card
-          onClick={() => handleFilterChange('in_progress')}
-          className={cn(
-            'border border-border/70 shadow-xs transition-all cursor-pointer hover:border-sky-500/60',
-            filterMode === 'in_progress' && 'ring-2 ring-sky-500'
-          )}
-        >
-          <CardHeader className="flex flex-row items-center justify-between pb-1.5 space-y-0 p-3.5">
-            <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-sky-600 dark:text-sky-400">
-              In Progress
-            </CardTitle>
-            <div className="p-1.5 rounded-lg bg-sky-500/10 text-sky-600">
-              <Timer className="size-3.5" />
-            </div>
-          </CardHeader>
-          <CardContent className="p-3.5 pt-0">
-            <div className="text-2xl font-bold text-sky-600 dark:text-sky-400">{inProgressCount}</div>
-            <p className="text-[10px] text-muted-foreground mt-0.5">Preparing supplies</p>
-          </CardContent>
-        </Card>
-
-        {/* 3. Restock In Transit */}
-        <Card
-          onClick={() => handleFilterChange('in_transit')}
-          className={cn(
-            'border border-border/70 shadow-xs transition-all cursor-pointer hover:border-purple-500/60',
-            filterMode === 'in_transit' && 'ring-2 ring-purple-500'
-          )}
-        >
-          <CardHeader className="flex flex-row items-center justify-between pb-1.5 space-y-0 p-3.5">
-            <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-purple-600 dark:text-purple-400">
-              In Transit
-            </CardTitle>
-            <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-600">
-              <Truck className="size-3.5" />
-            </div>
-          </CardHeader>
-          <CardContent className="p-3.5 pt-0">
-            <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">{inTransitCount}</div>
-            <p className="text-[10px] text-muted-foreground mt-0.5">On the way to restaurant</p>
-          </CardContent>
-        </Card>
-
-        {/* 4. Restock Delivered */}
-        <Card
-          onClick={() => handleFilterChange('delivered')}
-          className={cn(
-            'border border-border/70 shadow-xs transition-all cursor-pointer hover:border-teal-500/60',
-            filterMode === 'delivered' && 'ring-2 ring-teal-500'
-          )}
-        >
-          <CardHeader className="flex flex-row items-center justify-between pb-1.5 space-y-0 p-3.5">
-            <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-teal-600 dark:text-teal-400">
-              Delivered
-            </CardTitle>
-            <div className="p-1.5 rounded-lg bg-teal-500/10 text-teal-600">
-              <PackageCheck className="size-3.5" />
-            </div>
-          </CardHeader>
-          <CardContent className="p-3.5 pt-0">
-            <div className="text-2xl font-bold text-teal-600 dark:text-teal-400">{deliveredCount}</div>
-            <p className="text-[10px] text-muted-foreground mt-0.5">Awaiting manager check</p>
-          </CardContent>
-        </Card>
-
-        {/* 5. Restock Completed */}
-        <Card
-          onClick={() => handleFilterChange('completed')}
-          className={cn(
-            'border border-border/70 shadow-xs col-span-2 sm:col-span-1 transition-all cursor-pointer hover:border-emerald-500/60',
-            filterMode === 'completed' && 'ring-2 ring-emerald-500'
-          )}
-        >
-          <CardHeader className="flex flex-row items-center justify-between pb-1.5 space-y-0 p-3.5">
-            <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
-              Completed
-            </CardTitle>
-            <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600">
-              <CheckCircle2 className="size-3.5" />
-            </div>
-          </CardHeader>
-          <CardContent className="p-3.5 pt-0">
-            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{completedCount}</div>
-            <p className="text-[10px] text-muted-foreground mt-0.5">Stock updated in warehouse</p>
-          </CardContent>
-        </Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-1.5 space-y-0 p-3.5">
+                <CardTitle className={cn('text-[11px] font-semibold uppercase tracking-wider', cfg.accentText)}>
+                  {cfg.kpiTitle}
+                </CardTitle>
+                <div
+                  className={cn(
+                    'p-1.5 rounded-lg',
+                    stageKey === 'pending'
+                      ? count > 0
+                        ? 'bg-amber-500/20 text-amber-600 animate-pulse'
+                        : 'bg-muted text-muted-foreground'
+                      : cfg.kpiIconBg
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                </div>
+              </CardHeader>
+              <CardContent className="p-3.5 pt-0">
+                <div className={cn('text-2xl font-bold', cfg.accentText)}>{count}</div>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{cfg.kpiSubtitle}</p>
+              </CardContent>
+            </Card>
+          )
+        })}
       </div>
 
       {/* DEDICATED LIVE RESTOCK CENTER SECTION */}
       <Card className="border border-border/70 shadow-xs overflow-hidden">
-        {/* Well-structured, fully aligned header */}
         <CardHeader className="p-4 sm:p-5 border-b border-border/60 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -591,7 +1003,7 @@ export function VendorDashboardView() {
                 variant="ghost"
                 size="sm"
                 onClick={handleMarkAllRead}
-                className="h-8 text-xs gap-1 self-start sm:self-auto text-muted-foreground hover:text-foreground shrink-0"
+                className="h-8 text-xs gap-1 self-start sm:self-auto text-muted-foreground hover:text-foreground shrink-0 cursor-pointer"
               >
                 <CheckCheck className="size-3.5" />
                 Mark All Read ({unreadCount})
@@ -599,13 +1011,14 @@ export function VendorDashboardView() {
             )}
           </div>
 
-          {/* Full-width responsive filter tabs container (Clean Segmented Bar) */}
+          {/* Filter Tabs */}
           <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/40 flex-wrap">
             <div className="inline-flex rounded-xl border border-input/80 p-1 bg-muted/40 gap-1 flex-wrap">
               <button
+                type="button"
                 onClick={() => handleFilterChange('all')}
                 className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded-lg transition-all',
+                  'px-3 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer',
                   filterMode === 'all'
                     ? 'bg-background text-foreground shadow-xs font-semibold'
                     : 'text-muted-foreground hover:text-foreground'
@@ -613,64 +1026,26 @@ export function VendorDashboardView() {
               >
                 All ({notifications.length})
               </button>
-              <button
-                onClick={() => handleFilterChange('pending')}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded-lg transition-all',
-                  filterMode === 'pending'
-                    ? 'bg-background text-amber-600 font-semibold shadow-xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                Pending ({pendingCount})
-              </button>
-              <button
-                onClick={() => handleFilterChange('in_progress')}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded-lg transition-all',
-                  filterMode === 'in_progress'
-                    ? 'bg-background text-sky-600 font-semibold shadow-xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                In Progress ({inProgressCount})
-              </button>
-              <button
-                onClick={() => handleFilterChange('in_transit')}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded-lg transition-all',
-                  filterMode === 'in_transit'
-                    ? 'bg-background text-purple-600 font-semibold shadow-xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                In Transit ({inTransitCount})
-              </button>
-              <button
-                onClick={() => handleFilterChange('delivered')}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded-lg transition-all',
-                  filterMode === 'delivered'
-                    ? 'bg-background text-teal-600 font-semibold shadow-xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                Delivered ({deliveredCount})
-              </button>
-              <button
-                onClick={() => handleFilterChange('completed')}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded-lg transition-all',
-                  filterMode === 'completed'
-                    ? 'bg-background text-emerald-600 font-semibold shadow-xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                Completed ({completedCount})
-              </button>
+              {STAGE_KEYS.map((stageKey) => {
+                const cfg = STAGE_CONFIG[stageKey]
+                return (
+                  <button
+                    key={stageKey}
+                    type="button"
+                    onClick={() => handleFilterChange(stageKey)}
+                    className={cn(
+                      'px-3 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer',
+                      filterMode === stageKey
+                        ? cn('bg-background font-semibold shadow-xs', cfg.accentText)
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {cfg.tabLabel} ({stageCounts[stageKey]})
+                  </button>
+                )
+              })}
             </div>
 
-            {/* Quick Count Info */}
             <div className="text-xs text-muted-foreground hidden sm:block">
               {totalItems} {totalItems === 1 ? 'request' : 'requests'} found
             </div>
@@ -700,7 +1075,7 @@ export function VendorDashboardView() {
                   variant="outline"
                   size="sm"
                   onClick={() => handleFilterChange('all')}
-                  className="mt-4 text-xs h-8"
+                  className="mt-4 text-xs h-8 cursor-pointer"
                 >
                   View All Requests
                 </Button>
@@ -716,6 +1091,7 @@ export function VendorDashboardView() {
                   notif.rawMaterial?.quantity ?? notif.metadata?.currentQuantity ?? 0
                 const minThreshold =
                   notif.rawMaterial?.minThreshold ?? notif.metadata?.minThreshold ?? 10
+                const weightUnit = notif.rawMaterial?.weightUnit || notif.metadata?.weightUnit || 'kg'
                 const weight =
                   notif.rawMaterial?.weight && notif.rawMaterial?.weightUnit
                     ? `${notif.rawMaterial.weight} ${notif.rawMaterial.weightUnit}`
@@ -723,28 +1099,23 @@ export function VendorDashboardView() {
                 const location =
                   notif.rawMaterial?.location || notif.metadata?.location || 'Main Warehouse'
 
-                const isPending = notif.status === 'PENDING'
-                const isInProgress =
-                  notif.status === 'RESTOCK_IN_PROGRESS' || notif.status === 'RESTOCK_INITIATED'
-                const isInTransit = notif.status === 'RESTOCK_IN_TRANSIT'
-                const isDelivered = notif.status === 'RESTOCK_DELIVERED'
-                const isCompleted = notif.status === 'RESTOCK_COMPLETED'
+                const stage = getStageKey(notif.status)
+                const cfg = STAGE_CONFIG[stage]
+                const StageIcon = cfg.Icon
                 const isActing = actingId === notif.id
 
                 return (
                   <div
                     key={notif.id}
+                    id={`vendor-notif-${notif.id}`}
                     className={cn(
-                      'p-4 sm:p-5 transition-colors flex flex-col gap-3.5 hover:bg-muted/10',
+                      'p-4 sm:p-5 transition-all flex flex-col gap-3.5 hover:bg-muted/10',
                       !notif.isRead && 'bg-orange-500/[0.03] dark:bg-orange-950/[0.12]',
-                      isPending && 'border-l-4 border-l-amber-500',
-                      isInProgress && 'border-l-4 border-l-sky-500',
-                      isInTransit && 'border-l-4 border-l-purple-500',
-                      isDelivered && 'border-l-4 border-l-teal-500',
-                      isCompleted && 'border-l-4 border-l-emerald-500'
+                      cfg.borderLeft,
+                      highlightedId === notif.id && 'ring-2 ring-orange-500 bg-orange-500/[0.08]'
                     )}
                   >
-                    {/* Top Row: Title, SKU, Stage Badges, and Action Area */}
+                    {/* Top Row: Title, SKU, Stage Badge, and Action Buttons */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-base text-foreground tracking-tight">
@@ -754,52 +1125,21 @@ export function VendorDashboardView() {
                           {sku}
                         </Badge>
 
-                        {/* STAGE STATUS BADGES */}
-                        {isPending && (
-                          <Badge
-                            variant="destructive"
-                            className="text-[11px] bg-amber-600 hover:bg-amber-600 gap-1 px-2"
-                          >
-                            <AlertTriangle className="size-3" />
-                            Restock Required
-                          </Badge>
-                        )}
-                        {isInProgress && (
-                          <Badge
-                            variant="outline"
-                            className="text-[11px] bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30 gap-1 px-2 font-medium"
-                          >
-                            <Timer className="size-3" />
-                            Request In Progress
-                          </Badge>
-                        )}
-                        {isInTransit && (
-                          <Badge
-                            variant="outline"
-                            className="text-[11px] bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/30 gap-1 px-2 font-medium"
-                          >
-                            <Truck className="size-3" />
-                            Restock In Transit
-                          </Badge>
-                        )}
-                        {isDelivered && (
-                          <Badge
-                            variant="outline"
-                            className="text-[11px] bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/30 gap-1 px-2 font-medium"
-                          >
-                            <PackageCheck className="size-3" />
-                            Restock Delivered
-                          </Badge>
-                        )}
-                        {isCompleted && (
-                          <Badge
-                            variant="outline"
-                            className="text-[11px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 gap-1 px-2 font-medium"
-                          >
-                            <CheckCircle2 className="size-3" />
-                            Restock Completed
-                          </Badge>
-                        )}
+                        <Badge variant="outline" className={cn('text-[11px] gap-1 px-2 font-medium', cfg.badgeClass)}>
+                          <StageIcon className="size-3" />
+                          {cfg.badgeLabel}
+                        </Badge>
+
+                        {(stage === 'in_progress' || stage === 'in_transit') &&
+                          notif.metadata?.plannedQuantity && (
+                            <Badge
+                              variant="outline"
+                              className="text-[11px] gap-1 px-2 font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
+                            >
+                              <PackageCheck className="size-3" />
+                              To Deliver: {notif.metadata.plannedQuantity} {weightUnit}
+                            </Badge>
+                          )}
 
                         {!notif.isRead && (
                           <Badge className="text-[10px] bg-orange-500 text-white px-1.5 py-0">
@@ -808,7 +1148,6 @@ export function VendorDashboardView() {
                         )}
                       </div>
 
-                      {/* Right: Vendor Actionability Buttons */}
                       <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
                         {!notif.isRead && (
                           <Button
@@ -816,53 +1155,57 @@ export function VendorDashboardView() {
                             size="sm"
                             onClick={() => handleMarkAsRead(notif.id)}
                             disabled={isActing}
-                            className="h-8 text-xs text-muted-foreground hover:text-foreground"
+                            className="h-8 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
                           >
                             Mark Read
                           </Button>
                         )}
 
-                        {/* STAGE 1: PENDING -> ACCEPT REQUEST */}
-                        {isPending && (
+                        {stage === 'pending' && (
                           <Button
                             size="sm"
-                            onClick={() => handleAcceptRequest(notif.id, materialName)}
+                            onClick={() => openActionModal('accept', notif)}
                             disabled={isActing}
-                            className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs gap-1.5"
+                            className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs gap-1.5 cursor-pointer"
                           >
                             <Send className="size-3.5" />
-                            {isActing ? 'Updating...' : 'Accept Request'}
+                            Accept Request
                           </Button>
                         )}
 
-                        {/* STAGE 2: IN PROGRESS -> MARK IN TRANSIT */}
-                        {isInProgress && (
+                        {stage === 'in_progress' && (
                           <Button
                             size="sm"
-                            onClick={() => handleMarkInTransit(notif.id, materialName)}
+                            onClick={() =>
+                              handleStageAction(
+                                notif.id,
+                                'mark_in_transit',
+                                `Restock shipment dispatched by ${auth?.name || 'Vendor'}. Goods are currently in transit.`,
+                                `"${materialName}" marked as Restock In Transit! Order is on the way to warehouse.`,
+                                'Failed to mark restock in transit'
+                              )
+                            }
                             disabled={isActing}
-                            className="h-8 text-xs bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs gap-1.5"
+                            className="h-8 text-xs bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs gap-1.5 cursor-pointer"
                           >
                             <Truck className="size-3.5" />
                             {isActing ? 'Dispatching...' : 'Mark In Transit (On the Way)'}
                           </Button>
                         )}
 
-                        {/* STAGE 3: IN TRANSIT -> MARK DELIVERED */}
-                        {isInTransit && (
+                        {stage === 'in_transit' && (
                           <Button
                             size="sm"
-                            onClick={() => openDeliveryModal(notif)}
+                            onClick={() => openActionModal('deliver', notif)}
                             disabled={isActing}
-                            className="h-8 text-xs bg-teal-600 hover:bg-teal-700 text-white font-semibold shadow-xs gap-1.5"
+                            className="h-8 text-xs bg-teal-600 hover:bg-teal-700 text-white font-semibold shadow-xs gap-1.5 cursor-pointer"
                           >
                             <PackageCheck className="size-3.5" />
                             Mark Restock Delivered
                           </Button>
                         )}
 
-                        {/* STAGE 4: DELIVERED -> WAITING CONFIRMATION */}
-                        {isDelivered && (
+                        {stage === 'delivered' && (
                           <div className="flex flex-col items-end gap-0.5">
                             <Badge
                               variant="outline"
@@ -871,13 +1214,15 @@ export function VendorDashboardView() {
                               Restock Delivered
                             </Badge>
                             <span className="text-[10px] text-muted-foreground">
+                              {notif.metadata?.deliveredQuantity
+                                ? `${notif.metadata.deliveredQuantity} ${weightUnit} • `
+                                : ''}
                               Awaiting Manager Confirmation
                             </span>
                           </div>
                         )}
 
-                        {/* STAGE 5: COMPLETED */}
-                        {isCompleted && (
+                        {stage === 'completed' && (
                           <div className="flex flex-col items-end gap-0.5">
                             <Badge
                               variant="outline"
@@ -887,7 +1232,7 @@ export function VendorDashboardView() {
                             </Badge>
                             {notif.metadata?.deliveredQuantity && (
                               <span className="text-[10px] text-emerald-600 font-medium">
-                                +{notif.metadata.deliveredQuantity} supplied to stock
+                                +{notif.metadata.deliveredQuantity} {weightUnit} supplied to stock
                               </span>
                             )}
                           </div>
@@ -895,12 +1240,16 @@ export function VendorDashboardView() {
                       </div>
                     </div>
 
-                    {/* Middle: Alert Description */}
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      {notif.message}
-                    </p>
+                    {/* Alert Description */}
+                    <p className="text-xs text-muted-foreground leading-relaxed">{notif.message}</p>
+                    {stage !== 'pending' && notif.metadata?.vendorNotes && (
+                      <p className="text-[11px] text-foreground/80 bg-muted/40 px-3 py-1.5 rounded-lg border border-border/40">
+                        <span className="font-semibold text-muted-foreground">Vendor Note: </span>
+                        {notif.metadata.vendorNotes}
+                      </p>
+                    )}
 
-                    {/* Specifications & Location Grid - Dedicated Card Layout with NO TEXT CLIPPING */}
+                    {/* Specifications & Location Grid */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-muted/30 p-3 rounded-xl border border-border/50 text-xs">
                       <div className="flex items-center gap-2">
                         <div className="p-1.5 rounded-lg bg-background border border-border/50 shrink-0">
@@ -911,15 +1260,11 @@ export function VendorDashboardView() {
                             Current Stock
                           </div>
                           <div className="font-bold text-foreground">
-                            <span
-                              className={cn(
-                                currentQty <= minThreshold ? 'text-rose-600' : 'text-emerald-600'
-                              )}
-                            >
+                            <span className={cn(currentQty <= minThreshold ? 'text-rose-600' : 'text-emerald-600')}>
                               {currentQty}
                             </span>
                             <span className="text-[11px] text-muted-foreground font-normal ml-1">
-                              {notif.rawMaterial?.weightUnit || 'kg'}
+                              {weightUnit}
                             </span>
                           </div>
                         </div>
@@ -936,7 +1281,7 @@ export function VendorDashboardView() {
                           <div className="font-bold text-foreground">
                             {minThreshold}{' '}
                             <span className="text-[11px] text-muted-foreground font-normal">
-                              {notif.rawMaterial?.weightUnit || 'kg'}
+                              {weightUnit}
                             </span>
                           </div>
                         </div>
@@ -969,54 +1314,37 @@ export function VendorDashboardView() {
                       </div>
                     </div>
 
-                    {/* Bottom: Status Timeline Progression */}
+                    {/* Status Timeline Progression */}
                     <div className="flex items-center gap-3 flex-wrap text-[11px] text-muted-foreground pt-1 border-t border-border/40">
                       <span className="flex items-center gap-1">
                         <Clock className="size-3 shrink-0" />
-                        Alert received:{' '}
-                        {new Date(notif.createdAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
+                        Alert received: {formatShortTime(notif.createdAt)}
                       </span>
-
                       {notif.metadata?.acknowledgedAt && (
                         <span className="text-sky-600 dark:text-sky-400 font-medium">
-                          ✓ Accepted at{' '}
-                          {new Date(notif.metadata.acknowledgedAt).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          ✓ Accepted at {formatShortTime(notif.metadata.acknowledgedAt)}
+                          {notif.metadata?.plannedQuantity
+                            ? ` (Qty: ${notif.metadata.plannedQuantity} ${weightUnit})`
+                            : ''}
                         </span>
                       )}
-
                       {notif.metadata?.inTransitAt && (
                         <span className="text-purple-600 dark:text-purple-400 font-medium">
-                          🚚 In Transit at{' '}
-                          {new Date(notif.metadata.inTransitAt).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          🚚 In Transit at {formatShortTime(notif.metadata.inTransitAt)}
                         </span>
                       )}
-
                       {notif.metadata?.deliveredAt && (
                         <span className="text-teal-600 dark:text-teal-400 font-medium">
-                          📦 Delivered at{' '}
-                          {new Date(notif.metadata.deliveredAt).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          📦 Delivered
+                          {notif.metadata?.deliveredQuantity
+                            ? ` ${notif.metadata.deliveredQuantity} ${weightUnit}`
+                            : ''}{' '}
+                          at {formatShortTime(notif.metadata.deliveredAt)}
                         </span>
                       )}
-
                       {notif.metadata?.completedAt && (
                         <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                          ✅ Confirmed & Restocked at{' '}
-                          {new Date(notif.metadata.completedAt).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          ✅ Confirmed & Restocked at {formatShortTime(notif.metadata.completedAt)}
                         </span>
                       )}
                     </div>
@@ -1026,10 +1354,9 @@ export function VendorDashboardView() {
             </div>
           )}
 
-          {/* HIGH-PERFORMANCE PAGINATION BAR */}
+          {/* PAGINATION BAR */}
           {totalItems > 0 && (
             <div className="p-4 border-t border-border/60 bg-card/60 flex flex-col sm:flex-row items-center justify-between gap-3">
-              {/* Left Info & Per-Page Selector */}
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <span>
                   Showing <strong className="text-foreground font-semibold">{startIndex}</strong> to{' '}
@@ -1054,7 +1381,6 @@ export function VendorDashboardView() {
                 </div>
               </div>
 
-              {/* Right Page Controls */}
               <div className="flex items-center gap-1">
                 <Button
                   variant="outline"
@@ -1077,11 +1403,9 @@ export function VendorDashboardView() {
                   <ChevronLeft className="size-4" />
                 </Button>
 
-                {/* Page Number Pills */}
                 <div className="flex items-center gap-1 px-1">
                   {Array.from({ length: totalPages }, (_, i) => i + 1)
                     .filter((p) => {
-                      // Show current page, edges, and neighbors
                       if (totalPages <= 5) return true
                       if (p === 1 || p === totalPages) return true
                       return Math.abs(p - safeCurrentPage) <= 1
@@ -1135,110 +1459,116 @@ export function VendorDashboardView() {
         </CardContent>
       </Card>
 
-      {/* MODAL: Vendor Mark Restock Delivered */}
-      <Dialog
-        open={Boolean(deliveryModalNotif)}
-        onOpenChange={(open) => !open && setDeliveryModalNotif(null)}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <PackageCheck className="size-5 text-teal-600" />
-              Confirm Restock Delivery
-            </DialogTitle>
-            <DialogDescription>
-              Confirm delivery details for{' '}
-              <strong className="text-foreground">
-                {deliveryModalNotif?.rawMaterial?.name ||
-                  deliveryModalNotif?.metadata?.materialName}
-              </strong>
-              . Once submitted, the Inventory Manager will verify and confirm stock replenishment.
-            </DialogDescription>
-          </DialogHeader>
+      {/* UNIFIED MODAL: Vendor Accept Request (Confirm Qty) & Mark Restock Delivered */}
+      {(() => {
+        const modalCfg = actionModal ? RESTOCK_MODAL_CONFIG[actionModal.mode] : null
+        const modalNotif = actionModal?.notif ?? null
+        const ModalIcon = modalCfg?.Icon ?? PackageCheck
+        const modalUnit = modalNotif?.rawMaterial?.weightUnit || modalNotif?.metadata?.weightUnit || 'kg'
 
-          <div className="space-y-4 py-2">
-            <div className="p-3 bg-muted/60 rounded-xl space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Location:</span>
-                <span className="font-semibold text-foreground">
-                  {deliveryModalNotif?.rawMaterial?.location ||
-                    deliveryModalNotif?.metadata?.location ||
-                    'Main Warehouse'}
-                </span>
+        return (
+          <Dialog
+            open={Boolean(actionModal)}
+            onOpenChange={(open) => !open && !submittingModal && setActionModal(null)}
+          >
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <ModalIcon className={cn('size-5', modalCfg?.iconClass)} />
+                  {modalCfg?.title}
+                </DialogTitle>
+                <DialogDescription>
+                  Confirm details for{' '}
+                  <strong className="text-foreground">
+                    {modalNotif?.rawMaterial?.name || modalNotif?.metadata?.materialName}
+                  </strong>
+                  . {modalCfg?.descriptionSuffix}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 py-2">
+                <div className="p-3 bg-muted/60 rounded-xl space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Location:</span>
+                    <span className="font-semibold text-foreground">
+                      {modalNotif?.rawMaterial?.location ||
+                        modalNotif?.metadata?.location ||
+                        'Main Warehouse'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Current Stock in Warehouse:</span>
+                    <span className="font-semibold text-foreground">
+                      {modalNotif?.rawMaterial?.quantity ??
+                        modalNotif?.metadata?.currentQuantity ??
+                        0}{' '}
+                      {modalUnit}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Minimum Threshold:</span>
+                    <span className="font-semibold text-amber-600">
+                      {modalNotif?.rawMaterial?.minThreshold ??
+                        modalNotif?.metadata?.minThreshold ??
+                        10}{' '}
+                      {modalUnit}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="restock-modal-qty" className="text-xs font-semibold">
+                    {modalCfg?.qtyLabel} ({modalUnit})
+                  </Label>
+                  <Input
+                    id="restock-modal-qty"
+                    type="number"
+                    min="1"
+                    step="any"
+                    value={modalQty}
+                    onChange={(e) => setModalQty(e.target.value)}
+                    placeholder="e.g. 20"
+                    className="h-10 text-sm font-semibold"
+                  />
+                  <p className="text-[11px] text-muted-foreground">{modalCfg?.qtyHint}</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="restock-modal-notes" className="text-xs font-semibold">
+                    {modalCfg?.notesLabel}
+                  </Label>
+                  <Input
+                    id="restock-modal-notes"
+                    value={modalNotes}
+                    onChange={(e) => setModalNotes(e.target.value)}
+                    placeholder={modalCfg?.notesPlaceholder}
+                    className="h-9 text-xs"
+                  />
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Current Stock in Warehouse:</span>
-                <span className="font-semibold text-foreground">
-                  {deliveryModalNotif?.rawMaterial?.quantity ??
-                    deliveryModalNotif?.metadata?.currentQuantity ??
-                    0}{' '}
-                  {deliveryModalNotif?.rawMaterial?.weightUnit || 'kg'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Minimum Threshold:</span>
-                <span className="font-semibold text-amber-600">
-                  {deliveryModalNotif?.rawMaterial?.minThreshold ??
-                    deliveryModalNotif?.metadata?.minThreshold ??
-                    10}{' '}
-                  {deliveryModalNotif?.rawMaterial?.weightUnit || 'kg'}
-                </span>
-              </div>
-            </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="del-qty" className="text-xs font-semibold">
-                Delivered / Replenished Quantity ({deliveryModalNotif?.rawMaterial?.weightUnit || 'kg'})
-              </Label>
-              <Input
-                id="del-qty"
-                type="number"
-                min="1"
-                step="any"
-                value={deliveryQty}
-                onChange={(e) => setDeliveryQty(e.target.value)}
-                placeholder="e.g. 20"
-                className="h-10 text-sm font-semibold"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Upon manager confirmation, this quantity will be automatically added to the warehouse inventory.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="del-notes" className="text-xs font-semibold">
-                Delivery Notes (Optional)
-              </Label>
-              <Input
-                id="del-notes"
-                value={deliveryNotes}
-                onChange={(e) => setDeliveryNotes(e.target.value)}
-                placeholder="e.g. Delivered Batch #441 via delivery truck"
-                className="h-9 text-xs"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setDeliveryModalNotif(null)}
-              disabled={submittingDelivery}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleSubmitDelivery}
-              disabled={submittingDelivery}
-              className="bg-teal-600 hover:bg-teal-700 text-white font-semibold"
-            >
-              {submittingDelivery ? 'Submitting...' : 'Mark Restock Delivered'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setActionModal(null)}
+                  disabled={submittingModal}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleSubmitActionModal}
+                  disabled={submittingModal}
+                  className={modalCfg?.submitBtnClass}
+                >
+                  {submittingModal ? modalCfg?.submittingLabel : modalCfg?.submitLabel}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )
+      })()}
     </div>
   )
 }

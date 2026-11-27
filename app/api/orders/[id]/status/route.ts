@@ -192,10 +192,6 @@ export async function PATCH(
 
     if (normalizedTarget === 'ready' || normalizedTarget === 'READY') {
       updateData.preparedAt = new Date()
-      // Real-time automatic inventory recipe deduction (asynchronous non-blocking)
-      deductStockForPreparedOrder(existing.id).catch((err) =>
-        console.error('Inventory auto-deduction error:', err?.message)
-      )
     } else if (normalizedTarget === 'served' || normalizedTarget === 'SERVED' || normalizedTarget === 'completed') {
       updateData.servedAt = new Date()
     } else if (normalizedTarget === 'cancelled' || normalizedTarget === 'CANCELLED') {
@@ -214,6 +210,15 @@ export async function PATCH(
       where: { id: existing.id },
       data: updateData,
     })
+
+    // Awaited automatic inventory recipe deduction on Ready / Prepared
+    let inventoryDeduction: any = null
+    if (normalizedTarget === 'ready' || normalizedTarget === 'READY') {
+      inventoryDeduction = await deductStockForPreparedOrder(existing.id).catch((err) => {
+        console.error('Inventory auto-deduction error:', err?.message)
+        return null
+      })
+    }
 
     // If order was cancelled, re-sync customer order stats & purge its notifications
     if (normalizedTarget === 'cancelled' || normalizedTarget === 'CANCELLED') {
@@ -285,6 +290,7 @@ export async function PATCH(
         orderNumber: updatedOrder.orderNumber,
         status: updatedOrder.status,
         updated: true,
+        ...(inventoryDeduction ? { inventoryDeduction } : {}),
       })
     )
   } catch (error: any) {

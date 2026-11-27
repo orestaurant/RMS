@@ -107,7 +107,8 @@ export function InventoryManagerDashboardView() {
 
   const openConfirmModal = (notif: any) => {
     const qty =
-      notif.metadata?.deliveredQuantity ||
+      notif.metadata?.deliveredQuantity ??
+      notif.metadata?.plannedQuantity ??
       Math.max(
         10,
         Math.ceil((notif.rawMaterial?.minThreshold || 10) * 2 - (notif.rawMaterial?.quantity || 0))
@@ -323,7 +324,7 @@ export function InventoryManagerDashboardView() {
               render={<Link href="/inventory-manager/inventory" />}
               className="text-xs gap-1 h-8"
             >
-              Manage Inventory
+              Manage Raw Material
               <ArrowRight className="size-3" />
             </Button>
           </div>
@@ -457,9 +458,16 @@ export function InventoryManagerDashboardView() {
                           Assigned Vendor: <strong>{notif.metadata.vendorName}</strong>
                         </span>
                       )}
+                      {notif.metadata?.plannedQuantity && !notif.metadata?.deliveredQuantity && (
+                        <span className="text-sky-600 dark:text-sky-400 font-semibold">
+                          To Deliver: {notif.metadata.plannedQuantity}{' '}
+                          {notif.rawMaterial?.weightUnit || notif.metadata?.weightUnit || 'kg'}
+                        </span>
+                      )}
                       {notif.metadata?.deliveredQuantity && (
                         <span className="text-teal-600 dark:text-teal-400 font-semibold">
-                          Supplied: +{notif.metadata.deliveredQuantity}
+                          Supplied: +{notif.metadata.deliveredQuantity}{' '}
+                          {notif.rawMaterial?.weightUnit || notif.metadata?.weightUnit || 'kg'}
                         </span>
                       )}
                       {notif.metadata?.completedAt && (
@@ -623,9 +631,31 @@ export function InventoryManagerDashboardView() {
                   {confirmModalNotif?.rawMaterial?.weightUnit || 'kg'}
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Vendor Note:</span>
-                <span className="text-muted-foreground italic">
+              {confirmModalNotif?.metadata?.plannedQuantity && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Committed on Accept:</span>
+                  <span className="font-semibold text-sky-600 dark:text-sky-400">
+                    {confirmModalNotif.metadata.plannedQuantity}{' '}
+                    {confirmModalNotif?.rawMaterial?.weightUnit ||
+                      confirmModalNotif?.metadata?.weightUnit ||
+                      'kg'}
+                  </span>
+                </div>
+              )}
+              {confirmModalNotif?.metadata?.deliveredQuantity && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Vendor Delivered Qty:</span>
+                  <span className="font-semibold text-teal-600 dark:text-teal-400">
+                    {confirmModalNotif.metadata.deliveredQuantity}{' '}
+                    {confirmModalNotif?.rawMaterial?.weightUnit ||
+                      confirmModalNotif?.metadata?.weightUnit ||
+                      'kg'}
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground shrink-0">Vendor Note:</span>
+                <span className="text-muted-foreground italic text-right">
                   {confirmModalNotif?.metadata?.vendorNotes || 'Goods delivered at dock.'}
                 </span>
               </div>

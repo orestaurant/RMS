@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { invalidateInventoryLookupCache, syncMenuAvailabilityFromInventory } from '@/lib/inventory-deduction'
 
 export async function GET(request: NextRequest) {
   try {
@@ -128,6 +129,8 @@ export async function POST(request: NextRequest) {
       },
     })
 
+    invalidateInventoryLookupCache()
+    await syncMenuAvailabilityFromInventory().catch(() => {})
     return NextResponse.json({ success: true, data: newItem }, { status: 201 })
   } catch (error: any) {
     console.error('Failed to create inventory item:', error)
@@ -183,6 +186,8 @@ export async function PUT(request: NextRequest) {
       },
     })
 
+    invalidateInventoryLookupCache()
+    await syncMenuAvailabilityFromInventory().catch(() => {})
     return NextResponse.json({ success: true, data: updated })
   } catch (error: any) {
     console.error('Failed to update inventory item:', error)

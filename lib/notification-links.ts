@@ -38,6 +38,7 @@ export interface NotificationTarget {
   label: string
   badgeText: string
   category: NotificationCategory
+  notifId?: string
   orderKey?: string
   tableNumber?: string
   billNumber?: string
@@ -135,6 +136,19 @@ export function resolveNotificationTarget(
       badgeText: 'Update',
       category: 'order',
       tableNumber,
+    }
+  }
+
+  // Vendor Portal Routing: all vendor alerts open the Vendor Restock Center
+  if (roleUpper === 'VENDOR') {
+    const notifId = String(notif.id)
+    return {
+      href: `/vendor/dashboard?notif=${encodeURIComponent(notifId)}`,
+      pathname: '/vendor/dashboard',
+      label: 'Open Restock',
+      badgeText: 'Restock',
+      category: 'inventory',
+      notifId,
     }
   }
 

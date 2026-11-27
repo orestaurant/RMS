@@ -17,6 +17,7 @@ import {
   notifyOrderPrepared,
   markOrderPreparedNotificationsRead,
 } from '@/lib/notifications-store'
+import { deductStockForPreparedOrder } from '@/lib/inventory-deduction'
 
 export type BatchStatus =
   | 'PREPARING_LOCK_WINDOW' // 20s open grace window for live customer +1 add-ons
@@ -434,18 +435,20 @@ export async function markBatchReady(batchId: string): Promise<{
       distributedAt: now,
     })
 
-    // Update DB Order status to READY
+    // Update DB Order status to READY & trigger automatic inventory deduction
     try {
       if (alloc.orderId) {
         await prisma.order.update({
           where: { id: alloc.orderId },
-          data: { status: 'READY' as any },
+          data: { status: 'READY' as any, preparedAt: new Date() },
         }).catch(() => {})
+        await deductStockForPreparedOrder(alloc.orderId).catch(() => {})
       } else if (alloc.orderNumber) {
         await prisma.order.updateMany({
           where: { orderNumber: alloc.orderNumber },
-          data: { status: 'READY' as any },
+          data: { status: 'READY' as any, preparedAt: new Date() },
         }).catch(() => {})
+        await deductStockForPreparedOrder(alloc.orderNumber).catch(() => {})
       }
     } catch (dbErr) {
       console.warn('DB update during fair distribution:', dbErr)
