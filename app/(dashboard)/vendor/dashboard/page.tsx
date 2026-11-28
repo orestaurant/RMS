@@ -2,18 +2,18 @@ import { TopNavbar } from '@/components/layout/top-navbar'
 import { VendorDashboardView } from '@/components/dashboard/vendor-dashboard-view'
 
 export const metadata = {
-  title: 'Vendor Dashboard | RestoSphere',
-  description: 'Live restock requests and low-inventory alerts for suppliers',
+  title: 'Restock Requests | RestoSphere',
+  description: 'Manage individual low-stock restock requests and warehouse deliveries',
 }
 
 export default function VendorDashboardPage() {
   return (
     <>
       <TopNavbar
-        title="Vendor Dashboard"
-        subtitle="Live Restock Requests · Low Stock Alerts"
+        title="Restock Requests"
+        subtitle="Individual Restock Requests · Live Auto-Sync"
       />
-      <VendorDashboardView />
+      <VendorDashboardView mode="requests" />
     </>
   )
 }

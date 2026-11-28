@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
               },
             },
           },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
     })
 
     let lowStockCount = 0
@@ -224,10 +224,15 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // Automated Low-Inventory Check & Trigger
-    const alertResult = await checkAndTriggerLowStockAlert(material)
+    // Automated Low-Inventory Check & Menu Availability Sync in parallel
     invalidateInventoryLookupCache()
-    await syncMenuAvailabilityFromInventory().catch(() => {})
+    const [alertResult] = await Promise.all([
+      checkAndTriggerLowStockAlert({
+        ...material,
+        vendorName: material.vendor?.name || null,
+      }),
+      syncMenuAvailabilityFromInventory().catch(() => {}),
+    ])
 
     return NextResponse.json({
       success: true,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Package,
   AlertTriangle,
@@ -153,8 +153,14 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
     }
   }, [])
 
+  const fetchAbortRef = useRef<AbortController | null>(null)
+
   // Fetch Materials
   const fetchMaterials = useCallback(async () => {
+    fetchAbortRef.current?.abort()
+    const controller = new AbortController()
+    fetchAbortRef.current = controller
+
     try {
       const params = new URLSearchParams()
       if (search) params.set('search', search)
@@ -163,7 +169,10 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
         params.set('vendorId', selectedVendorFilter)
       }
 
-      const res = await fetch(`/api/inventory/raw-materials?${params.toString()}`)
+      const res = await fetch(`/api/inventory/raw-materials?${params.toString()}`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
       const json = await res.json()
       if (json.success && Array.isArray(json.data)) {
         setMaterials(json.data)
@@ -171,12 +180,16 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
           setStats(json.stats)
         }
       }
-    } catch (err) {
-      console.error('Failed to fetch raw materials:', err)
-      showFeedback('error', 'Failed to load raw material inventory')
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
+        console.error('Failed to fetch raw materials:', err)
+        showFeedback('error', 'Failed to load raw material inventory')
+      }
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (!controller.signal.aborted) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [search, statusFilter, selectedVendorFilter, isChef])
 
@@ -192,6 +205,37 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
 
   useEffect(() => {
     fetchMaterials()
+
+    // Visibility-aware background sync so vendor restocks reflect in Inventory automatically
+    const interval = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        fetchMaterials()
+      }
+    }, 10000)
+
+    const onFocusOrVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        fetchMaterials()
+      }
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onFocusOrVisible)
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onFocusOrVisible)
+    }
+
+    return () => {
+      clearInterval(interval)
+      fetchAbortRef.current?.abort()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onFocusOrVisible)
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onFocusOrVisible)
+      }
+    }
   }, [fetchMaterials])
 
   // Form Validation
@@ -259,7 +303,7 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
       }
 
       setIsAddOpen(false)
-      const isLowStock = Number(formQuantity) < Number(formMinThreshold)
+      const isLowStock = Number(formQuantity) <= Number(formMinThreshold)
       if (isLowStock) {
         showFeedback(
           'warning',
@@ -397,6 +441,7 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
 
   // Delete Material
   const handleDeleteMaterial = async (id: string, name: string) => {
+    if (isChef) return
     if (!confirm(`Are you sure you want to delete raw material "${name}"?`)) return
     try {
       const res = await fetch(`/api/inventory/raw-materials/${id}`, {
@@ -879,15 +924,17 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
                             <Edit2 className="size-3.5" />
                           </Button>
 
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDeleteMaterial(item.id, item.name)}
-                            className="size-8 text-muted-foreground hover:text-rose-600"
-                            title="Delete raw material"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
+                          {!isChef && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteMaterial(item.id, item.name)}
+                              className="size-8 text-muted-foreground hover:text-rose-600"
+                              title="Delete raw material"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>

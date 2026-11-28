@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { verifyJWT, SESSION_COOKIE_NAME } from '@/lib/auth'
 import {
+  convertQuantityUnit,
   invalidateInventoryLookupCache,
   syncMenuAvailabilityFromInventory,
 } from '@/lib/inventory-deduction'
@@ -20,6 +21,9 @@ export async function GET(request: NextRequest) {
     const unreadOnly = request.nextUrl.searchParams.get('unread') === 'true'
     const parsedLimit = parseInt(request.nextUrl.searchParams.get('limit') || '40', 10)
     const limit = Math.min(Math.max(Number.isFinite(parsedLimit) ? parsedLimit : 40, 1), 100)
+    const parsedPage = parseInt(request.nextUrl.searchParams.get('page') || '1', 10)
+    const page = Math.max(Number.isFinite(parsedPage) ? parsedPage : 1, 1)
+    const skip = (page - 1) * limit
 
     // Attempt to identify authenticated user from cookie if params not passed
     let sessionUser: any = null
@@ -54,7 +58,7 @@ export async function GET(request: NextRequest) {
       whereClause.isRead = false
     }
 
-    const [notifications, unreadCount] = await Promise.all([
+    const [notifications, totalCount, unreadCount] = await Promise.all([
       prisma.dashboardNotification.findMany({
         where: whereClause,
         include: {
@@ -68,6 +72,13 @@ export async function GET(request: NextRequest) {
               weight: true,
               weightUnit: true,
               location: true,
+              vendor: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                },
+              },
             },
           },
           recipient: {
@@ -79,22 +90,36 @@ export async function GET(request: NextRequest) {
           },
         },
         orderBy: { createdAt: 'desc' },
+        skip,
         take: limit,
       }),
       prisma.dashboardNotification.count({
-        where: {
-          ...whereClause,
-          isRead: false,
-        },
+        where: whereClause,
       }),
+      unreadOnly
+        ? Promise.resolve(-1)
+        : prisma.dashboardNotification.count({
+            where: {
+              ...whereClause,
+              isRead: false,
+            },
+          }),
     ])
+
+    const resolvedUnreadCount = unreadOnly ? totalCount : unreadCount
 
     return NextResponse.json(
       {
         success: true,
         data: {
           notifications,
-          unreadCount,
+          unreadCount: resolvedUnreadCount,
+          pagination: {
+            page,
+            limit,
+            totalCount,
+            totalPages: Math.max(1, Math.ceil(totalCount / limit)),
+          },
         },
       },
       { headers: NO_CACHE_HEADERS }
@@ -120,7 +145,10 @@ export async function POST(request: NextRequest) {
       deliveredQuantity,
       restockQuantity,
       quantity,
+      unit,
+      deliveryUnit,
     } = body
+    const requestedUnitRaw = unit ?? deliveryUnit
 
     if (!action) {
       return NextResponse.json({ success: false, message: 'Action is required' }, { status: 400 })
@@ -189,6 +217,19 @@ export async function POST(request: NextRequest) {
 
     if (!notif) {
       return NextResponse.json({ success: false, message: 'Notification not found' }, { status: 404 })
+    }
+
+    if (
+      sessionRole === 'VENDOR' &&
+      sessionUser?.userId &&
+      notif.recipientRole === 'VENDOR' &&
+      notif.recipientId &&
+      notif.recipientId !== sessionUser.userId
+    ) {
+      return NextResponse.json(
+        { success: false, message: 'Forbidden: This restock request belongs to another vendor' },
+        { status: 403 }
+      )
     }
 
     const existingMeta = (notif.metadata as Record<string, any>) || {}
@@ -339,14 +380,20 @@ export async function POST(request: NextRequest) {
         parsedPlanned = num
       }
 
-      const qtyText = parsedPlanned !== undefined ? `${parsedPlanned} ${weightUnit}` : null
+      const selectedUnit =
+        typeof requestedUnitRaw === 'string' && requestedUnitRaw.trim()
+          ? requestedUnitRaw.trim()
+          : existingMeta.plannedUnit || weightUnit
+      const qtyText = parsedPlanned !== undefined ? `${parsedPlanned} ${selectedUnit}` : null
       const trimmedNotes = typeof vendorNotes === 'string' ? vendorNotes.trim() : ''
 
       return runVendorStageTransition({
         status: 'RESTOCK_IN_PROGRESS',
         metaPatch: {
           acknowledgedAt: new Date().toISOString(),
-          ...(parsedPlanned !== undefined ? { plannedQuantity: parsedPlanned } : {}),
+          ...(parsedPlanned !== undefined
+            ? { plannedQuantity: parsedPlanned, plannedUnit: selectedUnit }
+            : {}),
           vendorNotes:
             trimmedNotes ||
             (qtyText
@@ -369,7 +416,8 @@ export async function POST(request: NextRequest) {
         existingMeta.plannedQuantity !== undefined && Number.isFinite(Number(existingMeta.plannedQuantity))
           ? Number(existingMeta.plannedQuantity)
           : undefined
-      const qtyText = plannedQty !== undefined ? ` (${plannedQty} ${weightUnit})` : ''
+      const plannedUnit = existingMeta.plannedUnit || weightUnit
+      const qtyText = plannedQty !== undefined ? ` (${plannedQty} ${plannedUnit})` : ''
 
       return runVendorStageTransition({
         status: 'RESTOCK_IN_TRANSIT',
@@ -389,9 +437,20 @@ export async function POST(request: NextRequest) {
     // Immediately increments RawMaterial + InventoryItem stock and completes both Vendor & Manager alerts.
     const executeAutoRestockCompletion = async (opts: {
       qtyToAdd: number
+      inputQty?: number
+      inputUnit?: string
       isVendorDelivery: boolean
       notesText?: string
     }) => {
+      const selectedUnit = opts.inputUnit || weightUnit
+      const warehouseQtyToAdd = parseFloat(
+        convertQuantityUnit(opts.qtyToAdd, selectedUnit, weightUnit).toFixed(4)
+      )
+      const displaySuppliedText =
+        opts.inputQty !== undefined && selectedUnit !== weightUnit
+          ? `${opts.inputQty} ${selectedUnit} (+${warehouseQtyToAdd} ${weightUnit})`
+          : `+${warehouseQtyToAdd} ${weightUnit}`
+
       if (notif.status === 'RESTOCK_COMPLETED') {
         return NextResponse.json(
           { success: false, message: 'This restock delivery has already been completed.' },
@@ -399,7 +458,7 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      if (!Number.isFinite(opts.qtyToAdd) || opts.qtyToAdd <= 0) {
+      if (!Number.isFinite(warehouseQtyToAdd) || warehouseQtyToAdd <= 0) {
         return NextResponse.json(
           { success: false, message: 'Restock quantity must be greater than 0.' },
           { status: 400 }
@@ -414,14 +473,29 @@ export async function POST(request: NextRequest) {
       const { updatedRawMaterial, updatedNotif, newTotalStock } = await prisma.$transaction(
         async (tx) => {
           let rawMat = null
-          let finalStock = currentStock + opts.qtyToAdd
+          let finalStock = currentStock + warehouseQtyToAdd
 
-          if (notif.rawMaterialId) {
+          // Resolve target RawMaterial ID (direct link or SKU/name fallback)
+          let targetRawMaterialId = notif.rawMaterialId
+          if (!targetRawMaterialId && (materialSku || materialName)) {
+            const fallbackMat = await tx.rawMaterial.findFirst({
+              where: {
+                OR: [
+                  ...(materialSku ? [{ sku: materialSku }] : []),
+                  ...(materialName ? [{ name: { equals: materialName, mode: 'insensitive' as const } }] : []),
+                ],
+              },
+              select: { id: true },
+            })
+            targetRawMaterialId = fallbackMat?.id || null
+          }
+
+          if (targetRawMaterialId) {
             // Atomic increment avoids lost updates under concurrent kitchen deductions
             rawMat = await tx.rawMaterial.update({
-              where: { id: notif.rawMaterialId },
+              where: { id: targetRawMaterialId },
               data: {
-                quantity: { increment: opts.qtyToAdd },
+                quantity: { increment: warehouseQtyToAdd },
                 updatedAt: new Date(),
               },
             })
@@ -429,9 +503,9 @@ export async function POST(request: NextRequest) {
 
             // Sync matching InventoryItem records in 1 query
             const invOrClauses: any[] = []
-            if (materialSku) invOrClauses.push({ sku: materialSku })
-            if (materialName) {
-              invOrClauses.push({ name: { equals: materialName, mode: 'insensitive' } })
+            if (rawMat.sku || materialSku) invOrClauses.push({ sku: rawMat.sku || materialSku })
+            if (rawMat.name || materialName) {
+              invOrClauses.push({ name: { equals: rawMat.name || materialName, mode: 'insensitive' } })
             }
 
             if (invOrClauses.length > 0) {
@@ -453,7 +527,9 @@ export async function POST(request: NextRequest) {
             ...existingMeta,
             ...(opts.isVendorDelivery ? { deliveredAt: completedAt } : {}),
             completedAt,
-            deliveredQuantity: opts.qtyToAdd,
+            deliveredQuantity: warehouseQtyToAdd,
+            deliveredInputQuantity: opts.inputQty ?? opts.qtyToAdd,
+            deliveredUnit: selectedUnit,
             previousStock: currentStock,
             newStock: finalStock,
             autoRestocked: opts.isVendorDelivery,
@@ -466,13 +542,13 @@ export async function POST(request: NextRequest) {
             vendorNotes:
               opts.notesText ||
               existingMeta.vendorNotes ||
-              `Delivered +${opts.qtyToAdd} ${weightUnit}. Inventory automatically updated to ${finalStock} ${weightUnit}.`,
+              `Delivered ${displaySuppliedText}. Inventory automatically updated to ${finalStock} ${weightUnit}.`,
           }
 
           const selfTitle = `✅ Restock Completed: ${materialName}`
           const selfMessage = opts.isVendorDelivery
-            ? `Delivered +${opts.qtyToAdd} ${weightUnit} of ${materialName}. Warehouse stock automatically updated to ${finalStock} ${weightUnit}.`
-            : `Restock delivery confirmed! +${opts.qtyToAdd} ${weightUnit} added to inventory. Current stock level: ${finalStock} ${weightUnit}.`
+            ? `Delivered ${displaySuppliedText} of ${materialName}. Warehouse stock automatically updated to ${finalStock} ${weightUnit}.`
+            : `Restock delivery confirmed! ${displaySuppliedText} added to inventory. Current stock level: ${finalStock} ${weightUnit}.`
 
           const completedNotif = await tx.dashboardNotification.update({
             where: { id },
@@ -486,11 +562,31 @@ export async function POST(request: NextRequest) {
           })
 
           if (notif.recipientRole === 'VENDOR') {
+            // Ensure no duplicate open vendor alerts remain for this material
+            if (targetRawMaterialId && notif.recipientId) {
+              await tx.dashboardNotification.updateMany({
+                where: {
+                  id: { not: id },
+                  rawMaterialId: targetRawMaterialId,
+                  recipientRole: 'VENDOR',
+                  recipientId: notif.recipientId,
+                  status: { not: 'RESTOCK_COMPLETED' },
+                },
+                data: {
+                  status: 'RESTOCK_COMPLETED',
+                  isRead: true,
+                  title: selfTitle,
+                  message: selfMessage,
+                  metadata: updatedMeta,
+                },
+              })
+            }
+
             await syncManagerNotification(
               tx,
               'RESTOCK_COMPLETED',
               `✅ Auto-Restocked: ${materialName}`,
-              `${vendorName} delivered +${opts.qtyToAdd} ${weightUnit} of ${materialName} at ${location}. Inventory automatically updated to ${finalStock} ${weightUnit}.`,
+              `${vendorName} delivered ${displaySuppliedText} of ${materialName} at ${location}. Inventory automatically updated to ${finalStock} ${weightUnit}.`,
               updatedMeta
             )
           } else {
@@ -498,7 +594,7 @@ export async function POST(request: NextRequest) {
               tx,
               'RESTOCK_COMPLETED',
               `✅ Restock Completed: ${materialName}`,
-              `Inventory updated for ${materialName}! +${opts.qtyToAdd} ${weightUnit} added to warehouse stock. Thank you!`,
+              `Inventory updated for ${materialName}! ${displaySuppliedText} added to warehouse stock. Thank you!`,
               updatedMeta
             )
           }
@@ -513,12 +609,12 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: `Delivered +${opts.qtyToAdd} ${weightUnit}! Inventory automatically updated to ${newTotalStock} ${weightUnit}.`,
+        message: `Delivered ${displaySuppliedText}! Inventory automatically updated to ${newTotalStock} ${weightUnit}.`,
         data: {
           notification: updatedNotif,
           rawMaterial: updatedRawMaterial,
           newStock: newTotalStock,
-          addedQuantity: opts.qtyToAdd,
+          addedQuantity: warehouseQtyToAdd,
         },
       })
     }
@@ -530,9 +626,15 @@ export async function POST(request: NextRequest) {
         rawDelivered !== undefined && Number.isFinite(Number(rawDelivered)) && Number(rawDelivered) > 0
           ? Number(rawDelivered)
           : Number(existingMeta.deliveredQuantity || existingMeta.plannedQuantity || existingMeta.minThreshold || 20)
+      const selectedUnit =
+        typeof requestedUnitRaw === 'string' && requestedUnitRaw.trim()
+          ? requestedUnitRaw.trim()
+          : existingMeta.deliveredUnit || existingMeta.plannedUnit || weightUnit
 
       return executeAutoRestockCompletion({
         qtyToAdd: suppliedQty,
+        inputQty: suppliedQty,
+        inputUnit: selectedUnit,
         isVendorDelivery: true,
         notesText: typeof vendorNotes === 'string' && vendorNotes.trim() ? vendorNotes.trim() : undefined,
       })
@@ -577,6 +679,61 @@ export async function POST(request: NextRequest) {
     console.error('Error handling notification action:', error)
     return NextResponse.json(
       { success: false, message: error?.message || 'Failed to process notification action' },
+      { status: 500 }
+    )
+  }
+}
+
+const MANAGER_DELETE_ROLES = new Set(['INVENTORY_MANAGER', 'ADMIN', 'SUPER_ADMIN', 'SUPERADMIN'])
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const token = request.cookies.get(SESSION_COOKIE_NAME)?.value
+    const sessionUser = token ? await verifyJWT(token).catch(() => null) : null
+    const sessionRole = sessionUser?.role ? String(sessionUser.role).toUpperCase().trim() : ''
+
+    if (!MANAGER_DELETE_ROLES.has(sessionRole)) {
+      return NextResponse.json(
+        { success: false, message: 'Forbidden: Only Inventory Managers can delete request records' },
+        { status: 403 }
+      )
+    }
+
+    let id = request.nextUrl.searchParams.get('id')?.trim() || ''
+    if (!id) {
+      const body = await request.json().catch(() => null)
+      id = typeof body?.id === 'string' ? body.id.trim() : ''
+    }
+
+    if (!id) {
+      return NextResponse.json(
+        { success: false, message: 'Request notification id is required' },
+        { status: 400 }
+      )
+    }
+
+    const result = await prisma.dashboardNotification.deleteMany({
+      where: {
+        id,
+        recipientRole: 'INVENTORY_MANAGER',
+      },
+    })
+
+    if (result.count === 0) {
+      return NextResponse.json(
+        { success: false, message: 'Request record not found' },
+        { status: 404 }
+      )
+    }
+
+    return NextResponse.json(
+      { success: true, message: 'Request deleted successfully', id },
+      { headers: NO_CACHE_HEADERS }
+    )
+  } catch (error: any) {
+    console.error('Error deleting dashboard notification:', error)
+    return NextResponse.json(
+      { success: false, message: error?.message || 'Failed to delete request record' },
       { status: 500 }
     )
   }

@@ -101,6 +101,13 @@ export async function PATCH(
       vendorId,
     } = body
 
+    if (isChef && vendorId !== undefined) {
+      return NextResponse.json(
+        { success: false, message: 'Forbidden: Chefs are not permitted to reassign vendors' },
+        { status: 403 }
+      )
+    }
+
     const existing = await prisma.rawMaterial.findUnique({
       where: { id },
     })
@@ -173,10 +180,15 @@ export async function PATCH(
       },
     })
 
-    // Automated trigger check: drops below minThreshold
-    const alertResult = await checkAndTriggerLowStockAlert(updated)
+    // Automated trigger check + menu availability sync in parallel
     invalidateInventoryLookupCache()
-    await syncMenuAvailabilityFromInventory().catch(() => {})
+    const [alertResult] = await Promise.all([
+      checkAndTriggerLowStockAlert({
+        ...updated,
+        vendorName: updated.vendor?.name || null,
+      }),
+      syncMenuAvailabilityFromInventory().catch(() => {}),
+    ])
 
     if (isChef) {
       const { vendorId: _vId, qrCodeData: _qr, vendor: _vendor, ...chefSafeUpdated } = updated
@@ -208,6 +220,13 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if ((await getRequestRole(request)) === 'CHEF') {
+      return NextResponse.json(
+        { success: false, message: 'Forbidden: Chefs are not permitted to delete raw materials' },
+        { status: 403 }
+      )
+    }
+
     const { id } = await params
     await prisma.rawMaterial.delete({
       where: { id },

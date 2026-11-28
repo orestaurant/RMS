@@ -243,6 +243,7 @@ export function AppSidebar() {
           label: 'INVENTORY',
           items: [
             { label: 'Raw Materials', href: '/inventory-manager/inventory', icon: Package },
+            { label: 'Vendor Requests', href: '/inventory-manager/vendor-requests', icon: Truck },
           ],
         },
       ]

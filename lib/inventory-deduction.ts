@@ -262,21 +262,23 @@ export async function syncMenuAvailabilityFromInventory(
   organizationId?: string | null
 ): Promise<number> {
   try {
-    const snapshot = await getUnifiedInventorySnapshot(organizationId, true)
-    const menuItems = await prisma.menuItem.findMany({
-      where: {
-        deletedAt: null,
-        ...(organizationId ? { organizationId } : {}),
-      },
-      select: {
-        id: true,
-        name: true,
-        isAvailable: true,
-        metadata: true,
-      },
-    })
+    const [snapshot, menuItems] = await Promise.all([
+      getUnifiedInventorySnapshot(organizationId, true),
+      prisma.menuItem.findMany({
+        where: {
+          deletedAt: null,
+          ...(organizationId ? { organizationId } : {}),
+        },
+        select: {
+          id: true,
+          name: true,
+          isAvailable: true,
+          metadata: true,
+        },
+      }),
+    ])
 
-    let changedCount = 0
+    const pendingUpdates: Promise<unknown>[] = []
 
     for (const item of menuItems) {
       const meta = (item.metadata as Record<string, any>) || {}
@@ -327,38 +329,41 @@ export async function syncMenuAvailabilityFromInventory(
       if (!hasTrackedIngredient) continue
 
       if (anyDepleted && item.isAvailable) {
-        await prisma.menuItem.update({
-          where: { id: item.id },
-          data: {
-            isAvailable: false,
-            metadata: {
-              ...meta,
-              autoDisabledByInventory: true,
-              autoDisabledAt: new Date().toISOString(),
+        pendingUpdates.push(
+          prisma.menuItem.update({
+            where: { id: item.id },
+            data: {
+              isAvailable: false,
+              metadata: {
+                ...meta,
+                autoDisabledByInventory: true,
+                autoDisabledAt: new Date().toISOString(),
+              },
             },
-          },
-        })
-        changedCount++
+          })
+        )
       } else if (!anyDepleted && !item.isAvailable && meta.autoDisabledByInventory) {
-        await prisma.menuItem.update({
-          where: { id: item.id },
-          data: {
-            isAvailable: true,
-            metadata: {
-              ...meta,
-              autoDisabledByInventory: false,
-              autoReenabledAt: new Date().toISOString(),
+        pendingUpdates.push(
+          prisma.menuItem.update({
+            where: { id: item.id },
+            data: {
+              isAvailable: true,
+              metadata: {
+                ...meta,
+                autoDisabledByInventory: false,
+                autoReenabledAt: new Date().toISOString(),
+              },
             },
-          },
-        })
-        changedCount++
+          })
+        )
       }
     }
 
-    if (changedCount > 0) {
+    if (pendingUpdates.length > 0) {
+      await Promise.all(pendingUpdates)
       invalidateAllMenuCaches()
     }
-    return changedCount
+    return pendingUpdates.length
   } catch (err) {
     console.warn('syncMenuAvailabilityFromInventory warning:', (err as any)?.message)
     return 0
