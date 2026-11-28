@@ -32,7 +32,7 @@ export function QRCodeSVG({
 
     QRCode.toString(text, {
       type: 'svg',
-      margin: includeMargin ? 2 : 0,
+      margin: includeMargin ? 4 : 0,
       color: {
         dark: fgColor,
         light: bgColor,

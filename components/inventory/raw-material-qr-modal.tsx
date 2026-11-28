@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import QRCode from 'qrcode'
 import {
   Dialog,
   DialogContent,
@@ -11,7 +12,8 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Download, Printer, QrCode, MapPin, Scale, ShieldAlert, Check } from 'lucide-react'
+import { Printer, QrCode, MapPin, Scale, ShieldAlert, Check, Copy } from 'lucide-react'
+import { QRCodeSVG } from '@/lib/qr-code'
 
 export interface RawMaterialQRProps {
   isOpen: boolean
@@ -27,55 +29,64 @@ export interface RawMaterialQRProps {
     minThreshold: number
     qrCodeData?: string | null
     vendorName?: string
+    updatedAt?: string
   } | null
 }
 
+const CLIENT_QR_OPTIONS = {
+  errorCorrectionLevel: 'M' as const,
+  margin: 4,
+  width: 320,
+  color: {
+    dark: '#000000',
+    light: '#ffffff',
+  },
+}
+
 export function RawMaterialQRModal({ isOpen, onClose, material }: RawMaterialQRProps) {
-  const [downloading, setDownloading] = useState(false)
+  const [printing, setPrinting] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [copiedUrl, setCopiedUrl] = useState(false)
+  const [hostUrl, setHostUrl] = useState('')
+
+  useEffect(() => {
+    const localOrigin = typeof window !== 'undefined' ? window.location.origin : ''
+    const defaultHost = process.env.NEXT_PUBLIC_APP_URL || localOrigin
+    setHostUrl(defaultHost)
+
+    if (
+      typeof window !== 'undefined' &&
+      !process.env.NEXT_PUBLIC_APP_URL &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ) {
+      fetch('/api/system/network-info')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.success && data?.networkUrl && !String(data.networkUrl).includes('127.0.0.1')) {
+            setHostUrl(data.networkUrl)
+          }
+        })
+        .catch(() => {})
+    }
+  }, [])
+
+  const qrInspectUrl = useMemo(() => {
+    if (!material) return ''
+    const base = hostUrl ? hostUrl.trim().replace(/\/$/, '') : ''
+    const query = `sku=${encodeURIComponent(material.sku)}&product=${encodeURIComponent(material.name)}`
+    return base ? `${base}/?${query}` : `/?${query}`
+  }, [hostUrl, material])
 
   if (!material) return null
 
-  const handleDownloadPNG = () => {
-    if (!material.qrCodeData) return
-    const link = document.createElement('a')
-    link.href = material.qrCodeData
-    link.download = `${material.sku}-label-qr.png`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-  }
-
-  const handleDownloadSVG = async () => {
-    try {
-      setDownloading(true)
-      const res = await fetch(`/api/inventory/raw-materials/${material.id}`)
-      const json = await res.json()
-      if (json.success && json.data?.svgQr) {
-        const blob = new Blob([json.data.svgQr], { type: 'image/svg+xml' })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `${material.sku}-label-qr.svg`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        URL.revokeObjectURL(url)
-      } else {
-        handleDownloadPNG()
-      }
-    } catch (err) {
-      handleDownloadPNG()
-    } finally {
-      setDownloading(false)
-    }
-  }
-
-  const handlePrintLabel = () => {
+  const handlePrintLabel = async () => {
     const printWindow = window.open('', '_blank', 'width=600,height=600')
     if (!printWindow) return
 
-    const qrImageSrc = material.qrCodeData || ''
+    setPrinting(true)
+    const qrImageSrc = await QRCode.toDataURL(qrInspectUrl, CLIENT_QR_OPTIONS)
+      .catch(() => material.qrCodeData || '')
+      .finally(() => setPrinting(false))
 
     printWindow.document.write(`
       <!DOCTYPE html>
@@ -178,40 +189,44 @@ export function RawMaterialQRModal({ isOpen, onClose, material }: RawMaterialQRP
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const handleCopyUrl = () => {
+    navigator.clipboard.writeText(qrInspectUrl)
+    setCopiedUrl(true)
+    setTimeout(() => setCopiedUrl(false), 2000)
+  }
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-md p-6 bg-card">
-        <DialogHeader className="text-center sm:text-left">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="p-2 rounded-lg bg-orange-500/10 text-orange-600 dark:text-orange-400">
-              <QrCode className="size-5" />
+      <DialogContent className="sm:max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 bg-card gap-3">
+        <DialogHeader className="text-left pr-7">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-orange-500/10 text-orange-600 dark:text-orange-400 shrink-0">
+              <QrCode className="size-4" />
             </div>
-            <div>
-              <DialogTitle className="text-lg font-bold">Raw Material QR Label</DialogTitle>
+            <div className="min-w-0">
+              <DialogTitle className="text-base font-bold leading-snug">
+                Raw Material QR Label
+              </DialogTitle>
               <DialogDescription className="text-xs">
-                Scan with scanner or mobile camera to inspect warehouse stock
+                Scan with scanner or mobile camera to inspect product details
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
         {/* QR Code Container */}
-        <div className="flex flex-col items-center justify-center p-5 bg-background/60 rounded-xl border border-border/80 my-2 shadow-sm">
-          {material.qrCodeData ? (
-            <div className="p-3 bg-white rounded-lg shadow-sm border border-slate-200">
-              <img
-                src={material.qrCodeData}
-                alt={`QR code for ${material.name}`}
-                className="size-48 object-contain"
-              />
-            </div>
-          ) : (
-            <div className="size-48 flex items-center justify-center text-muted-foreground bg-muted/40 rounded-lg">
-              No QR data available
-            </div>
-          )}
+        <div className="flex flex-col items-center justify-center p-4 bg-background/60 rounded-xl border border-border/80 shadow-xs">
+          <div className="p-2 bg-white rounded-xl shadow-xs border border-slate-200">
+            <QRCodeSVG
+              value={qrInspectUrl}
+              size={168}
+              fgColor="#000000"
+              bgColor="#ffffff"
+              includeMargin
+            />
+          </div>
 
-          <div className="mt-4 text-center">
+          <div className="mt-3 text-center">
             <h3 className="font-semibold text-base tracking-tight">{material.name}</h3>
             <div className="flex items-center justify-center gap-2 mt-1">
               <Badge variant="outline" className="font-mono text-xs bg-muted/60 cursor-pointer" onClick={handleCopySKU}>
@@ -222,11 +237,31 @@ export function RawMaterialQRModal({ isOpen, onClose, material }: RawMaterialQRP
                 {material.weight} {material.weightUnit}
               </Badge>
             </div>
+            <button
+              type="button"
+              onClick={handleCopyUrl}
+              className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              title={qrInspectUrl}
+            >
+              {copiedUrl ? (
+                <>
+                  <Check className="size-3 text-emerald-500" />
+                  <span className="text-emerald-600 font-medium">Scan link copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="size-3" />
+                  <span className="truncate max-w-[260px]">
+                    ?sku={material.sku}&amp;product={material.name}
+                  </span>
+                </>
+              )}
+            </button>
           </div>
         </div>
 
         {/* Details specification list */}
-        <div className="grid grid-cols-2 gap-2 text-xs p-3 bg-muted/30 rounded-lg border border-border/50">
+        <div className="grid grid-cols-2 gap-2 text-xs p-2.5 bg-muted/30 rounded-lg border border-border/50">
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <MapPin className="size-3.5 text-primary shrink-0" />
             <span className="truncate">
@@ -253,38 +288,25 @@ export function RawMaterialQRModal({ isOpen, onClose, material }: RawMaterialQRP
         </div>
 
         {/* Actions */}
-        <DialogFooter className="flex flex-col sm:flex-row gap-2 mt-4 sm:justify-between">
+        <DialogFooter className="-mx-5 -mb-5 px-5 py-3.5 mt-1 sm:justify-end">
           <Button
             type="button"
             variant="outline"
             size="sm"
-            onClick={handleDownloadPNG}
-            className="gap-1.5 text-xs w-full sm:w-auto"
+            onClick={onClose}
+            className="text-xs w-full sm:w-auto"
           >
-            <Download className="size-3.5" />
-            PNG
+            Close
           </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleDownloadSVG}
-            disabled={downloading}
-            className="gap-1.5 text-xs w-full sm:w-auto"
-          >
-            <Download className="size-3.5" />
-            SVG
-          </Button>
-
           <Button
             type="button"
             size="sm"
             onClick={handlePrintLabel}
+            disabled={printing}
             className="gap-1.5 text-xs bg-orange-600 hover:bg-orange-700 text-white w-full sm:w-auto"
           >
             <Printer className="size-3.5" />
-            Print Label
+            {printing ? 'Preparing...' : 'Print Label'}
           </Button>
         </DialogFooter>
       </DialogContent>

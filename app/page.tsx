@@ -50,6 +50,11 @@ import {
   Monitor,
   Tablet,
   Sparkle,
+  Package,
+  MapPin,
+  Scale,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react'
 
 if (typeof window !== 'undefined') {
@@ -62,6 +67,55 @@ export default function HomePage() {
   const [isScrolled, setIsScrolled] = useState(false)
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('annual')
   const [activeTab, setActiveTab] = useState<'pos' | 'kds' | 'tables' | 'inventory'>('pos')
+
+  // Public QR Raw Material Product Inspection State (/?sku=...&product=...)
+  const [qrInspectSku, setQrInspectSku] = useState<string | null>(null)
+  const [qrProductNameHint, setQrProductNameHint] = useState<string>('')
+  const [qrMaterial, setQrMaterial] = useState<{
+    id: string
+    name: string
+    sku: string
+    quantity: number
+    weight: number
+    weightUnit: string
+    location: string
+    minThreshold: number
+    vendorName: string
+    status: 'in-stock' | 'low-stock' | 'critical'
+  } | null>(null)
+  const [qrLoading, setQrLoading] = useState(false)
+  const [qrError, setQrError] = useState<string | null>(null)
+
+  const fetchQrProductDetails = async (sku: string) => {
+    setQrLoading(true)
+    setQrError(null)
+    try {
+      const res = await fetch(`/api/inventory/raw-materials?sku=${encodeURIComponent(sku)}`, {
+        cache: 'no-store',
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success || !json?.data) {
+        setQrError(json?.message || 'Product details not found')
+        setQrMaterial(null)
+      } else {
+        setQrMaterial(json.data)
+      }
+    } catch {
+      setQrError('Could not load product details')
+    } finally {
+      setQrLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const skuParam = params.get('sku')?.trim()
+    if (!skuParam) return
+    setQrInspectSku(skuParam)
+    setQrProductNameHint(params.get('product')?.trim() || '')
+    fetchQrProductDetails(skuParam)
+  }, [])
 
   const pageRef = useRef<HTMLDivElement>(null)
   const heroRef = useRef<HTMLElement>(null)
@@ -84,6 +138,9 @@ export default function HomePage() {
 
   // ────────────────── GSAP ANIMATIONS, SCROLLTRIGGER & PARALLAX ──────────────────
   useEffect(() => {
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('sku')) {
+      return
+    }
     // Check initial scroll state
     if (typeof window !== 'undefined' && window.scrollY > 40) {
       setIsScrolled(true)
@@ -478,6 +535,116 @@ export default function HomePage() {
       a: 'Yes, RestoSphere provides centralized multi-outlet management, unified ingredient inventory, consolidated sales reporting, and role-based staff access across all your locations.',
     },
   ]
+
+  if (qrInspectSku) {
+    return (
+      <div className="min-h-screen bg-[#FAFAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-6 space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="size-10 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 flex items-center justify-center shrink-0">
+                <Package className="size-5" />
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-orange-600 dark:text-orange-400">
+                  Scanned Product
+                </p>
+                <h1 className="text-xl font-bold tracking-tight">
+                  {qrMaterial?.name || qrProductNameHint || 'Raw Material'}
+                </h1>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => fetchQrProductDetails(qrInspectSku)}
+              disabled={qrLoading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`size-3.5 ${qrLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
+
+          {qrLoading && !qrMaterial ? (
+            <div className="py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+              Loading product details...
+            </div>
+          ) : qrError ? (
+            <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-600 dark:text-rose-400">
+              {qrError}
+            </div>
+          ) : qrMaterial ? (
+            <>
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 px-3.5 py-2.5">
+                <span className="font-mono text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  {qrMaterial.sku}
+                </span>
+                {qrMaterial.status === 'critical' ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400 px-2.5 py-0.5 text-xs font-semibold">
+                    <AlertTriangle className="size-3" />
+                    Out of Stock
+                  </span>
+                ) : qrMaterial.status === 'low-stock' ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 px-2.5 py-0.5 text-xs font-semibold">
+                    <AlertTriangle className="size-3" />
+                    Low Stock
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 px-2.5 py-0.5 text-xs font-semibold">
+                    <CheckCircle2 className="size-3" />
+                    In Stock
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+                  <div className="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-medium">
+                    Current Stock
+                  </div>
+                  <div className="mt-1 font-bold text-lg text-slate-900 dark:text-white">
+                    {qrMaterial.quantity}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+                  <div className="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1">
+                    <Scale className="size-3" /> Unit Weight
+                  </div>
+                  <div className="mt-1 font-bold text-lg text-slate-900 dark:text-white">
+                    {qrMaterial.weight} {qrMaterial.weightUnit}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+                  <div className="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1">
+                    <MapPin className="size-3" /> Location
+                  </div>
+                  <div className="mt-1 font-semibold text-slate-900 dark:text-white truncate">
+                    {qrMaterial.location}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+                  <div className="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-medium">
+                    Min Threshold
+                  </div>
+                  <div className="mt-1 font-semibold text-slate-900 dark:text-white">
+                    {qrMaterial.minThreshold}
+                  </div>
+                </div>
+                <div className="col-span-2 rounded-xl border border-slate-200 dark:border-slate-800 p-3 flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                    Assigned Vendor
+                  </span>
+                  <span className="text-sm font-semibold text-slate-900 dark:text-white">
+                    {qrMaterial.vendorName}
+                  </span>
+                </div>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div

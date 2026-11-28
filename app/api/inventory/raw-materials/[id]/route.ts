@@ -1,11 +1,44 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import prisma from '@/lib/prisma'
 import QRCode from 'qrcode'
 import { checkAndTriggerLowStockAlert } from '@/lib/inventory-alerts'
-import { invalidateInventoryLookupCache, syncMenuAvailabilityFromInventory } from '@/lib/inventory-deduction'
+import {
+  RAW_MATERIAL_QR_OPTIONS,
+  buildRawMaterialQrUrl,
+  invalidateInventoryLookupCache,
+  syncMenuAvailabilityFromInventory,
+} from '@/lib/inventory-deduction'
 import { SESSION_COOKIE_NAME, verifyJWT, normalizeRole } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
+
+const RAW_MATERIAL_SELECT = {
+  id: true,
+  name: true,
+  sku: true,
+  quantity: true,
+  weight: true,
+  weightUnit: true,
+  location: true,
+  minThreshold: true,
+  vendorId: true,
+  createdAt: true,
+  updatedAt: true,
+  vendor: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+    },
+  },
+} as const
+
+function computeStockStatus(quantity: number, minThreshold: number): 'in-stock' | 'low-stock' | 'critical' {
+  if (quantity === 0) return 'critical'
+  if (quantity <= minThreshold) return 'low-stock'
+  return 'in-stock'
+}
 
 async function getRequestRole(request: NextRequest): Promise<string> {
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value
@@ -51,25 +84,34 @@ export async function GET(
       })
     }
 
-    // Also generate SVG version on-the-fly if needed for SVG download
-    const qrPayload = JSON.stringify({
-      id: material.id,
+    const hostHeader = request.headers.get('x-forwarded-host') || request.headers.get('host')
+    const protoHeader = request.headers.get('x-forwarded-proto') || 'http'
+    const resolvedOrigin =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (hostHeader ? `${protoHeader}://${hostHeader}` : request.nextUrl.origin)
+
+    const qrPayload = buildRawMaterialQrUrl({
+      origin: resolvedOrigin,
       sku: material.sku,
       name: material.name,
-      location: material.location,
-      weight: `${material.weight} ${material.weightUnit}`,
-      minThreshold: material.minThreshold,
     })
 
-    const svgQr = await QRCode.toString(qrPayload, {
-      type: 'svg',
-      margin: 2,
-    })
+    const [qrCodeData, svgQr] = await Promise.all([
+      QRCode.toDataURL(qrPayload, RAW_MATERIAL_QR_OPTIONS),
+      QRCode.toString(qrPayload, {
+        type: 'svg',
+        errorCorrectionLevel: RAW_MATERIAL_QR_OPTIONS.errorCorrectionLevel,
+        margin: RAW_MATERIAL_QR_OPTIONS.margin,
+        width: RAW_MATERIAL_QR_OPTIONS.width,
+        color: RAW_MATERIAL_QR_OPTIONS.color,
+      }),
+    ])
 
     return NextResponse.json({
       success: true,
       data: {
         ...material,
+        qrCodeData,
         svgQr,
       },
     })
@@ -110,6 +152,7 @@ export async function PATCH(
 
     const existing = await prisma.rawMaterial.findUnique({
       where: { id },
+      select: RAW_MATERIAL_SELECT,
     })
 
     if (!existing) {
@@ -126,76 +169,94 @@ export async function PATCH(
       newQuantity = Math.max(0, existing.quantity + Number(adjustDelta))
     }
 
-    const updateData: any = {
-      quantity: newQuantity,
+    const updateData: Record<string, any> = {}
+    if (newQuantity !== existing.quantity) {
+      updateData.quantity = newQuantity
     }
 
-    if (name && typeof name === 'string' && name.trim()) {
-      updateData.name = name.trim()
+    const trimmedName = typeof name === 'string' ? name.trim() : ''
+    if (trimmedName && trimmedName !== existing.name) {
+      updateData.name = trimmedName
     }
     if (weight !== undefined && !isNaN(Number(weight))) {
-      updateData.weight = Math.max(0, Number(weight))
+      const nextWeight = Math.max(0, Number(weight))
+      if (nextWeight !== existing.weight) {
+        updateData.weight = nextWeight
+      }
     }
-    if (weightUnit && typeof weightUnit === 'string') {
+    if (typeof weightUnit === 'string' && weightUnit && weightUnit !== existing.weightUnit) {
       updateData.weightUnit = weightUnit
     }
-    if (location && typeof location === 'string' && location.trim()) {
-      updateData.location = location.trim()
+    const trimmedLocation = typeof location === 'string' ? location.trim() : ''
+    if (trimmedLocation && trimmedLocation !== existing.location) {
+      updateData.location = trimmedLocation
     }
     if (minThreshold !== undefined && !isNaN(Number(minThreshold))) {
-      updateData.minThreshold = Math.max(0, Number(minThreshold))
+      const nextThreshold = Math.max(0, Number(minThreshold))
+      if (nextThreshold !== existing.minThreshold) {
+        updateData.minThreshold = nextThreshold
+      }
     }
-    if (!isChef && vendorId && typeof vendorId === 'string') {
+    if (!isChef && typeof vendorId === 'string' && vendorId && vendorId !== existing.vendorId) {
       updateData.vendorId = vendorId
     }
 
-    // Refresh QR code if name, location, or weight changed
-    if (updateData.name || updateData.location || updateData.weight || updateData.weightUnit) {
-      const qrPayload = JSON.stringify({
-        id: existing.id,
+    // Only regenerate stored QR PNG when product name changed (URL encodes sku + product name)
+    if (updateData.name !== undefined) {
+      const hostHeader = request.headers.get('x-forwarded-host') || request.headers.get('host')
+      const protoHeader = request.headers.get('x-forwarded-proto') || 'http'
+      const resolvedOrigin =
+        process.env.NEXT_PUBLIC_APP_URL ||
+        (hostHeader ? `${protoHeader}://${hostHeader}` : request.nextUrl.origin)
+      const qrPayload = buildRawMaterialQrUrl({
+        origin: resolvedOrigin,
         sku: existing.sku,
-        name: updateData.name || existing.name,
-        location: updateData.location || existing.location,
-        weight: `${updateData.weight ?? existing.weight} ${updateData.weightUnit || existing.weightUnit}`,
-        minThreshold: updateData.minThreshold ?? existing.minThreshold,
+        name: updateData.name,
       })
-      updateData.qrCodeData = await QRCode.toDataURL(qrPayload, {
-        errorCorrectionLevel: 'H',
-        margin: 2,
-        width: 320,
+      updateData.qrCodeData = await QRCode.toDataURL(qrPayload, RAW_MATERIAL_QR_OPTIONS)
+    }
+
+    const hasChanges = Object.keys(updateData).length > 0
+    const updated = hasChanges
+      ? await prisma.rawMaterial.update({
+          where: { id },
+          data: updateData,
+          select: RAW_MATERIAL_SELECT,
+        })
+      : existing
+
+    const quantityOrThresholdChanged =
+      updateData.quantity !== undefined || updateData.minThreshold !== undefined
+
+    if (hasChanges) {
+      invalidateInventoryLookupCache()
+    }
+
+    const alertResult = quantityOrThresholdChanged || updateData.vendorId !== undefined
+      ? await checkAndTriggerLowStockAlert({
+          ...updated,
+          vendorName: updated.vendor?.name || null,
+        })
+      : { triggered: false }
+
+    // Defer full-menu availability sync out of the request critical path
+    if (updateData.quantity !== undefined) {
+      after(() => {
+        syncMenuAvailabilityFromInventory().catch(() => {})
       })
     }
 
-    const updated = await prisma.rawMaterial.update({
-      where: { id },
-      data: updateData,
-      include: {
-        vendor: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-    })
-
-    // Automated trigger check + menu availability sync in parallel
-    invalidateInventoryLookupCache()
-    const [alertResult] = await Promise.all([
-      checkAndTriggerLowStockAlert({
-        ...updated,
-        vendorName: updated.vendor?.name || null,
-      }),
-      syncMenuAvailabilityFromInventory().catch(() => {}),
-    ])
+    const status = computeStockStatus(Number(updated.quantity), Number(updated.minThreshold))
 
     if (isChef) {
-      const { vendorId: _vId, qrCodeData: _qr, vendor: _vendor, ...chefSafeUpdated } = updated
+      const { vendorId: _vId, vendor: _vendor, ...chefSafeUpdated } = updated
       return NextResponse.json({
         success: true,
         message: 'Raw material updated successfully',
-        data: chefSafeUpdated,
+        data: {
+          ...chefSafeUpdated,
+          status,
+        },
         alertResult: { triggered: alertResult.triggered },
       })
     }
@@ -203,7 +264,11 @@ export async function PATCH(
     return NextResponse.json({
       success: true,
       message: 'Raw material updated successfully',
-      data: updated,
+      data: {
+        ...updated,
+        vendorName: updated.vendor?.name || 'Unassigned',
+        status,
+      },
       alertResult,
     })
   } catch (error: any) {
@@ -232,7 +297,9 @@ export async function DELETE(
       where: { id },
     })
     invalidateInventoryLookupCache()
-    await syncMenuAvailabilityFromInventory().catch(() => {})
+    after(() => {
+      syncMenuAvailabilityFromInventory().catch(() => {})
+    })
     return NextResponse.json({
       success: true,
       message: 'Raw material deleted successfully',

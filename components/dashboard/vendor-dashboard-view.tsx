@@ -311,6 +311,10 @@ export function matchesRestockSearch(notif: VendorNotification, rawQuery: string
 
   const materialName = (notif.rawMaterial?.name || notif.metadata?.materialName || '').toLowerCase()
   const sku = (notif.rawMaterial?.sku || notif.metadata?.sku || '').toLowerCase()
+  const location = [notif.rawMaterial?.location, notif.metadata?.location]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
   const vendorName = (
     notif.rawMaterial?.vendor?.name ||
     notif.metadata?.vendorName ||
@@ -332,13 +336,9 @@ export function matchesRestockSearch(notif: VendorNotification, rawQuery: string
     .map(buildDateSearchText)
     .join(' ')
 
-  return (
-    materialName.includes(q) ||
-    sku.includes(q) ||
-    vendorName.includes(q) ||
-    vendorEmail.includes(q) ||
-    dateText.includes(q)
-  )
+  const searchableText = `${materialName} ${sku} ${location} ${vendorName} ${vendorEmail} ${dateText}`
+  const tokens = q.split(/\s+/).filter(Boolean)
+  return tokens.every((token) => searchableText.includes(token))
 }
 
 function emitVendorNotificationsUpdated() {
@@ -1259,7 +1259,7 @@ export function VendorDashboardView({ mode = 'dashboard' }: { mode?: 'dashboard'
             <div className="relative flex-1 min-w-0">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
               <Input
-                placeholder="Search material, vendor, SKU, or date..."
+                placeholder="Search material, vendor, place, SKU, or date..."
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value)
@@ -1432,58 +1432,36 @@ export function VendorDashboardView({ mode = 'dashboard' }: { mode?: 'dashboard'
                         )}
 
                         {stage === 'pending' && (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openActionModal('accept', notif)}
-                              disabled={isActing}
-                              className="h-8 text-xs font-semibold border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 gap-1.5 cursor-pointer"
-                            >
-                              <Send className="size-3.5" />
-                              Accept Request
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => openActionModal('deliver', notif)}
-                              disabled={isActing}
-                              className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs gap-1.5 cursor-pointer"
-                            >
-                              <PackageCheck className="size-3.5" />
-                              Deliver &amp; Update Stock
-                            </Button>
-                          </>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openActionModal('accept', notif)}
+                            disabled={isActing}
+                            className="h-8 text-xs font-semibold border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 gap-1.5 cursor-pointer"
+                          >
+                            <Send className="size-3.5" />
+                            Accept Request
+                          </Button>
                         )}
 
                         {stage === 'in_progress' && (
-                          <>
-                            <Button
-                              size="sm"
-                              onClick={() =>
-                                handleStageAction(
-                                  notif.id,
-                                  'mark_in_transit',
-                                  `Restock shipment dispatched by ${resolvedVendor || 'Vendor'}. Goods are currently in transit.`,
-                                  `"${materialName}" marked as Restock In Transit! Order is on the way to warehouse.`,
-                                  'Failed to mark restock in transit'
-                                )
-                              }
-                              disabled={isActing}
-                              className="h-8 text-xs bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs gap-1.5 cursor-pointer"
-                            >
-                              <Truck className="size-3.5" />
-                              {isActing ? 'Dispatching...' : 'Mark In Transit'}
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => openActionModal('deliver', notif)}
-                              disabled={isActing}
-                              className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs gap-1.5 cursor-pointer"
-                            >
-                              <PackageCheck className="size-3.5" />
-                              Deliver &amp; Update Stock
-                            </Button>
-                          </>
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              handleStageAction(
+                                notif.id,
+                                'mark_in_transit',
+                                `Restock shipment dispatched by ${resolvedVendor || 'Vendor'}. Goods are currently in transit.`,
+                                `"${materialName}" marked as Restock In Transit! Order is on the way to warehouse.`,
+                                'Failed to mark restock in transit'
+                              )
+                            }
+                            disabled={isActing}
+                            className="h-8 text-xs bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs gap-1.5 cursor-pointer"
+                          >
+                            <Truck className="size-3.5" />
+                            {isActing ? 'Dispatching...' : 'Mark In Transit'}
+                          </Button>
                         )}
 
                         {stage === 'in_transit' && (

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import jsQR from 'jsqr'
 import {
   Package,
   AlertTriangle,
@@ -22,6 +23,10 @@ import {
   ArrowUpDown,
   Filter,
   ChevronDown,
+  Camera,
+  FlipHorizontal,
+  Loader2,
+  ShieldAlert,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -81,6 +86,85 @@ export interface RawMaterialsViewProps {
   initialRole?: string
 }
 
+function parseScannedRawMaterialInput(rawInput: string): {
+  id?: string
+  sku?: string
+  name?: string
+} {
+  const trimmed = (rawInput || '').trim()
+  if (!trimmed) return {}
+
+  // 1. Try URL format (e.g. https://.../inventory?sku=RM-57884&product=Milk)
+  try {
+    const isFullUrl = trimmed.startsWith('http://') || trimmed.startsWith('https://')
+    const urlObj = isFullUrl
+      ? new URL(trimmed)
+      : trimmed.startsWith('/') || trimmed.startsWith('?')
+      ? new URL(`http://localhost${trimmed.startsWith('?') ? `/inventory${trimmed}` : trimmed}`)
+      : null
+
+    if (urlObj) {
+      const sku = urlObj.searchParams.get('sku')?.trim() || undefined
+      const id =
+        urlObj.searchParams.get('id')?.trim() ||
+        urlObj.searchParams.get('materialId')?.trim() ||
+        undefined
+      const name =
+        urlObj.searchParams.get('product')?.trim() ||
+        urlObj.searchParams.get('name')?.trim() ||
+        undefined
+      if (sku || id || name) {
+        return { id, sku, name }
+      }
+    }
+  } catch {
+    // Not a URL
+  }
+
+  // 2. Try legacy JSON payload format
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (parsed && typeof parsed === 'object') {
+        const id = typeof parsed.id === 'string' ? parsed.id.trim() : undefined
+        const sku = typeof parsed.sku === 'string' ? parsed.sku.trim() : undefined
+        const name = typeof parsed.name === 'string' ? parsed.name.trim() : undefined
+        if (id || sku || name) return { id, sku, name }
+      }
+    } catch {
+      // Invalid JSON
+    }
+  }
+
+  // 3. Fallback: direct SKU or material name
+  if (/^RM[-_A-Z0-9]+$/i.test(trimmed)) {
+    return { sku: trimmed.toUpperCase() }
+  }
+  return { sku: trimmed, name: trimmed }
+}
+
+function playRawMaterialScanBeep() {
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(740, ctx.currentTime)
+    gain.gain.setValueAtTime(0.12, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start()
+    osc.stop(ctx.currentTime + 0.14)
+  } catch {
+    // Ignore audio errors
+  }
+}
+
 export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
   const { auth, loading: authLoading } = useAuthContext()
   const resolvedRole = String(
@@ -104,8 +188,14 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
 
   // Filters
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'in-stock' | 'low-stock' | 'critical'>('all')
   const [selectedVendorFilter, setSelectedVendorFilter] = useState<string>('all')
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 200)
+    return () => clearTimeout(timer)
+  }, [search])
 
   // Feedback banner
   const [feedback, setFeedback] = useState<{
@@ -126,8 +216,22 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
   const [activeMaterial, setActiveMaterial] = useState<RawMaterialItem | null>(null)
   const [qrModalItem, setQrModalItem] = useState<RawMaterialItem | null>(null)
   const [isQrOpen, setIsQrOpen] = useState(false)
+  const [isScannerOpen, setIsScannerOpen] = useState(false)
+  const [scannedProduct, setScannedProduct] = useState<RawMaterialItem | null>(null)
+  const [manualScanInput, setManualScanInput] = useState('')
+  const [scanLookupLoading, setScanLookupLoading] = useState(false)
+  const [scanError, setScanError] = useState<string | null>(null)
+  const [cameraActive, setCameraActive] = useState(false)
+  const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment')
+  const [cameraError, setCameraError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [adjustingId, setAdjustingId] = useState<string | null>(null)
+
+  const scanVideoRef = useRef<HTMLVideoElement>(null)
+  const scanCanvasRef = useRef<HTMLCanvasElement>(null)
+  const scanAnimRef = useRef<number | null>(null)
+  const scanStreamRef = useRef<MediaStream | null>(null)
+  const deepLinkHandledRef = useRef(false)
 
   // Add / Edit Form State
   const [formName, setFormName] = useState('')
@@ -163,7 +267,7 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
 
     try {
       const params = new URLSearchParams()
-      if (search) params.set('search', search)
+      if (debouncedSearch) params.set('search', debouncedSearch)
       if (statusFilter !== 'all') params.set('status', statusFilter)
       if (!isChef && selectedVendorFilter !== 'all') {
         params.set('vendorId', selectedVendorFilter)
@@ -191,7 +295,51 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
         setRefreshing(false)
       }
     }
-  }, [search, statusFilter, selectedVendorFilter, isChef])
+  }, [debouncedSearch, statusFilter, selectedVendorFilter, isChef])
+
+  const matchesActiveFilters = useCallback(
+    (item: RawMaterialItem) => {
+      const q = debouncedSearch.toLowerCase().trim()
+      if (q) {
+        const matchesQuery =
+          item.name.toLowerCase().includes(q) ||
+          item.sku.toLowerCase().includes(q) ||
+          item.location.toLowerCase().includes(q) ||
+          (!isChef && (item.vendorName || item.vendor?.name || '').toLowerCase().includes(q))
+        if (!matchesQuery) return false
+      }
+      if (statusFilter !== 'all' && item.status !== statusFilter) return false
+      if (!isChef && selectedVendorFilter !== 'all' && item.vendorId !== selectedVendorFilter) {
+        return false
+      }
+      return true
+    },
+    [debouncedSearch, statusFilter, selectedVendorFilter, isChef]
+  )
+
+  const updateStatsForChange = useCallback(
+    (
+      prevStatus: RawMaterialItem['status'] | null,
+      nextStatus: RawMaterialItem['status'] | null
+    ) => {
+      if (prevStatus === nextStatus) return
+      setStats((prev) => {
+        const next = { ...prev }
+        if (prevStatus === null && nextStatus !== null) next.total += 1
+        if (prevStatus !== null && nextStatus === null) next.total = Math.max(0, next.total - 1)
+
+        if (prevStatus === 'in-stock') next.inStockCount = Math.max(0, next.inStockCount - 1)
+        if (prevStatus === 'low-stock') next.lowStockCount = Math.max(0, next.lowStockCount - 1)
+        if (prevStatus === 'critical') next.outOfStockCount = Math.max(0, next.outOfStockCount - 1)
+
+        if (nextStatus === 'in-stock') next.inStockCount += 1
+        if (nextStatus === 'low-stock') next.lowStockCount += 1
+        if (nextStatus === 'critical') next.outOfStockCount += 1
+        return next
+      })
+    },
+    []
+  )
 
   useEffect(() => {
     if (!roleReady) return
@@ -302,6 +450,14 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
         return
       }
 
+      const createdItem = json.data as RawMaterialItem
+      if (createdItem) {
+        updateStatsForChange(null, createdItem.status)
+        if (matchesActiveFilters(createdItem)) {
+          setMaterials((prev) => [createdItem, ...prev])
+        }
+      }
+
       setIsAddOpen(false)
       const isLowStock = Number(formQuantity) <= Number(formMinThreshold)
       if (isLowStock) {
@@ -312,7 +468,6 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
       } else {
         showFeedback('success', `Raw material "${json.data.name}" added successfully with unique QR code.`)
       }
-      fetchMaterials()
     } catch (err: any) {
       showFeedback('error', err?.message || 'Network error creating material')
     } finally {
@@ -366,6 +521,16 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
         return
       }
 
+      const updatedItem = json.data as RawMaterialItem
+      if (updatedItem) {
+        updateStatsForChange(activeMaterial.status, updatedItem.status)
+        setMaterials((prev) =>
+          matchesActiveFilters(updatedItem)
+            ? prev.map((m) => (m.id === updatedItem.id ? updatedItem : m))
+            : prev.filter((m) => m.id !== updatedItem.id)
+        )
+      }
+
       setIsEditOpen(false)
       if (json.alertResult?.triggered) {
         showFeedback(
@@ -377,7 +542,6 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
       } else {
         showFeedback('success', `Updated "${json.data.name}" successfully.`)
       }
-      fetchMaterials()
     } catch (err: any) {
       showFeedback('error', err?.message || 'Network error updating material')
     } finally {
@@ -390,6 +554,9 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
     const newQty = Math.max(0, material.quantity + delta)
     if (newQty === material.quantity) return
 
+    const nextOptimisticStatus: RawMaterialItem['status'] =
+      newQty === 0 ? 'critical' : newQty <= material.minThreshold ? 'low-stock' : 'in-stock'
+
     setAdjustingId(material.id)
     try {
       // Optimistic update
@@ -399,12 +566,7 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
             ? {
                 ...m,
                 quantity: newQty,
-                status:
-                  newQty === 0
-                    ? 'critical'
-                    : newQty <= m.minThreshold
-                    ? 'low-stock'
-                    : 'in-stock',
+                status: nextOptimisticStatus,
               }
             : m
         )
@@ -417,7 +579,15 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
       })
 
       const json = await res.json()
-      if (json.success) {
+      if (json.success && json.data) {
+        const updatedItem = json.data as RawMaterialItem
+        updateStatsForChange(material.status, updatedItem.status)
+        setMaterials((prev) =>
+          matchesActiveFilters(updatedItem)
+            ? prev.map((m) => (m.id === updatedItem.id ? updatedItem : m))
+            : prev.filter((m) => m.id !== updatedItem.id)
+        )
+        setScannedProduct((prev) => (prev && prev.id === updatedItem.id ? updatedItem : prev))
         if (json.alertResult?.triggered) {
           showFeedback(
             'warning',
@@ -426,7 +596,6 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
               : `⚠️ Low Stock Triggered! "${material.name}" is now at ${newQty}. Vendor alerted automatically.`
           )
         }
-        fetchMaterials()
       } else {
         showFeedback('error', json.message || 'Failed to adjust stock')
         fetchMaterials()
@@ -443,14 +612,18 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
   const handleDeleteMaterial = async (id: string, name: string) => {
     if (isChef) return
     if (!confirm(`Are you sure you want to delete raw material "${name}"?`)) return
+    const targetItem = materials.find((m) => m.id === id) || null
     try {
       const res = await fetch(`/api/inventory/raw-materials/${id}`, {
         method: 'DELETE',
       })
       const json = await res.json()
       if (json.success) {
+        if (targetItem) {
+          updateStatsForChange(targetItem.status, null)
+        }
+        setMaterials((prev) => prev.filter((m) => m.id !== id))
         showFeedback('success', `Deleted "${name}".`)
-        fetchMaterials()
       } else {
         showFeedback('error', json.message || 'Failed to delete')
       }
@@ -464,6 +637,204 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
     if (isChef) return
     setQrModalItem(material)
     setIsQrOpen(true)
+  }
+
+  const stopScanCamera = useCallback(() => {
+    if (scanAnimRef.current) {
+      cancelAnimationFrame(scanAnimRef.current)
+      scanAnimRef.current = null
+    }
+    if (scanStreamRef.current) {
+      scanStreamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop()
+        } catch {}
+      })
+      scanStreamRef.current = null
+    }
+    if (scanVideoRef.current) {
+      scanVideoRef.current.srcObject = null
+    }
+    setCameraActive(false)
+  }, [])
+
+  const resolveScannedMaterial = useCallback(
+    async (rawCode: string) => {
+      const parsed = parseScannedRawMaterialInput(rawCode)
+      if (!parsed.id && !parsed.sku && !parsed.name) {
+        setScanError('Unrecognized QR code. Scan a raw material label or enter its SKU.')
+        return
+      }
+
+      setScanLookupLoading(true)
+      setScanError(null)
+
+      try {
+        // 1. Fast local match in loaded materials
+        const skuLower = parsed.sku?.toLowerCase()
+        const nameLower = parsed.name?.toLowerCase()
+        let found =
+          materials.find(
+            (m) =>
+              (parsed.id && m.id === parsed.id) ||
+              (skuLower && m.sku.toLowerCase() === skuLower) ||
+              (nameLower && m.name.toLowerCase() === nameLower)
+          ) || null
+
+        // 2. Fallback to live API lookup (handles filtered lists or direct QR URL visits)
+        if (!found && parsed.id) {
+          const res = await fetch(`/api/inventory/raw-materials/${encodeURIComponent(parsed.id)}`, {
+            cache: 'no-store',
+          })
+          const json = await res.json().catch(() => null)
+          if (res.ok && json?.success && json.data) {
+            const d = json.data
+            const qty = Number(d.quantity)
+            const threshold = Number(d.minThreshold)
+            found = {
+              ...d,
+              vendorName: d.vendor?.name || 'Unassigned',
+              status: qty === 0 ? 'critical' : qty <= threshold ? 'low-stock' : 'in-stock',
+            }
+          }
+        }
+
+        if (!found && (parsed.sku || parsed.name)) {
+          const queryTerm = parsed.sku || parsed.name || ''
+          const res = await fetch(
+            `/api/inventory/raw-materials?search=${encodeURIComponent(queryTerm)}`,
+            { cache: 'no-store' }
+          )
+          const json = await res.json().catch(() => null)
+          if (res.ok && json?.success && Array.isArray(json.data) && json.data.length > 0) {
+            found =
+              json.data.find(
+                (m: RawMaterialItem) =>
+                  (skuLower && m.sku.toLowerCase() === skuLower) ||
+                  (nameLower && m.name.toLowerCase() === nameLower)
+              ) || json.data[0]
+          }
+        }
+
+        if (!found) {
+          setScanError(
+            `No raw material found for ${parsed.sku || parsed.name || parsed.id}.`
+          )
+          return
+        }
+
+        playRawMaterialScanBeep()
+        stopScanCamera()
+        setScannedProduct(found)
+        setManualScanInput(found.sku)
+      } catch (err: any) {
+        setScanError(err?.message || 'Failed to look up scanned product')
+      } finally {
+        setScanLookupLoading(false)
+      }
+    },
+    [materials, stopScanCamera]
+  )
+
+  const startScanCamera = useCallback(async () => {
+    stopScanCamera()
+    setCameraError(null)
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera is not supported on this browser or device.')
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: cameraFacing },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      })
+      scanStreamRef.current = stream
+
+      const video = scanVideoRef.current
+      if (video) {
+        video.srcObject = stream
+        video.setAttribute('playsinline', 'true')
+        await video.play()
+        setCameraActive(true)
+
+        const canvas = scanCanvasRef.current
+        const ctx = canvas?.getContext('2d', { willReadFrequently: true })
+        const tick = () => {
+          if (!scanVideoRef.current || !scanStreamRef.current) return
+          if (
+            canvas &&
+            ctx &&
+            scanVideoRef.current.readyState === scanVideoRef.current.HAVE_ENOUGH_DATA
+          ) {
+            canvas.width = scanVideoRef.current.videoWidth
+            canvas.height = scanVideoRef.current.videoHeight
+            ctx.drawImage(scanVideoRef.current, 0, 0, canvas.width, canvas.height)
+            try {
+              const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+              const decoded = jsQR(imgData.data, imgData.width, imgData.height, {
+                inversionAttempts: 'attemptBoth',
+              })
+              if (decoded?.data) {
+                resolveScannedMaterial(decoded.data)
+                return
+              }
+            } catch {
+              // Ignore single-frame decode errors
+            }
+          }
+          scanAnimRef.current = requestAnimationFrame(tick)
+        }
+        scanAnimRef.current = requestAnimationFrame(tick)
+      }
+    } catch (err: any) {
+      const msg =
+        err?.name === 'NotAllowedError'
+          ? 'Camera permission denied. Allow camera access or enter/scan SKU manually below.'
+          : err?.message || 'Could not start camera.'
+      setCameraError(msg)
+      setCameraActive(false)
+    }
+  }, [cameraFacing, resolveScannedMaterial, stopScanCamera])
+
+  useEffect(() => {
+    if (isScannerOpen && !scannedProduct && !scanLookupLoading) {
+      startScanCamera()
+    } else {
+      stopScanCamera()
+    }
+    return () => stopScanCamera()
+  }, [isScannerOpen, scannedProduct, scanLookupLoading, startScanCamera, stopScanCamera])
+
+  // Auto-open scanned product details when visited via QR URL (?sku=...&product=...)
+  useEffect(() => {
+    if (deepLinkHandledRef.current || typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const skuParam = params.get('sku')
+    const idParam = params.get('id') || params.get('materialId')
+    if (!skuParam && !idParam) return
+
+    deepLinkHandledRef.current = true
+    setIsScannerOpen(true)
+    resolveScannedMaterial(window.location.search)
+
+    params.delete('sku')
+    params.delete('product')
+    params.delete('id')
+    params.delete('materialId')
+    const cleanUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`
+    window.history.replaceState({}, '', cleanUrl)
+  }, [resolveScannedMaterial])
+
+  const handleOpenScanner = () => {
+    setScannedProduct(null)
+    setScanError(null)
+    setCameraError(null)
+    setManualScanInput('')
+    setIsScannerOpen(true)
   }
 
   return (
@@ -518,6 +889,15 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleOpenScanner}
+            className="h-8 px-2.5 text-xs gap-1.5 border-orange-500/30 text-orange-600 hover:bg-orange-500/10 dark:text-orange-400"
+          >
+            <QrCode className="size-3.5" />
+            Scan QR
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -1348,6 +1728,272 @@ export function RawMaterialsView({ initialRole }: RawMaterialsViewProps = {}) {
           material={qrModalItem}
         />
       )}
+
+      {/* RAW MATERIAL QR SCANNER & LIVE PRODUCT INSPECTION MODAL */}
+      <Dialog
+        open={isScannerOpen}
+        onOpenChange={(open) => {
+          setIsScannerOpen(open)
+          if (!open) {
+            stopScanCamera()
+            setScannedProduct(null)
+            setScanError(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-md p-5 bg-card">
+          <canvas ref={scanCanvasRef} className="hidden" />
+          <DialogHeader>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-orange-500/10 text-orange-600 dark:text-orange-400 shrink-0">
+                  <QrCode className="size-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-bold">
+                    {scannedProduct ? 'Scanned Product Details' : 'Scan Raw Material QR'}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground">
+                    {scannedProduct
+                      ? 'Live warehouse product details & quick stock controls'
+                      : 'Point camera at QR label or scan with a handheld scanner'}
+                  </DialogDescription>
+                </div>
+              </div>
+              {!scannedProduct && cameraActive && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() =>
+                    setCameraFacing((prev) => (prev === 'environment' ? 'user' : 'environment'))
+                  }
+                  title="Switch camera"
+                  className="size-8 shrink-0"
+                >
+                  <FlipHorizontal className="size-4" />
+                </Button>
+              )}
+            </div>
+          </DialogHeader>
+
+          {scannedProduct ? (
+            <div className="space-y-3.5 my-1">
+              <div className="rounded-xl border border-border/70 bg-muted/30 p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h3 className="text-base font-bold text-foreground">{scannedProduct.name}</h3>
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {scannedProduct.sku}
+                    </span>
+                  </div>
+                  {scannedProduct.status === 'critical' ? (
+                    <Badge variant="destructive" className="text-[11px] gap-1">
+                      <AlertOctagon className="size-3" />
+                      Critical / Out
+                    </Badge>
+                  ) : scannedProduct.status === 'low-stock' ? (
+                    <Badge
+                      variant="outline"
+                      className="text-[11px] gap-1 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30"
+                    >
+                      <AlertTriangle className="size-3" />
+                      Low Stock
+                    </Badge>
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="text-[11px] gap-1 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
+                    >
+                      <CheckCircle2 className="size-3" />
+                      In Stock
+                    </Badge>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5 text-xs pt-2 border-t border-border/50">
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    <Scale className="size-3.5 text-primary shrink-0" />
+                    <span>
+                      <strong className="text-foreground">Live Stock:</strong>{' '}
+                      {scannedProduct.quantity} ({scannedProduct.weight} {scannedProduct.weightUnit})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    <MapPin className="size-3.5 text-primary shrink-0" />
+                    <span className="truncate">
+                      <strong className="text-foreground">Location:</strong> {scannedProduct.location}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    <ShieldAlert className="size-3.5 text-amber-500 shrink-0" />
+                    <span>
+                      <strong className="text-foreground">Min Threshold:</strong>{' '}
+                      {scannedProduct.minThreshold}
+                    </span>
+                  </div>
+                  {!isChef && (
+                    <div className="flex items-center gap-1.5 text-muted-foreground truncate">
+                      <Building className="size-3.5 text-primary shrink-0" />
+                      <span className="truncate">
+                        <strong className="text-foreground">Vendor:</strong>{' '}
+                        {scannedProduct.vendorName || scannedProduct.vendor?.name || 'Unassigned'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Quick Stock Adjust inside scanned product card */}
+                <div className="flex items-center justify-between pt-2 border-t border-border/50">
+                  <span className="text-xs font-medium text-muted-foreground">Quick Stock Adjust</span>
+                  <div className="inline-flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleQuickAdjust(scannedProduct, -1)}
+                      disabled={adjustingId === scannedProduct.id || scannedProduct.quantity <= 0}
+                      className="h-7 px-2 text-xs gap-1"
+                    >
+                      <MinusCircle className="size-3.5 text-rose-500" />
+                      -1
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleQuickAdjust(scannedProduct, 1)}
+                      disabled={adjustingId === scannedProduct.id}
+                      className="h-7 px-2 text-xs gap-1"
+                    >
+                      <PlusCircle className="size-3.5 text-emerald-500" />
+                      +1
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <DialogFooter className="gap-2 sm:justify-between">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setScannedProduct(null)
+                    setScanError(null)
+                    setManualScanInput('')
+                  }}
+                  className="text-xs gap-1.5"
+                >
+                  <Camera className="size-3.5" />
+                  Scan Another
+                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      const target = scannedProduct
+                      setIsScannerOpen(false)
+                      handleOpenEdit(target)
+                    }}
+                    className="text-xs gap-1.5 bg-orange-600 hover:bg-orange-700 text-white"
+                  >
+                    <Edit2 className="size-3.5" />
+                    {isChef ? 'Update Stock' : 'Edit Product'}
+                  </Button>
+                </div>
+              </DialogFooter>
+            </div>
+          ) : (
+            <div className="space-y-3 my-1">
+              {/* Live Camera Preview */}
+              <div className="relative rounded-xl border border-dashed border-orange-500/40 bg-black/90 overflow-hidden min-h-[220px] flex items-center justify-center">
+                <video
+                  ref={scanVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={cn(
+                    'w-full h-[220px] object-cover',
+                    !cameraActive && 'hidden'
+                  )}
+                />
+                {cameraActive ? (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <div className="size-40 rounded-xl border-2 border-orange-400/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+                  </div>
+                ) : scanLookupLoading ? (
+                  <div className="p-5 text-center space-y-2">
+                    <Loader2 className="size-8 mx-auto text-orange-500 animate-spin" />
+                    <p className="text-xs text-muted-foreground">
+                      Looking up scanned product...
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-5 text-center space-y-2">
+                    <Camera className="size-8 mx-auto text-muted-foreground/70" />
+                    <p className="text-xs text-muted-foreground max-w-xs">
+                      {cameraError || 'Starting camera...'}
+                    </p>
+                    {cameraError && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={startScanCamera}
+                        className="h-7 text-xs"
+                      >
+                        Retry Camera
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Manual / USB Handheld Scanner Input */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  resolveScannedMaterial(manualScanInput)
+                }}
+                className="space-y-1.5"
+              >
+                <Label htmlFor="manual-qr-sku" className="text-xs font-semibold">
+                  USB Scanner / Manual SKU Lookup
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="manual-qr-sku"
+                    placeholder="Scan or type SKU (e.g. RM-57884)..."
+                    value={manualScanInput}
+                    onChange={(e) => setManualScanInput(e.target.value)}
+                    className="h-9 text-xs font-mono"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={scanLookupLoading || !manualScanInput.trim()}
+                    className="h-9 px-3 text-xs bg-orange-600 hover:bg-orange-700 text-white shrink-0"
+                  >
+                    {scanLookupLoading ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      'Inspect'
+                    )}
+                  </Button>
+                </div>
+              </form>
+
+              {scanError && (
+                <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2">
+                  {scanError}
+                </p>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

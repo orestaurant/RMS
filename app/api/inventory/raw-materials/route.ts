@@ -1,11 +1,38 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import prisma from '@/lib/prisma'
 import QRCode from 'qrcode'
 import { checkAndTriggerLowStockAlert } from '@/lib/inventory-alerts'
-import { invalidateInventoryLookupCache, syncMenuAvailabilityFromInventory } from '@/lib/inventory-deduction'
+import {
+  RAW_MATERIAL_QR_OPTIONS,
+  buildRawMaterialQrUrl,
+  invalidateInventoryLookupCache,
+  syncMenuAvailabilityFromInventory,
+} from '@/lib/inventory-deduction'
 import { SESSION_COOKIE_NAME, verifyJWT, normalizeRole } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
+
+const RAW_MATERIAL_LIST_SELECT = {
+  id: true,
+  name: true,
+  sku: true,
+  quantity: true,
+  weight: true,
+  weightUnit: true,
+  location: true,
+  minThreshold: true,
+  vendorId: true,
+  createdAt: true,
+  updatedAt: true,
+  vendor: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+    },
+  },
+} as const
 
 async function getRequestRole(request: NextRequest): Promise<string> {
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value
@@ -15,24 +42,75 @@ async function getRequestRole(request: NextRequest): Promise<string> {
 
 export async function GET(request: NextRequest) {
   try {
+    const exactSku = request.nextUrl.searchParams.get('sku')?.trim()
+    if (exactSku) {
+      const material = await prisma.rawMaterial.findUnique({
+        where: { sku: exactSku },
+        select: {
+          id: true,
+          name: true,
+          sku: true,
+          quantity: true,
+          weight: true,
+          weightUnit: true,
+          location: true,
+          minThreshold: true,
+          updatedAt: true,
+          vendor: {
+            select: {
+              name: true,
+            },
+          },
+        },
+      })
+
+      if (!material) {
+        return NextResponse.json(
+          { success: false, message: 'Raw material product not found' },
+          { status: 404 }
+        )
+      }
+
+      const qty = Number(material.quantity)
+      const threshold = Number(material.minThreshold)
+      return NextResponse.json({
+        success: true,
+        data: {
+          id: material.id,
+          name: material.name,
+          sku: material.sku,
+          quantity: qty,
+          weight: Number(material.weight),
+          weightUnit: material.weightUnit,
+          location: material.location,
+          minThreshold: threshold,
+          vendorName: material.vendor?.name || 'Unassigned',
+          status: qty === 0 ? 'critical' : qty <= threshold ? 'low-stock' : 'in-stock',
+          updatedAt: material.updatedAt,
+        },
+      })
+    }
+
     const isChef = (await getRequestRole(request)) === 'CHEF'
     const search = request.nextUrl.searchParams.get('search')?.toLowerCase().trim() || ''
     const statusFilter = request.nextUrl.searchParams.get('status')?.trim() || 'all'
     const vendorFilter = isChef ? 'all' : request.nextUrl.searchParams.get('vendorId')?.trim() || 'all'
 
     const allMaterials = await prisma.rawMaterial.findMany({
-      include: isChef
-        ? undefined
-        : {
-            vendor: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                phone: true,
-              },
-            },
-          },
+      select: isChef
+        ? {
+            id: true,
+            name: true,
+            sku: true,
+            quantity: true,
+            weight: true,
+            weightUnit: true,
+            location: true,
+            minThreshold: true,
+            createdAt: true,
+            updatedAt: true,
+          }
+        : RAW_MATERIAL_LIST_SELECT,
       orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
     })
 
@@ -180,25 +258,19 @@ export async function POST(request: NextRequest) {
     const numWeight = Math.max(0, Number(weight))
     const numMinThreshold = Math.max(0, Number(minThreshold))
 
-    // Pre-create structured QR Code data payload
-    const qrPayload = JSON.stringify({
+    // Compact URL payload keeps QR modules large and scannable on mobile & handheld scanners
+    const hostHeader = request.headers.get('x-forwarded-host') || request.headers.get('host')
+    const protoHeader = request.headers.get('x-forwarded-proto') || 'http'
+    const resolvedOrigin =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (hostHeader ? `${protoHeader}://${hostHeader}` : request.nextUrl.origin)
+    const qrPayload = buildRawMaterialQrUrl({
+      origin: resolvedOrigin,
       sku,
       name: name.trim(),
-      location: location.trim(),
-      weight: `${numWeight} ${weightUnit}`,
-      minThreshold: numMinThreshold,
-      timestamp: new Date().toISOString(),
     })
 
-    const qrCodeData = await QRCode.toDataURL(qrPayload, {
-      errorCorrectionLevel: 'H',
-      margin: 2,
-      width: 320,
-      color: {
-        dark: '#1e293b',
-        light: '#ffffff',
-      },
-    })
+    const qrCodeData = await QRCode.toDataURL(qrPayload, RAW_MATERIAL_QR_OPTIONS)
 
     // Create raw material record
     const material = await prisma.rawMaterial.create({
@@ -224,20 +296,31 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // Automated Low-Inventory Check & Menu Availability Sync in parallel
+    // Automated Low-Inventory Check; defer Menu Availability Sync post-response
     invalidateInventoryLookupCache()
-    const [alertResult] = await Promise.all([
-      checkAndTriggerLowStockAlert({
-        ...material,
-        vendorName: material.vendor?.name || null,
-      }),
-      syncMenuAvailabilityFromInventory().catch(() => {}),
-    ])
+    const alertResult = await checkAndTriggerLowStockAlert({
+      ...material,
+      vendorName: material.vendor?.name || null,
+    })
+    after(() => {
+      syncMenuAvailabilityFromInventory().catch(() => {})
+    })
+
+    const { qrCodeData: _omittedQr, ...materialWithoutQr } = material
 
     return NextResponse.json({
       success: true,
       message: 'Raw material created successfully',
-      data: material,
+      data: {
+        ...materialWithoutQr,
+        vendorName: material.vendor?.name || 'Unassigned',
+        status:
+          Number(material.quantity) === 0
+            ? 'critical'
+            : Number(material.quantity) <= Number(material.minThreshold)
+            ? 'low-stock'
+            : 'in-stock',
+      },
       alertResult,
     })
   } catch (error: any) {

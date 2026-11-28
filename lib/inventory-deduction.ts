@@ -180,7 +180,21 @@ async function getUnifiedInventorySnapshot(
         },
       })
       .catch(() => []),
-    prisma.rawMaterial.findMany().catch(() => []),
+    prisma.rawMaterial
+      .findMany({
+        select: {
+          id: true,
+          name: true,
+          sku: true,
+          quantity: true,
+          weight: true,
+          weightUnit: true,
+          location: true,
+          minThreshold: true,
+          vendorId: true,
+        },
+      })
+      .catch(() => []),
   ])
 
   const invById = new Map<string, any>()
@@ -211,6 +225,32 @@ async function getUnifiedInventorySnapshot(
 
   snapshotCache = { data, timestamp: Date.now(), orgKey }
   return data
+}
+
+export const RAW_MATERIAL_QR_OPTIONS = {
+  errorCorrectionLevel: 'M' as const,
+  margin: 4,
+  width: 320,
+  color: {
+    dark: '#000000',
+    light: '#ffffff',
+  },
+}
+
+/**
+ * Builds a compact, high-scannability URL payload for raw material QR labels
+ * so both mobile cameras and in-app scanners immediately identify the product.
+ */
+export function buildRawMaterialQrUrl(params: {
+  origin?: string | null
+  sku: string
+  name: string
+}): string {
+  const cleanOrigin = (params.origin || process.env.NEXT_PUBLIC_APP_URL || '')
+    .trim()
+    .replace(/\/$/, '')
+  const query = `sku=${encodeURIComponent(params.sku.trim())}&product=${encodeURIComponent(params.name.trim())}`
+  return cleanOrigin ? `${cleanOrigin}/?${query}` : `/?${query}`
 }
 
 export function invalidateInventoryLookupCache() {

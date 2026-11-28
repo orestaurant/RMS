@@ -241,6 +241,18 @@ export async function POST(request: NextRequest) {
 
     type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0]
 
+    class TransitionConflictError extends Error {
+      constructor(message: string) {
+        super(message)
+        this.name = 'TransitionConflictError'
+      }
+    }
+
+    const PENDING_STATUSES = ['PENDING', 'ACKNOWLEDGED'] as const
+    const IN_PROGRESS_STATUSES = ['RESTOCK_IN_PROGRESS', 'RESTOCK_INITIATED'] as const
+    const IN_TRANSIT_STATUSES = ['RESTOCK_IN_TRANSIT'] as const
+    const DELIVERED_STATUSES = ['RESTOCK_DELIVERED'] as const
+
     // Update existing manager notifications in 1 query; create only if none exist
     const syncManagerNotification = async (
       tx: TxClient,
@@ -317,14 +329,23 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Shared atomic transition helper for Stages 1-3 (Vendor workflow actions)
+    // Shared atomic transition helper for Stages 1-2 (Vendor workflow actions)
     const runVendorStageTransition = async (params: {
+      allowedFromStatuses: readonly string[]
+      invalidStateMessage: string
       status: string
       metaPatch: Record<string, any>
       managerTitle: string
       managerMessage: string
       successMessage: string
     }) => {
+      if (!params.allowedFromStatuses.includes(notif.status)) {
+        return NextResponse.json(
+          { success: false, message: params.invalidStateMessage },
+          { status: 409 }
+        )
+      }
+
       const updatedMeta = {
         ...existingMeta,
         ...params.metaPatch,
@@ -333,32 +354,53 @@ export async function POST(request: NextRequest) {
         vendorName,
       }
 
-      const updatedNotif = await prisma.$transaction(async (tx) => {
-        const updated = await tx.dashboardNotification.update({
-          where: { id },
-          data: {
-            status: params.status,
-            isRead: true,
-            metadata: updatedMeta,
-          },
+      try {
+        const updatedNotif = await prisma.$transaction(async (tx) => {
+          const claim = await tx.dashboardNotification.updateMany({
+            where: {
+              id,
+              status: { in: [...params.allowedFromStatuses] },
+            },
+            data: {
+              status: params.status,
+              isRead: true,
+              metadata: updatedMeta,
+            },
+          })
+
+          if (claim.count === 0) {
+            throw new TransitionConflictError(params.invalidStateMessage)
+          }
+
+          const updated = await tx.dashboardNotification.findUnique({
+            where: { id },
+          })
+
+          await syncManagerNotification(
+            tx,
+            params.status,
+            params.managerTitle,
+            params.managerMessage,
+            updatedMeta
+          )
+
+          return updated
         })
 
-        await syncManagerNotification(
-          tx,
-          params.status,
-          params.managerTitle,
-          params.managerMessage,
-          updatedMeta
-        )
-
-        return updated
-      })
-
-      return NextResponse.json({
-        success: true,
-        message: params.successMessage,
-        data: updatedNotif,
-      })
+        return NextResponse.json({
+          success: true,
+          message: params.successMessage,
+          data: updatedNotif,
+        })
+      } catch (err) {
+        if (err instanceof TransitionConflictError) {
+          return NextResponse.json(
+            { success: false, message: err.message },
+            { status: 409 }
+          )
+        }
+        throw err
+      }
     }
 
     // 2. STAGE 1: Vendor Accepts Request -> Status: RESTOCK_IN_PROGRESS
@@ -387,7 +429,13 @@ export async function POST(request: NextRequest) {
       const qtyText = parsedPlanned !== undefined ? `${parsedPlanned} ${selectedUnit}` : null
       const trimmedNotes = typeof vendorNotes === 'string' ? vendorNotes.trim() : ''
 
+      const acceptConflictMsg = IN_PROGRESS_STATUSES.includes(notif.status as any)
+        ? 'This restock request has already been accepted and is in progress.'
+        : 'Only pending restock requests can be accepted.'
+
       return runVendorStageTransition({
+        allowedFromStatuses: PENDING_STATUSES,
+        invalidStateMessage: acceptConflictMsg,
         status: 'RESTOCK_IN_PROGRESS',
         metaPatch: {
           acknowledgedAt: new Date().toISOString(),
@@ -419,7 +467,15 @@ export async function POST(request: NextRequest) {
       const plannedUnit = existingMeta.plannedUnit || weightUnit
       const qtyText = plannedQty !== undefined ? ` (${plannedQty} ${plannedUnit})` : ''
 
+      const transitConflictMsg = PENDING_STATUSES.includes(notif.status as any)
+        ? 'Please accept the restock request before marking it in transit.'
+        : notif.status === 'RESTOCK_IN_TRANSIT'
+          ? 'This restock request is already marked as in transit.'
+          : 'This restock request has already been delivered.'
+
       return runVendorStageTransition({
+        allowedFromStatuses: IN_PROGRESS_STATUSES,
+        invalidStateMessage: transitConflictMsg,
         status: 'RESTOCK_IN_TRANSIT',
         metaPatch: {
           inTransitAt: new Date().toISOString(),
@@ -436,12 +492,28 @@ export async function POST(request: NextRequest) {
     // Shared atomic restock completion helper:
     // Immediately increments RawMaterial + InventoryItem stock and completes both Vendor & Manager alerts.
     const executeAutoRestockCompletion = async (opts: {
+      allowedFromStatuses: readonly string[]
+      invalidStateMessage: string
       qtyToAdd: number
       inputQty?: number
       inputUnit?: string
       isVendorDelivery: boolean
       notesText?: string
     }) => {
+      if (notif.status === 'RESTOCK_COMPLETED') {
+        return NextResponse.json(
+          { success: false, message: 'This restock delivery has already been completed.' },
+          { status: 409 }
+        )
+      }
+
+      if (!opts.allowedFromStatuses.includes(notif.status)) {
+        return NextResponse.json(
+          { success: false, message: opts.invalidStateMessage },
+          { status: 409 }
+        )
+      }
+
       const selectedUnit = opts.inputUnit || weightUnit
       const warehouseQtyToAdd = parseFloat(
         convertQuantityUnit(opts.qtyToAdd, selectedUnit, weightUnit).toFixed(4)
@@ -450,13 +522,6 @@ export async function POST(request: NextRequest) {
         opts.inputQty !== undefined && selectedUnit !== weightUnit
           ? `${opts.inputQty} ${selectedUnit} (+${warehouseQtyToAdd} ${weightUnit})`
           : `+${warehouseQtyToAdd} ${weightUnit}`
-
-      if (notif.status === 'RESTOCK_COMPLETED') {
-        return NextResponse.json(
-          { success: false, message: 'This restock delivery has already been completed.' },
-          { status: 400 }
-        )
-      }
 
       if (!Number.isFinite(warehouseQtyToAdd) || warehouseQtyToAdd <= 0) {
         return NextResponse.json(
@@ -470,8 +535,30 @@ export async function POST(request: NextRequest) {
         ? Number(notif.rawMaterial.quantity)
         : Number(existingMeta.currentQuantity || 0)
 
-      const { updatedRawMaterial, updatedNotif, newTotalStock } = await prisma.$transaction(
-        async (tx) => {
+      let txResult: {
+        updatedRawMaterial: any
+        updatedNotif: any
+        newTotalStock: number
+      }
+
+      try {
+        txResult = await prisma.$transaction(async (tx) => {
+          // Acquire row-level lock and claim transition before mutating inventory
+          const claim = await tx.dashboardNotification.updateMany({
+            where: {
+              id,
+              status: { in: [...opts.allowedFromStatuses] },
+            },
+            data: {
+              status: 'RESTOCK_COMPLETED',
+              isRead: true,
+            },
+          })
+
+          if (claim.count === 0) {
+            throw new TransitionConflictError(opts.invalidStateMessage)
+          }
+
           let rawMat = null
           let finalStock = currentStock + warehouseQtyToAdd
 
@@ -600,8 +687,18 @@ export async function POST(request: NextRequest) {
           }
 
           return { updatedRawMaterial: rawMat, updatedNotif: completedNotif, newTotalStock: finalStock }
+        })
+      } catch (err) {
+        if (err instanceof TransitionConflictError) {
+          return NextResponse.json(
+            { success: false, message: err.message },
+            { status: 409 }
+          )
         }
-      )
+        throw err
+      }
+
+      const { updatedRawMaterial, updatedNotif, newTotalStock } = txResult
 
       // Invalidate deduction cache and automatically re-enable any Out-of-Stock dishes
       invalidateInventoryLookupCache()
@@ -619,19 +716,39 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // 4. STAGE 3 (Auto-Complete): Vendor Marks Delivered -> Automatically updates Inventory & marks RESTOCK_COMPLETED
+    // 4. STAGE 3 (Auto-Complete): Vendor Marks Delivered (requires RESTOCK_IN_TRANSIT) -> Automatically updates Inventory & marks RESTOCK_COMPLETED
     if (action === 'mark_delivered' || action === 'delivered') {
       const rawDelivered = deliveredQuantity ?? restockQuantity ?? quantity
-      const suppliedQty =
-        rawDelivered !== undefined && Number.isFinite(Number(rawDelivered)) && Number(rawDelivered) > 0
-          ? Number(rawDelivered)
-          : Number(existingMeta.deliveredQuantity || existingMeta.plannedQuantity || existingMeta.minThreshold || 20)
+      let suppliedQty: number
+
+      if (rawDelivered !== undefined && rawDelivered !== null && String(rawDelivered).trim() !== '') {
+        const parsed = Number(rawDelivered)
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          return NextResponse.json(
+            { success: false, message: 'Please provide a valid delivered quantity greater than 0.' },
+            { status: 400 }
+          )
+        }
+        suppliedQty = parsed
+      } else {
+        suppliedQty = Number(
+          existingMeta.deliveredQuantity || existingMeta.plannedQuantity || existingMeta.minThreshold || 20
+        )
+      }
+
       const selectedUnit =
         typeof requestedUnitRaw === 'string' && requestedUnitRaw.trim()
           ? requestedUnitRaw.trim()
           : existingMeta.deliveredUnit || existingMeta.plannedUnit || weightUnit
 
+      const deliverConflictMsg =
+        notif.status === 'RESTOCK_DELIVERED'
+          ? 'This restock delivery has already been marked as delivered.'
+          : 'Please mark this restock request as In Transit before delivering and updating stock.'
+
       return executeAutoRestockCompletion({
+        allowedFromStatuses: IN_TRANSIT_STATUSES,
+        invalidStateMessage: deliverConflictMsg,
         qtyToAdd: suppliedQty,
         inputQty: suppliedQty,
         inputUnit: selectedUnit,
@@ -668,6 +785,8 @@ export async function POST(request: NextRequest) {
       }
 
       return executeAutoRestockCompletion({
+        allowedFromStatuses: DELIVERED_STATUSES,
+        invalidStateMessage: 'Supply can only be confirmed after the vendor has delivered the shipment.',
         qtyToAdd,
         isVendorDelivery: false,
         notesText: typeof vendorNotes === 'string' && vendorNotes.trim() ? vendorNotes.trim() : undefined,

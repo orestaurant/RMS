@@ -498,7 +498,7 @@ export function InventoryManagerDashboardView({
               <div className="relative flex-1 min-w-0">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                 <Input
-                  placeholder="Search by vendor, material, SKU, or date..."
+                  placeholder="Search by vendor, material, place, SKU, or date..."
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value)
